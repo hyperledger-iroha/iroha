@@ -900,13 +900,7 @@ function crc64Ecma(payload) {
 }
 
 function noritoSchemaHash(typeName) {
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of encoder.encode(typeName)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
-  const low = u64ToBytes(hash);
-  return concatBytes(low, low);
+  return sha256(concatBytes(encoder.encode("norito:v1:type-name\0"), encoder.encode(typeName))).subarray(0, 16);
 }
 
 function frameNoritoPayload(typeName, payload) {

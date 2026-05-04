@@ -10,6 +10,7 @@ import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 /** Builds Torii HTTP requests for submitting signed transactions. */
 internal object ToriiRequestBuilder {
     private const val SUBMIT_PATH = "/transaction"
+    private const val SUBMIT_ENTRYPOINT_PATH = "/transaction/entrypoint"
     private const val STATUS_PATH = "/v1/pipeline/transactions/status"
 
     @JvmStatic
@@ -39,6 +40,36 @@ internal object ToriiRequestBuilder {
             .addHeader("Content-Type", "application/x-norito")
             .addHeader("Accept", "application/x-norito, application/json")
             .setBody(norito)
+        applyHeaders(builder, extraHeaders)
+        applyTimeout(builder, timeout)
+        return builder.build()
+    }
+
+    @JvmStatic
+    fun buildSubmitEntrypointRequest(
+        baseUri: URI,
+        encodedVersionedEntrypoint: ByteArray,
+        timeout: Duration?,
+        extraHeaders: Map<String, String>?
+    ): TransportRequest {
+        require(encodedVersionedEntrypoint.isNotEmpty()) {
+            "encodedVersionedEntrypoint must not be empty"
+        }
+        val target = resolve(baseUri, SUBMIT_ENTRYPOINT_PATH)
+        val body = encodedVersionedEntrypoint.copyOf()
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            baseUri,
+            target,
+            extraHeaders,
+            body,
+        )
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/x-norito")
+            .addHeader("Accept", "application/x-norito, application/json")
+            .setBody(body)
         applyHeaders(builder, extraHeaders)
         applyTimeout(builder, timeout)
         return builder.build()

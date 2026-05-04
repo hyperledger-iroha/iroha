@@ -5,7 +5,7 @@ use iroha_data_model::{block::SignedBlock, isi::InstructionBox, transaction::Exe
 use iroha_primitives::const_vec::ConstVec;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::{
-    codec::{decode_adaptive, encode_adaptive},
+    codec::{decode_adaptive, encode_with_header_flags},
     json::{self, Value as JsonValue},
 };
 
@@ -30,8 +30,8 @@ fn inspect_transactions(block: &SignedBlock) {
     for (tx_idx, tx) in block.external_transactions().enumerate() {
         match tx.instructions() {
             Executable::Instructions(step) => {
-                let encoded_step = encode_adaptive(step);
-                let step_flags = format_flags(norito::codec::take_last_encode_flags());
+                let (encoded_step, flags) = encode_with_header_flags(step);
+                let step_flags = format_flags(Some(flags));
                 println!(
                     "tx#{tx_idx}: instructions len={} bytes={} flags={step_flags}",
                     step.len(),

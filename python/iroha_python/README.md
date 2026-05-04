@@ -388,6 +388,53 @@ parsed = parse_connect_uri(uri)
 assert parsed.sid == "base64url"
 
 
+## Sora VPN native lease flow
+
+Sora VPN sessions are quote-first and paid in XOR through the native
+`OpenVpnLeaseEscrow` instruction returned by Torii. Python clients can sign the
+app-facing Torii requests with a callback while keeping private keys in the
+caller-owned wallet/keystore.
+
+```python
+from iroha_python import (
+    Ed25519KeyPair,
+    ToriiCanonicalRequestAuth,
+    VpnQuoteCreateRequest,
+    VpnSessionCreateRequest,
+    create_torii_client,
+)
+
+client = create_torii_client("https://torii.example")
+wallet_key = Ed25519KeyPair.from_private_key_hex("<hex-private-key>")
+auth = ToriiCanonicalRequestAuth(account_id="merchant@paynet", signer=wallet_key.sign)
+
+quote = client.create_vpn_quote(
+    VpnQuoteCreateRequest(
+        metering_public_key_hex="<32-byte-ed25519-metering-key-hex>",
+        exit_class="standard",
+    ),
+    canonical_auth=auth,
+)
+
+# Submit quote.open_lease_instruction or quote.tx_instructions as a normal signed
+# transaction that moves the XOR lease fee into native VPN escrow, then pass the
+# committed transaction hash back to Torii.
+session = client.create_vpn_session(
+    VpnSessionCreateRequest(
+        quote_id=quote.quote_id,
+        payment_tx_hash="<committed-open-lease-transaction-hash>",
+        metering_public_key_hex=quote.metering_public_key_hex,
+        exit_class=quote.exit_class,
+    ),
+    canonical_auth=auth,
+)
+print(session.helper_ticket_hex)
+```
+
+Relay operators submit signed receipts with `submit_vpn_receipt`; the response
+returns earned/refund XOR fields plus a `SettleVpnLease` instruction skeleton in
+`settle_lease_instruction` and `tx_instructions`.
+
 ## Transaction helpers
 
 Build transactions with ergonomic helpers that wrap the low-level `Instruction` APIs:

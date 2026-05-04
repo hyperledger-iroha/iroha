@@ -151,6 +151,7 @@ enum CommandKind {
         allow_stub: bool,
         manifest: PathBuf,
         signing_key: Option<PathBuf>,
+        signature_envelope: Option<PathBuf>,
     },
     OpenApiVerify {
         spec: PathBuf,
@@ -1113,7 +1114,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             allow_stub,
             manifest,
             signing_key,
-        } => generate_openapi(outputs, allow_stub, manifest, signing_key)?,
+            signature_envelope,
+        } => generate_openapi(
+            outputs,
+            allow_stub,
+            manifest,
+            signing_key,
+            signature_envelope,
+        )?,
         CommandKind::OpenApiVerify {
             spec,
             manifest,
@@ -1999,6 +2007,7 @@ where
             let mut allow_stub = false;
             let mut manifest_path: Option<PathBuf> = None;
             let mut signing_key: Option<PathBuf> = None;
+            let mut signature_envelope: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2021,8 +2030,20 @@ where
                         };
                         signing_key = Some(normalize_path(Path::new(&path))?);
                     }
+                    "--signature-envelope" => {
+                        let Some(path) = pending.next() else {
+                            return Err("expected path after --signature-envelope".into());
+                        };
+                        signature_envelope = Some(normalize_path(Path::new(&path))?);
+                    }
                     flag => return Err(format!("unknown flag for openapi: {flag}").into()),
                 }
+            }
+
+            if signing_key.is_some() && signature_envelope.is_some() {
+                return Err(
+                    "openapi flags --sign and --signature-envelope are mutually exclusive".into(),
+                );
             }
 
             if outputs.is_empty() {
@@ -2037,6 +2058,7 @@ where
                 allow_stub,
                 manifest: manifest_path.unwrap_or_else(default_openapi_manifest_path),
                 signing_key,
+                signature_envelope,
             })
         }
         "da-threat-model-report" => {
@@ -9743,6 +9765,7 @@ fn generate_openapi(
     allow_stub: bool,
     manifest: PathBuf,
     signing_key: Option<PathBuf>,
+    signature_envelope: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     let spec = match try_generate_router_openapi() {
         Ok(Some(value)) => value,
@@ -9781,15 +9804,20 @@ fn generate_openapi(
         println!("wrote {}", path.display());
     }
 
-    if let Some(signing_key) = signing_key {
+    if signing_key.is_some() || signature_envelope.is_some() {
         let canonical = default_openapi_path();
         if !outputs.contains(&canonical) {
             return Err(
-                "--sign requires generating docs/portal/static/openapi/torii.json; include the canonical output path"
+                "signed OpenAPI manifests require generating docs/portal/static/openapi/torii.json; include the canonical output path"
                     .into(),
             );
         }
-        write_openapi_manifest(&canonical, &manifest, &signing_key)?;
+        if let Some(signing_key) = signing_key {
+            write_openapi_manifest(&canonical, &manifest, &signing_key)?;
+        } else if let Some(signature_envelope) = signature_envelope {
+            let signature = load_signature_envelope(&signature_envelope)?;
+            write_openapi_manifest_with_signature(&canonical, &manifest, signature)?;
+        }
     }
 
     Ok(())
@@ -9842,12 +9870,34 @@ fn write_openapi_manifest(
             spec_path.display()
         )
     })?;
-
-    let sha256_hex = hex::encode(Sha256::digest(&spec_bytes));
-    let blake3_hex = blake3::hash(&spec_bytes).to_hex().to_string();
-    let size_bytes = spec_bytes.len() as u64;
-
     let signature = sign_manifest_payload(&spec_bytes, signing_key)?;
+    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, signature)
+}
+
+fn write_openapi_manifest_with_signature(
+    spec_path: &Path,
+    manifest_path: &Path,
+    signature: SignatureEnvelope,
+) -> Result<(), Box<dyn Error>> {
+    let spec_bytes = fs::read(spec_path).map_err(|err| {
+        format!(
+            "failed to read {} for manifest signature verification: {err}",
+            spec_path.display()
+        )
+    })?;
+    verify_manifest_signature(&signature, &spec_bytes)?;
+    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, signature)
+}
+
+fn write_openapi_manifest_from_bytes(
+    spec_path: &Path,
+    manifest_path: &Path,
+    spec_bytes: &[u8],
+    signature: SignatureEnvelope,
+) -> Result<(), Box<dyn Error>> {
+    let sha256_hex = hex::encode(Sha256::digest(spec_bytes));
+    let blake3_hex = blake3::hash(spec_bytes).to_hex().to_string();
+    let size_bytes = spec_bytes.len() as u64;
 
     let manifest = OpenApiManifest {
         version: 1,
@@ -9964,9 +10014,7 @@ fn verify_openapi_manifest(
             );
         }
         None => {
-            return Err(
-                "manifest missing signature; re-run `cargo xtask openapi --sign <key>`".into(),
-            );
+            return Err("manifest missing signature; re-run `cargo xtask openapi --sign <key>` or provide `--signature-envelope <path>`".into());
         }
     }
 
@@ -10054,6 +10102,22 @@ fn sign_manifest_payload(
         algorithm: "ed25519".to_string(),
         public_key_hex: hex::encode(public_bytes),
         signature_hex: hex::encode(signature.payload()),
+    })
+}
+
+fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Error>> {
+    let text = fs::read_to_string(path).map_err(|err| {
+        format!(
+            "failed to read signature envelope {}: {err}",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&text).map_err(|err| {
+        format!(
+            "failed to parse signature envelope {}: {err}",
+            path.display()
+        )
+        .into()
     })
 }
 
@@ -10291,6 +10355,55 @@ mod openapi_tests {
         let payload = fs::read(&spec_path).expect("read spec");
         let signature = sign_manifest_payload(&payload, &key_path).expect("sign payload");
         verify_manifest_signature(&signature, &payload).expect("verify signature");
+    }
+
+    #[test]
+    fn detached_signature_envelope_writes_manifest() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+
+        let key_path = tmp.path().join("key.hex");
+        let key_hex = hex::encode([0x22u8; 32]);
+        fs::write(&key_path, key_hex).expect("write key");
+
+        let payload = fs::read(&spec_path).expect("read spec");
+        let signature = sign_manifest_payload(&payload, &key_path).expect("sign payload");
+        let envelope_path = tmp.path().join("signature.json");
+        fs::write(
+            &envelope_path,
+            serde_json::to_string_pretty(&signature).expect("serialize signature"),
+        )
+        .expect("write detached envelope");
+
+        let manifest_path = tmp.path().join("manifest.json");
+        let loaded = load_signature_envelope(&envelope_path).expect("load detached envelope");
+        write_openapi_manifest_with_signature(&spec_path, &manifest_path, loaded)
+            .expect("write manifest with detached signature");
+        verify_openapi_manifest(&spec_path, &manifest_path, false, None)
+            .expect("verify detached manifest");
+    }
+
+    #[test]
+    fn openapi_signing_modes_are_mutually_exclusive() {
+        let args = [
+            "xtask",
+            "openapi",
+            "--sign",
+            "signing.key",
+            "--signature-envelope",
+            "signature.json",
+        ];
+        let iter = args.into_iter().map(String::from);
+        let err = match parse_command(iter) {
+            Ok(_) => panic!("conflicting signing modes must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("mutually exclusive"),
+            "expected mutually exclusive message, got {message}"
+        );
     }
 
     #[test]
@@ -11347,7 +11460,9 @@ fn print_usage() {
     eprintln!(
         "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
     );
-    eprintln!("  cargo xtask openapi [--output <path>] [--allow-stub]");
+    eprintln!(
+        "  cargo xtask openapi [--output <path>] [--allow-stub] [--sign <key>|--signature-envelope <path>]"
+    );
     eprintln!(
         "    Generate the Torii OpenAPI spec from a live Torii router. Defaults to docs/portal/static/openapi/torii.json; use --allow-stub only for emergency stub output"
     );

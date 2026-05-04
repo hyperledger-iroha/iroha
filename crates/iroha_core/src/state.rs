@@ -27,7 +27,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     IntoKeyValue,
     account::{
-        AccountDomainSelector, AccountEntry, AccountId, AccountRecoveryPolicy,
+        AccountAliasDomain, AccountDomainSelector, AccountEntry, AccountId, AccountRecoveryPolicy,
         AccountRecoveryRequest, AccountValue, OpaqueAccountId,
         rekey::{AccountAlias, AccountRekeyRecord},
     },
@@ -52,6 +52,7 @@ use iroha_data_model::{
         types::{BlobDigest, StorageTicketId},
     },
     error::ParseError,
+    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -124,6 +125,7 @@ use iroha_data_model::{
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
+    soranet::vpn::VpnLeaseRecordV1,
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::{
@@ -140,7 +142,7 @@ use iroha_primitives::{
 };
 use iroha_schema::Ident;
 use mv::{
-    Value as MvValue,
+    Key as MvKey, Value as MvValue,
     cell::{Block as CellBlock, Cell, Transaction as CellTransaction, View as CellView},
     storage::{
         Block as StorageBlock, RangeIter, Storage, StorageReadOnly,
@@ -365,12 +367,14 @@ macro_rules! build_world_block {
             domain_endorsements: $state.domain_endorsements.$method(),
             domain_endorsements_by_domain: $state.domain_endorsements_by_domain.$method(),
             domains: $state.domains.$method(),
+            domains_by_owner: $state.domains_by_owner.$method(),
             domain_selectors: $state.domain_selectors.$method(),
             accounts: $state.accounts.$method(),
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             account_aliases_by_account: $state.account_aliases_by_account.$method(),
             account_scope_directory: $state.account_scope_directory.$method(),
+            account_scope_accounts: $state.account_scope_accounts.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
@@ -384,12 +388,15 @@ macro_rules! build_world_block {
             contract_aliases: $state.contract_aliases.$method(),
             contract_alias_bindings: $state.contract_alias_bindings.$method(),
             domain_asset_definitions: $state.domain_asset_definitions.$method(),
+            asset_definitions_by_owner: $state.asset_definitions_by_owner.$method(),
             asset_definition_holders: $state.asset_definition_holders.$method(),
             asset_definition_assets: $state.asset_definition_assets.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
+            nfts_by_owner: $state.nfts_by_owner.$method(),
             rwas: $state.rwas.$method(),
+            rwas_by_owner: $state.rwas_by_owner.$method(),
             roles: $state.roles.$method(),
             account_permissions: $state.account_permissions.$method(),
             account_roles: $state.account_roles.$method(),
@@ -408,7 +415,14 @@ macro_rules! build_world_block {
             viral_escrows: $state.viral_escrows.$method(),
             viral_bonus_paid: $state.viral_bonus_paid.$method(),
             asset_escrows: $state.asset_escrows.$method(),
+            asset_escrows_by_seller: $state.asset_escrows_by_seller.$method(),
+            asset_escrows_by_buyer: $state.asset_escrows_by_buyer.$method(),
+            asset_escrows_by_status: $state.asset_escrows_by_status.$method(),
             anonymous_asset_escrows: $state.anonymous_asset_escrows.$method(),
+            anonymous_asset_escrows_by_seller: $state.anonymous_asset_escrows_by_seller.$method(),
+            anonymous_asset_escrows_by_buyer: $state.anonymous_asset_escrows_by_buyer.$method(),
+            anonymous_asset_escrows_by_status: $state.anonymous_asset_escrows_by_status.$method(),
+            vpn_leases: $state.vpn_leases.$method(),
             uaid_dataspaces: $state.uaid_dataspaces.$method(),
             space_directory_manifests: $state.space_directory_manifests.$method(),
             axt_policies: $state.axt_policies.$method(),
@@ -423,6 +437,7 @@ macro_rules! build_world_block {
             poseidon_params: $state.poseidon_params.$method(),
             runtime_upgrades: $state.runtime_upgrades.$method(),
             proofs: $state.proofs.$method(),
+            proofs_by_status: $state.proofs_by_status.$method(),
             proof_tags: $state.proof_tags.$method(),
             proofs_by_tag: $state.proofs_by_tag.$method(),
             commit_qcs: $state.commit_qcs.$method(),
@@ -549,12 +564,14 @@ macro_rules! build_world_transaction {
             domain_endorsements: $state.domain_endorsements.transaction(),
             domain_endorsements_by_domain: $state.domain_endorsements_by_domain.transaction(),
             domains: $state.domains.transaction(),
+            domains_by_owner: $state.domains_by_owner.transaction(),
             domain_selectors: $state.domain_selectors.transaction(),
             accounts: $state.accounts.transaction(),
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             account_aliases_by_account: $state.account_aliases_by_account.transaction(),
             account_scope_directory: $state.account_scope_directory.transaction(),
+            account_scope_accounts: $state.account_scope_accounts.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
@@ -568,12 +585,15 @@ macro_rules! build_world_transaction {
             contract_aliases: $state.contract_aliases.transaction(),
             contract_alias_bindings: $state.contract_alias_bindings.transaction(),
             domain_asset_definitions: $state.domain_asset_definitions.transaction(),
+            asset_definitions_by_owner: $state.asset_definitions_by_owner.transaction(),
             asset_definition_holders: $state.asset_definition_holders.transaction(),
             asset_definition_assets: $state.asset_definition_assets.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
+            nfts_by_owner: $state.nfts_by_owner.transaction(),
             rwas: $state.rwas.transaction(),
+            rwas_by_owner: $state.rwas_by_owner.transaction(),
             roles: $state.roles.transaction(),
             account_permissions: $state.account_permissions.transaction(),
             account_roles: $state.account_roles.transaction(),
@@ -592,7 +612,18 @@ macro_rules! build_world_transaction {
             viral_escrows: $state.viral_escrows.transaction(),
             viral_bonus_paid: $state.viral_bonus_paid.transaction(),
             asset_escrows: $state.asset_escrows.transaction(),
+            asset_escrows_by_seller: $state.asset_escrows_by_seller.transaction(),
+            asset_escrows_by_buyer: $state.asset_escrows_by_buyer.transaction(),
+            asset_escrows_by_status: $state.asset_escrows_by_status.transaction(),
             anonymous_asset_escrows: $state.anonymous_asset_escrows.transaction(),
+            anonymous_asset_escrows_by_seller: $state
+                .anonymous_asset_escrows_by_seller
+                .transaction(),
+            anonymous_asset_escrows_by_buyer: $state.anonymous_asset_escrows_by_buyer.transaction(),
+            anonymous_asset_escrows_by_status: $state
+                .anonymous_asset_escrows_by_status
+                .transaction(),
+            vpn_leases: $state.vpn_leases.transaction(),
             uaid_dataspaces: $state.uaid_dataspaces.transaction(),
             space_directory_manifests: $state.space_directory_manifests.transaction(),
             axt_policies: $state.axt_policies.transaction(),
@@ -607,6 +638,7 @@ macro_rules! build_world_transaction {
             poseidon_params: $state.poseidon_params.transaction(),
             runtime_upgrades: $state.runtime_upgrades.transaction(),
             proofs: $state.proofs.transaction(),
+            proofs_by_status: $state.proofs_by_status.transaction(),
             proof_tags: $state.proof_tags.transaction(),
             proofs_by_tag: $state.proofs_by_tag.transaction(),
             commit_qcs: $state.commit_qcs.transaction(),
@@ -1513,6 +1545,9 @@ pub struct World {
     pub(crate) peers: Cell<Peers>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
+    /// Read-side index from domain owner account to owned domain ids.
+    #[norito(skip)]
+    pub(crate) domains_by_owner: Storage<AccountId, BTreeSet<DomainId>>,
     /// Index from account address selector to domain (for address resolution).
     #[norito(skip)]
     pub(crate) domain_selectors: Storage<AccountDomainSelector, DomainId>,
@@ -1529,6 +1564,10 @@ pub struct World {
     /// Read-side account scope directory keyed by canonical I105 account id.
     #[norito(skip)]
     pub(crate) account_scope_directory: Storage<AccountId, AccountScopeDirectoryEntry>,
+    /// Reverse read-side account scope index keyed by `(dataspace, alias-domain)`.
+    #[norito(skip)]
+    pub(crate) account_scope_accounts:
+        Storage<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1560,6 +1599,9 @@ pub struct World {
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]
     pub(crate) domain_asset_definitions: Storage<DomainId, BTreeSet<AssetDefinitionId>>,
+    /// Asset-definition index keyed by owner account.
+    #[norito(skip)]
+    pub(crate) asset_definitions_by_owner: Storage<AccountId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     #[norito(skip)]
     pub(crate) asset_definition_holders: Storage<AssetDefinitionId, BTreeSet<AccountId>>,
@@ -1572,8 +1614,14 @@ pub struct World {
     pub(crate) asset_metadata: Storage<AssetId, Metadata>,
     /// Non fungible assets.
     pub(crate) nfts: Storage<NftId, NftValue>,
+    /// Read-side index from NFT owner account to owned NFT ids.
+    #[norito(skip)]
+    pub(crate) nfts_by_owner: Storage<AccountId, BTreeSet<NftId>>,
     /// Registered real-world asset lots.
     pub(crate) rwas: Storage<RwaId, RwaValue>,
+    /// Read-side index from RWA owner account to owned RWA lot ids.
+    #[norito(skip)]
+    pub(crate) rwas_by_owner: Storage<AccountId, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -1618,8 +1666,28 @@ pub struct World {
     pub(crate) viral_bonus_paid: Storage<Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: Storage<EscrowId, AssetEscrowRecord>,
+    /// Native asset escrows grouped by seller account.
+    #[norito(skip)]
+    pub(crate) asset_escrows_by_seller: Storage<AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by buyer account.
+    #[norito(skip)]
+    pub(crate) asset_escrows_by_buyer: Storage<AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by lifecycle status.
+    #[norito(skip)]
+    pub(crate) asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: Storage<EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native anonymous asset escrows grouped by seller account.
+    #[norito(skip)]
+    pub(crate) anonymous_asset_escrows_by_seller: Storage<AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by buyer account.
+    #[norito(skip)]
+    pub(crate) anonymous_asset_escrows_by_buyer: Storage<AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by lifecycle status.
+    #[norito(skip)]
+    pub(crate) anonymous_asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings maintained by the Space Directory.
     #[norito(skip)]
     pub(crate) uaid_dataspaces: Storage<UniversalAccountId, UaidDataspaceBindings>,
@@ -1683,6 +1751,10 @@ pub struct World {
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         Storage<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
+    /// Inverted index from proof status to proof ids.
+    #[norito(skip)]
+    pub(crate) proofs_by_status:
+        Storage<iroha_data_model::proof::ProofStatus, BTreeSet<iroha_data_model::proof::ProofId>>,
     /// ZK1 TLV tags observed for each proof id (used for audit and tag queries).
     pub(crate) proof_tags: Storage<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from ZK1 TLV tag to proof ids (sorted, unique) for efficient queries.
@@ -1933,6 +2005,8 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageBlock<'world, DomainId, Domain>,
+    /// Read-side index from domain owner account to owned domain ids.
+    pub(crate) domains_by_owner: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
     /// Index from account address selector to domain (for address resolution).
     pub(crate) domain_selectors: StorageBlock<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
@@ -1945,6 +2019,9 @@ pub struct WorldBlock<'world> {
     pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Read-side account scope directory keyed by canonical I105 account id.
     pub(crate) account_scope_directory: StorageBlock<'world, AccountId, AccountScopeDirectoryEntry>,
+    /// Reverse read-side account scope index keyed by `(dataspace, alias-domain)`.
+    pub(crate) account_scope_accounts:
+        StorageBlock<'world, (DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -1976,6 +2053,9 @@ pub struct WorldBlock<'world> {
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageBlock<'world, DomainId, BTreeSet<AssetDefinitionId>>,
+    /// Asset-definition index keyed by owner account.
+    pub(crate) asset_definitions_by_owner:
+        StorageBlock<'world, AccountId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
         StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
@@ -1987,8 +2067,12 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_metadata: StorageBlock<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
+    /// Read-side index from NFT owner account to owned NFT ids.
+    pub(crate) nfts_by_owner: StorageBlock<'world, AccountId, BTreeSet<NftId>>,
     /// Registered RWA lots.
     pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
+    /// Read-side index from RWA owner account to owned RWA lot ids.
+    pub(crate) rwas_by_owner: StorageBlock<'world, AccountId, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2039,8 +2123,25 @@ pub struct WorldBlock<'world> {
     pub(crate) viral_bonus_paid: StorageBlock<'world, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageBlock<'world, EscrowId, AssetEscrowRecord>,
+    /// Native asset escrows grouped by seller account.
+    pub(crate) asset_escrows_by_seller: StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by buyer account.
+    pub(crate) asset_escrows_by_buyer: StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by lifecycle status.
+    pub(crate) asset_escrows_by_status: StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native anonymous asset escrows grouped by seller account.
+    pub(crate) anonymous_asset_escrows_by_seller:
+        StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by buyer account.
+    pub(crate) anonymous_asset_escrows_by_buyer:
+        StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by lifecycle status.
+    pub(crate) anonymous_asset_escrows_by_status:
+        StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings for this block scope.
     pub(crate) uaid_dataspaces: StorageBlock<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
@@ -2090,6 +2191,12 @@ pub struct WorldBlock<'world> {
         'world,
         iroha_data_model::proof::ProofId,
         iroha_data_model::proof::ProofRecord,
+    >,
+    /// Inverted index from proof status to proof ids.
+    pub(crate) proofs_by_status: StorageBlock<
+        'world,
+        iroha_data_model::proof::ProofStatus,
+        BTreeSet<iroha_data_model::proof::ProofId>,
     >,
     /// ZK1 TLV tags per proof id.
     pub(crate) proof_tags: StorageBlock<'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
@@ -2468,6 +2575,8 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
     pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
+    /// Read-side index from domain owner account to owned domain ids.
+    pub(crate) domains_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
     /// Index from account address selector to domain (for address resolution).
     pub(crate) domain_selectors:
         StorageTransaction<'block, 'world, AccountDomainSelector, DomainId>,
@@ -2483,6 +2592,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Read-side account scope directory keyed by canonical I105 account id.
     pub(crate) account_scope_directory:
         StorageTransaction<'block, 'world, AccountId, AccountScopeDirectoryEntry>,
+    /// Reverse read-side account scope index keyed by `(dataspace, alias-domain)`.
+    pub(crate) account_scope_accounts:
+        StorageTransaction<'block, 'world, (DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -2521,6 +2633,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetDefinitionId>>,
+    /// Asset-definition index keyed by owner account.
+    pub(crate) asset_definitions_by_owner:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
         StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AccountId>>,
@@ -2533,8 +2648,12 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_metadata: StorageTransaction<'block, 'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
+    /// Read-side index from NFT owner account to owned NFT ids.
+    pub(crate) nfts_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<NftId>>,
     /// Registered RWA lots.
     pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
+    /// Read-side index from RWA owner account to owned RWA lot ids.
+    pub(crate) rwas_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2599,9 +2718,29 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) viral_bonus_paid: StorageTransaction<'block, 'world, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageTransaction<'block, 'world, EscrowId, AssetEscrowRecord>,
+    /// Native asset escrows grouped by seller account.
+    pub(crate) asset_escrows_by_seller:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by buyer account.
+    pub(crate) asset_escrows_by_buyer:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by lifecycle status.
+    pub(crate) asset_escrows_by_status:
+        StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows:
         StorageTransaction<'block, 'world, EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native anonymous asset escrows grouped by seller account.
+    pub(crate) anonymous_asset_escrows_by_seller:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by buyer account.
+    pub(crate) anonymous_asset_escrows_by_buyer:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by lifecycle status.
+    pub(crate) anonymous_asset_escrows_by_status:
+        StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings maintained by the Space Directory.
     pub(crate) uaid_dataspaces:
         StorageTransaction<'block, 'world, UniversalAccountId, UaidDataspaceBindings>,
@@ -2658,6 +2797,13 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         iroha_data_model::proof::ProofId,
         iroha_data_model::proof::ProofRecord,
+    >,
+    /// Inverted index from proof status to proof ids.
+    pub(crate) proofs_by_status: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::proof::ProofStatus,
+        BTreeSet<iroha_data_model::proof::ProofId>,
     >,
     /// ZK1 TLV tags per proof id.
     pub(crate) proof_tags:
@@ -2936,6 +3082,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.smart_contract_state
     }
 
+    /// Provides mutable access to contract manifests for tests and migration
+    /// fixtures that need to simulate pre-existing world-state records.
+    pub fn contract_manifests_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_crypto::Hash,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    > {
+        &mut self.contract_manifests
+    }
+
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to account-alias bindings for tests and API scaffolding.
     pub fn account_aliases_mut_for_testing(
@@ -3003,6 +3162,85 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if remove_domain_index_entry {
             self.domain_asset_definitions.remove(domain_id.clone());
         }
+    }
+
+    /// Record asset-definition ownership in the read-side owner index.
+    pub(crate) fn track_asset_definition_owner(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        owner: &AccountId,
+    ) {
+        if let Some(definitions) = self.asset_definitions_by_owner.get_mut(owner) {
+            definitions.insert(definition_id.clone());
+        } else {
+            self.asset_definitions_by_owner
+                .insert(owner.clone(), BTreeSet::from([definition_id.clone()]));
+        }
+    }
+
+    /// Drop asset-definition ownership from the read-side owner index.
+    pub(crate) fn untrack_asset_definition_owner(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        owner: &AccountId,
+    ) {
+        let remove_owner_entry =
+            self.asset_definitions_by_owner
+                .get_mut(owner)
+                .is_some_and(|definitions| {
+                    definitions.remove(definition_id);
+                    definitions.is_empty()
+                });
+        if remove_owner_entry {
+            self.asset_definitions_by_owner.remove(owner.clone());
+        }
+    }
+
+    /// Insert an asset definition and keep derived indexes consistent.
+    pub(crate) fn insert_asset_definition_entry(
+        &mut self,
+        definition_id: AssetDefinitionId,
+        definition: AssetDefinition,
+    ) -> Option<AssetDefinition> {
+        let owner = definition.owned_by().clone();
+        let previous = self
+            .asset_definitions
+            .insert(definition_id.clone(), definition);
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_asset_definition_domain(&definition_id);
+            self.untrack_asset_definition_owner(&definition_id, previous.owned_by());
+        }
+        self.track_asset_definition_domain(&definition_id);
+        self.track_asset_definition_owner(&definition_id, &owner);
+        previous
+    }
+
+    /// Remove an asset definition and keep derived indexes consistent.
+    pub(crate) fn remove_asset_definition_entry(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+    ) -> Option<AssetDefinition> {
+        let removed = self.asset_definitions.remove(definition_id.clone());
+        if let Some(definition) = removed.as_ref() {
+            self.untrack_asset_definition_domain(definition_id);
+            self.untrack_asset_definition_owner(definition_id, definition.owned_by());
+        }
+        removed
+    }
+
+    /// Move an existing asset definition id between owner index buckets.
+    pub(crate) fn replace_asset_definition_owner_index(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        previous_owner: &AccountId,
+        next_owner: &AccountId,
+    ) {
+        if previous_owner == next_owner {
+            self.track_asset_definition_owner(definition_id, next_owner);
+            return;
+        }
+        self.untrack_asset_definition_owner(definition_id, previous_owner);
+        self.track_asset_definition_owner(definition_id, next_owner);
     }
 
     /// Record that the given account now holds at least one balance partition of the definition.
@@ -3090,6 +3328,348 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let amount = value.clone().into_inner();
         self.decrease_asset_total_amount(asset_id.definition(), &amount)?;
         Ok(self.remove_asset_and_metadata(asset_id))
+    }
+
+    /// Record domain ownership in the read-side owner index.
+    pub(crate) fn track_domain_owner(&mut self, domain_id: &DomainId, owner: &AccountId) {
+        if let Some(domains) = self.domains_by_owner.get_mut(owner) {
+            domains.insert(domain_id.clone());
+        } else {
+            self.domains_by_owner
+                .insert(owner.clone(), BTreeSet::from([domain_id.clone()]));
+        }
+    }
+
+    /// Drop domain ownership from the read-side owner index.
+    pub(crate) fn untrack_domain_owner(&mut self, domain_id: &DomainId, owner: &AccountId) {
+        let remove_owner_entry = self.domains_by_owner.get_mut(owner).is_some_and(|domains| {
+            domains.remove(domain_id);
+            domains.is_empty()
+        });
+        if remove_owner_entry {
+            self.domains_by_owner.remove(owner.clone());
+        }
+    }
+
+    /// Insert a domain and keep the owner index consistent.
+    pub(crate) fn insert_domain_entry(
+        &mut self,
+        domain_id: DomainId,
+        domain: Domain,
+    ) -> Option<Domain> {
+        let owner = domain.owned_by().clone();
+        let previous = self.domains.insert(domain_id.clone(), domain);
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_domain_owner(&domain_id, previous.owned_by());
+        }
+        self.track_domain_owner(&domain_id, &owner);
+        previous
+    }
+
+    /// Remove a domain and keep the owner index consistent.
+    pub(crate) fn remove_domain_entry(&mut self, domain_id: &DomainId) -> Option<Domain> {
+        let removed = self.domains.remove(domain_id.clone());
+        if let Some(domain) = removed.as_ref() {
+            self.untrack_domain_owner(domain_id, domain.owned_by());
+        }
+        removed
+    }
+
+    /// Move an existing domain id between owner index buckets.
+    pub(crate) fn replace_domain_owner_index(
+        &mut self,
+        domain_id: &DomainId,
+        previous_owner: &AccountId,
+        next_owner: &AccountId,
+    ) {
+        if previous_owner == next_owner {
+            self.track_domain_owner(domain_id, next_owner);
+            return;
+        }
+        self.untrack_domain_owner(domain_id, previous_owner);
+        self.track_domain_owner(domain_id, next_owner);
+    }
+
+    /// Record NFT ownership in the read-side owner index.
+    pub(crate) fn track_nft_owner(&mut self, nft_id: &NftId, owner: &AccountId) {
+        if let Some(nfts) = self.nfts_by_owner.get_mut(owner) {
+            nfts.insert(nft_id.clone());
+        } else {
+            self.nfts_by_owner
+                .insert(owner.clone(), BTreeSet::from([nft_id.clone()]));
+        }
+    }
+
+    /// Drop NFT ownership from the read-side owner index.
+    pub(crate) fn untrack_nft_owner(&mut self, nft_id: &NftId, owner: &AccountId) {
+        let remove_owner_entry = self.nfts_by_owner.get_mut(owner).is_some_and(|nfts| {
+            nfts.remove(nft_id);
+            nfts.is_empty()
+        });
+        if remove_owner_entry {
+            self.nfts_by_owner.remove(owner.clone());
+        }
+    }
+
+    /// Insert an NFT and keep the owner index consistent.
+    pub(crate) fn insert_nft_entry(
+        &mut self,
+        nft_id: NftId,
+        nft_value: NftValue,
+    ) -> Option<NftValue> {
+        let owner = nft_value.owned_by.clone();
+        let previous = self.nfts.insert(nft_id.clone(), nft_value);
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_nft_owner(&nft_id, &previous.owned_by);
+        }
+        self.track_nft_owner(&nft_id, &owner);
+        previous
+    }
+
+    /// Remove an NFT and keep the owner index consistent.
+    pub(crate) fn remove_nft_entry(&mut self, nft_id: &NftId) -> Option<NftValue> {
+        let removed = self.nfts.remove(nft_id.clone());
+        if let Some(value) = removed.as_ref() {
+            self.untrack_nft_owner(nft_id, &value.owned_by);
+        }
+        removed
+    }
+
+    /// Move an existing NFT id between owner index buckets.
+    pub(crate) fn replace_nft_owner_index(
+        &mut self,
+        nft_id: &NftId,
+        previous_owner: &AccountId,
+        next_owner: &AccountId,
+    ) {
+        if previous_owner == next_owner {
+            self.track_nft_owner(nft_id, next_owner);
+            return;
+        }
+        self.untrack_nft_owner(nft_id, previous_owner);
+        self.track_nft_owner(nft_id, next_owner);
+    }
+
+    /// Record RWA lot ownership in the read-side owner index.
+    pub(crate) fn track_rwa_owner(&mut self, rwa_id: &RwaId, owner: &AccountId) {
+        if let Some(rwas) = self.rwas_by_owner.get_mut(owner) {
+            rwas.insert(rwa_id.clone());
+        } else {
+            self.rwas_by_owner
+                .insert(owner.clone(), BTreeSet::from([rwa_id.clone()]));
+        }
+    }
+
+    /// Drop RWA lot ownership from the read-side owner index.
+    pub(crate) fn untrack_rwa_owner(&mut self, rwa_id: &RwaId, owner: &AccountId) {
+        let remove_owner_entry = self.rwas_by_owner.get_mut(owner).is_some_and(|rwas| {
+            rwas.remove(rwa_id);
+            rwas.is_empty()
+        });
+        if remove_owner_entry {
+            self.rwas_by_owner.remove(owner.clone());
+        }
+    }
+
+    /// Insert an RWA lot and keep the owner index consistent.
+    pub(crate) fn insert_rwa_entry(
+        &mut self,
+        rwa_id: RwaId,
+        rwa_value: RwaValue,
+    ) -> Option<RwaValue> {
+        let owner = rwa_value.owned_by.clone();
+        let previous = self.rwas.insert(rwa_id.clone(), rwa_value);
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_rwa_owner(&rwa_id, &previous.owned_by);
+        }
+        self.track_rwa_owner(&rwa_id, &owner);
+        previous
+    }
+
+    /// Move an existing RWA lot id between owner index buckets.
+    pub(crate) fn replace_rwa_owner_index(
+        &mut self,
+        rwa_id: &RwaId,
+        previous_owner: &AccountId,
+        next_owner: &AccountId,
+    ) {
+        if previous_owner == next_owner {
+            self.track_rwa_owner(rwa_id, next_owner);
+            return;
+        }
+        self.untrack_rwa_owner(rwa_id, previous_owner);
+        self.track_rwa_owner(rwa_id, next_owner);
+    }
+
+    fn track_escrow_index<K: MvKey>(
+        storage: &mut StorageTransaction<'block, 'world, K, BTreeSet<EscrowId>>,
+        key: &K,
+        escrow_id: EscrowId,
+    ) {
+        if let Some(escrows) = storage.get_mut(key) {
+            escrows.insert(escrow_id);
+        } else {
+            storage.insert(key.clone(), BTreeSet::from([escrow_id]));
+        }
+    }
+
+    fn untrack_escrow_index<K: MvKey>(
+        storage: &mut StorageTransaction<'block, 'world, K, BTreeSet<EscrowId>>,
+        key: &K,
+        escrow_id: &EscrowId,
+    ) {
+        let remove_entry = storage.get_mut(key).is_some_and(|escrows| {
+            escrows.remove(escrow_id);
+            escrows.is_empty()
+        });
+        if remove_entry {
+            storage.remove(key.clone());
+        }
+    }
+
+    /// Record a native asset escrow in all read-side indexes.
+    pub(crate) fn track_asset_escrow_indexes(&mut self, record: &AssetEscrowRecord) {
+        Self::track_escrow_index(&mut self.asset_escrows_by_seller, &record.seller, record.id);
+        if let Some(buyer) = record.buyer.as_ref() {
+            Self::track_escrow_index(&mut self.asset_escrows_by_buyer, buyer, record.id);
+        }
+        Self::track_escrow_index(&mut self.asset_escrows_by_status, &record.status, record.id);
+    }
+
+    /// Drop a native asset escrow from all read-side indexes.
+    pub(crate) fn untrack_asset_escrow_indexes(&mut self, record: &AssetEscrowRecord) {
+        Self::untrack_escrow_index(
+            &mut self.asset_escrows_by_seller,
+            &record.seller,
+            &record.id,
+        );
+        if let Some(buyer) = record.buyer.as_ref() {
+            Self::untrack_escrow_index(&mut self.asset_escrows_by_buyer, buyer, &record.id);
+        }
+        Self::untrack_escrow_index(
+            &mut self.asset_escrows_by_status,
+            &record.status,
+            &record.id,
+        );
+    }
+
+    /// Insert a native asset escrow and keep derived indexes consistent.
+    pub(crate) fn insert_asset_escrow_entry(
+        &mut self,
+        record: AssetEscrowRecord,
+    ) -> Option<AssetEscrowRecord> {
+        let previous = self.asset_escrows.insert(record.id, record.clone());
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_asset_escrow_indexes(previous);
+        }
+        self.track_asset_escrow_indexes(&record);
+        previous
+    }
+
+    /// Record an anonymous native asset escrow in all read-side indexes.
+    pub(crate) fn track_anonymous_asset_escrow_indexes(
+        &mut self,
+        record: &AnonymousAssetEscrowRecord,
+    ) {
+        Self::track_escrow_index(
+            &mut self.anonymous_asset_escrows_by_seller,
+            &record.seller,
+            record.id,
+        );
+        if let Some(buyer) = record.buyer.as_ref() {
+            Self::track_escrow_index(&mut self.anonymous_asset_escrows_by_buyer, buyer, record.id);
+        }
+        Self::track_escrow_index(
+            &mut self.anonymous_asset_escrows_by_status,
+            &record.status,
+            record.id,
+        );
+    }
+
+    /// Drop an anonymous native asset escrow from all read-side indexes.
+    pub(crate) fn untrack_anonymous_asset_escrow_indexes(
+        &mut self,
+        record: &AnonymousAssetEscrowRecord,
+    ) {
+        Self::untrack_escrow_index(
+            &mut self.anonymous_asset_escrows_by_seller,
+            &record.seller,
+            &record.id,
+        );
+        if let Some(buyer) = record.buyer.as_ref() {
+            Self::untrack_escrow_index(
+                &mut self.anonymous_asset_escrows_by_buyer,
+                buyer,
+                &record.id,
+            );
+        }
+        Self::untrack_escrow_index(
+            &mut self.anonymous_asset_escrows_by_status,
+            &record.status,
+            &record.id,
+        );
+    }
+
+    /// Insert an anonymous native asset escrow and keep derived indexes consistent.
+    pub(crate) fn insert_anonymous_asset_escrow_entry(
+        &mut self,
+        record: AnonymousAssetEscrowRecord,
+    ) -> Option<AnonymousAssetEscrowRecord> {
+        let previous = self
+            .anonymous_asset_escrows
+            .insert(record.id, record.clone());
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_anonymous_asset_escrow_indexes(previous);
+        }
+        self.track_anonymous_asset_escrow_indexes(&record);
+        previous
+    }
+
+    fn track_proof_status_index(&mut self, record: &iroha_data_model::proof::ProofRecord) {
+        if let Some(ids) = self.proofs_by_status.get_mut(&record.status) {
+            ids.insert(record.id.clone());
+        } else {
+            self.proofs_by_status
+                .insert(record.status, BTreeSet::from([record.id.clone()]));
+        }
+    }
+
+    fn untrack_proof_status_index(&mut self, record: &iroha_data_model::proof::ProofRecord) {
+        let remove_status = self
+            .proofs_by_status
+            .get_mut(&record.status)
+            .is_some_and(|ids| {
+                ids.remove(&record.id);
+                ids.is_empty()
+            });
+        if remove_status {
+            self.proofs_by_status.remove(record.status);
+        }
+    }
+
+    /// Insert a proof record and keep derived proof indexes consistent.
+    pub(crate) fn insert_proof_record(
+        &mut self,
+        record: iroha_data_model::proof::ProofRecord,
+    ) -> Option<iroha_data_model::proof::ProofRecord> {
+        let previous = self.proofs.insert(record.id.clone(), record.clone());
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_proof_status_index(previous);
+        }
+        self.track_proof_status_index(&record);
+        previous
+    }
+
+    /// Remove a proof record and keep derived proof indexes consistent.
+    pub(crate) fn remove_proof_record(
+        &mut self,
+        proof_id: &iroha_data_model::proof::ProofId,
+    ) -> Option<iroha_data_model::proof::ProofRecord> {
+        let previous = self.proofs.remove(proof_id.clone());
+        if let Some(previous) = previous.as_ref() {
+            self.untrack_proof_status_index(previous);
+        }
+        previous
     }
 
     /// Bind or update an asset definition alias record and keep both alias indexes consistent.
@@ -3252,6 +3832,8 @@ pub struct WorldView<'world> {
     pub(crate) peers: CellView<'world, Peers>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
+    /// Read-side index from domain owner account to owned domain ids.
+    pub(crate) domains_by_owner: StorageView<'world, AccountId, BTreeSet<DomainId>>,
     /// Index from account address selector to domain (for address resolution).
     pub(crate) domain_selectors: StorageView<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
@@ -3264,6 +3846,9 @@ pub struct WorldView<'world> {
     pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Read-side account scope directory keyed by canonical I105 account id.
     pub(crate) account_scope_directory: StorageView<'world, AccountId, AccountScopeDirectoryEntry>,
+    /// Reverse read-side account scope index keyed by `(dataspace, alias-domain)`.
+    pub(crate) account_scope_accounts:
+        StorageView<'world, (DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -3293,6 +3878,9 @@ pub struct WorldView<'world> {
         StorageView<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions: StorageView<'world, DomainId, BTreeSet<AssetDefinitionId>>,
+    /// Asset-definition index keyed by owner account.
+    pub(crate) asset_definitions_by_owner:
+        StorageView<'world, AccountId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
         StorageView<'world, AssetDefinitionId, BTreeSet<AccountId>>,
@@ -3304,8 +3892,12 @@ pub struct WorldView<'world> {
     pub(crate) asset_metadata: StorageView<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageView<'world, NftId, NftValue>,
+    /// Read-side index from NFT owner account to owned NFT ids.
+    pub(crate) nfts_by_owner: StorageView<'world, AccountId, BTreeSet<NftId>>,
     /// Registered RWA lots.
     pub(crate) rwas: StorageView<'world, RwaId, RwaValue>,
+    /// Read-side index from RWA owner account to owned RWA lot ids.
+    pub(crate) rwas_by_owner: StorageView<'world, AccountId, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -3353,8 +3945,24 @@ pub struct WorldView<'world> {
     pub(crate) viral_bonus_paid: StorageView<'world, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageView<'world, EscrowId, AssetEscrowRecord>,
+    /// Native asset escrows grouped by seller account.
+    pub(crate) asset_escrows_by_seller: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by buyer account.
+    pub(crate) asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native asset escrows grouped by lifecycle status.
+    pub(crate) asset_escrows_by_status: StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: StorageView<'world, EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native anonymous asset escrows grouped by seller account.
+    pub(crate) anonymous_asset_escrows_by_seller:
+        StorageView<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by buyer account.
+    pub(crate) anonymous_asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
+    /// Native anonymous asset escrows grouped by lifecycle status.
+    pub(crate) anonymous_asset_escrows_by_status:
+        StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings derived from the Space Directory.
     pub(crate) uaid_dataspaces: StorageView<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records derived from the Space Directory host.
@@ -3421,6 +4029,12 @@ pub struct WorldView<'world> {
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         StorageView<'world, iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
+    /// Inverted index from proof status to proof ids.
+    pub(crate) proofs_by_status: StorageView<
+        'world,
+        iroha_data_model::proof::ProofStatus,
+        BTreeSet<iroha_data_model::proof::ProofId>,
+    >,
     /// ZK1 TLV tags recorded per proof id.
     pub(crate) proof_tags: StorageView<'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from TLV tag to proof ids.
@@ -5508,13 +6122,6 @@ impl StatelessValidationContext {
     }
 }
 
-#[derive(Debug, Clone)]
-struct StatelessValidationCacheEntry {
-    expires_at_ms: Option<u128>,
-    not_before_ms: u128,
-    order: u64,
-}
-
 #[derive(Debug)]
 pub(crate) struct StatelessValidationCache {
     cap: usize,
@@ -5522,7 +6129,7 @@ pub(crate) struct StatelessValidationCache {
     context: Option<StatelessValidationContext>,
     entries: std::collections::BTreeMap<
         iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        StatelessValidationCacheEntry,
+        u64,
     >,
     lru: std::collections::BTreeSet<(
         u64,
@@ -5562,47 +6169,36 @@ impl StatelessValidationCache {
     }
 
     pub(crate) fn get_ok(
-        &mut self,
+        &self,
         key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        now_ms: u128,
+        _now_ms: u128,
     ) -> bool {
-        let Some(mut entry) = self.entries.remove(key) else {
-            return false;
-        };
-        if now_ms < entry.not_before_ms
-            || entry
-                .expires_at_ms
-                .is_some_and(|expires_at| now_ms > expires_at)
-        {
-            self.lru.remove(&(entry.order, key.clone()));
-            return false;
-        }
-        self.lru.remove(&(entry.order, key.clone()));
-        entry.order = self.next_order();
-        self.lru.insert((entry.order, key.clone()));
-        self.entries.insert(key.clone(), entry);
-        true
+        self.entries.contains_key(key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_key(
+        &self,
+        key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+    ) -> bool {
+        self.get_ok(key, 0)
     }
 
     pub(crate) fn insert_ok(
         &mut self,
         key: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        expires_at_ms: Option<u128>,
-        not_before_ms: u128,
+        _expires_at_ms: Option<u128>,
+        _not_before_ms: u128,
     ) {
         if self.cap == 0 {
             return;
         }
+        if let Some(order) = self.entries.remove(&key) {
+            self.lru.remove(&(order, key.clone()));
+        }
         self.evict_capacity();
         let order = self.next_order();
-        self.entries.insert(
-            key.clone(),
-            StatelessValidationCacheEntry {
-                expires_at_ms,
-                not_before_ms,
-                order,
-            },
-        );
+        self.entries.insert(key.clone(), order);
         self.lru.insert((order, key));
     }
 
@@ -5640,16 +6236,17 @@ mod stateless_validation_cache_tests {
     }
 
     #[test]
-    fn cache_respects_not_before_and_expiry() {
-        let mut cache = StatelessValidationCache::new(4);
+    fn cache_tracks_inserted_hashes_and_capacity() {
+        let mut cache = StatelessValidationCache::new(1);
         let key = dummy_hash(7);
+        let other_key = dummy_hash(8);
 
         cache.insert_ok(key, Some(200), 50);
-        assert!(!cache.get_ok(&key, 40));
+        assert!(cache.get_ok(&key, 100));
 
-        cache.insert_ok(key, Some(200), 50);
-        assert!(cache.get_ok(&key, 199));
-        assert!(!cache.get_ok(&key, 201));
+        cache.insert_ok(other_key, None, 0);
+        assert!(!cache.get_ok(&key, 100));
+        assert!(cache.get_ok(&other_key, 100));
     }
 }
 
@@ -5935,6 +6532,8 @@ pub struct State {
     pub world: World,
     /// Blockchain.
     pub block_hashes: BlockHashes,
+    /// Latest committed block header cached for hot paths that do not need full block bodies.
+    latest_block_header: parking_lot::RwLock<Option<BlockHeader>>,
     /// Merge-ledger cache retaining recent entries for queries/telemetry.
     pub merge_ledger: MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -6103,6 +6702,8 @@ pub struct StateBlock<'state> {
     fastpq_tx_set_hash: Option<[u8; 32]>,
     /// Dataspace assignments for FASTPQ entry hashes in this block.
     fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,
+    /// Local-only context for background FASTPQ batch construction.
+    fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
     /// Captured execution witness for the block (SBV‑AM).
@@ -6523,6 +7124,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash:
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// Original block entrypoint index for the current transaction, when known.
+    pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
     pub(crate) replay_compatibility: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
@@ -10394,7 +10997,7 @@ impl DetachedStateTransactionDelta {
                         "NFT already exists: {id}"
                     )));
                 }
-                stx.world.nfts.insert(id.clone(), val);
+                stx.world.insert_nft_entry(id.clone(), val);
                 stx.world
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Created(nft))));
             }
@@ -10402,7 +11005,7 @@ impl DetachedStateTransactionDelta {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
                     &mut stx, &id,
                 );
-                let _ = stx.world.nfts.remove(id.clone()).ok_or_else(|| {
+                let _ = stx.world.remove_nft_entry(&id).ok_or_else(|| {
                     iroha_data_model::ValidationFail::NotPermitted(format!("NFT not found: {id}"))
                 })?;
                 let _ = stx.world.domain(id.domain())?;
@@ -10443,13 +11046,16 @@ impl DetachedStateTransactionDelta {
                     })));
             }
             for (id, (from, to)) in self.nft_transfer {
-                let nft = stx.world.nft_mut(&id)?;
-                if nft.owned_by != from {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "source does not own NFT {id}"
-                    )));
+                {
+                    let nft = stx.world.nft_mut(&id)?;
+                    if nft.owned_by != from {
+                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
+                            "source does not own NFT {id}"
+                        )));
+                    }
+                    nft.owned_by = to.clone();
                 }
-                nft.owned_by = to.clone();
+                stx.world.replace_nft_owner_index(&id, &from, &to);
                 stx.world
                     .emit_events(Some(NftEvent::OwnerChanged(NftOwnerChanged {
                         nft: id,
@@ -10459,13 +11065,16 @@ impl DetachedStateTransactionDelta {
 
             // Apply domain owner transfers
             for (dom, (from, to)) in self.domain_owner_transfer {
-                let d = stx.world.domain_mut(&dom)?;
-                if d.owned_by() != &from {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "source does not own domain {dom}"
-                    )));
+                {
+                    let d = stx.world.domain_mut(&dom)?;
+                    if d.owned_by() != &from {
+                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
+                            "source does not own domain {dom}"
+                        )));
+                    }
+                    d.set_owned_by(to.clone());
                 }
-                d.set_owned_by(to.clone());
+                stx.world.replace_domain_owner_index(&dom, &from, &to);
                 stx.world
                     .emit_events(Some(DomainEvent::OwnerChanged(DomainOwnerChanged {
                         domain: dom,
@@ -10475,13 +11084,17 @@ impl DetachedStateTransactionDelta {
 
             // Apply asset definition owner transfers
             for (ad, (from, to)) in self.asset_def_owner_transfer {
-                let def = stx.world.asset_definition_mut(&ad)?;
-                if def.owned_by() != &from {
-                    return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "source does not own asset definition {ad}"
-                    )));
+                {
+                    let def = stx.world.asset_definition_mut(&ad)?;
+                    if def.owned_by() != &from {
+                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
+                            "source does not own asset definition {ad}"
+                        )));
+                    }
+                    def.set_owned_by(to.clone());
                 }
-                def.set_owned_by(to.clone());
+                stx.world
+                    .replace_asset_definition_owner_index(&ad, &from, &to);
                 stx.world.emit_events(Some(DomainEvent::AssetDefinition(
                     AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
                         asset_definition: ad,
@@ -11159,24 +11772,30 @@ impl World {
         let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
         let mut world = Self {
             domains,
+            domains_by_owner: Storage::default(),
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
             account_recovery_policies: Storage::default(),
             account_recovery_requests: Storage::default(),
+            account_scope_accounts: Storage::default(),
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
             contract_aliases: Storage::default(),
             contract_alias_bindings: Storage::default(),
             domain_asset_definitions: Storage::default(),
+            asset_definitions_by_owner: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
+            nfts_by_owner: Storage::default(),
             rwas: Storage::default(),
+            rwas_by_owner: Storage::default(),
             proofs: Storage::default(),
+            proofs_by_status: Storage::default(),
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
             contract_instances: Storage::default(),
@@ -11210,6 +11829,7 @@ impl World {
         world
             .rebuild_domain_selector_index()
             .expect("duplicate domain selector in world constructor");
+        world.rebuild_domain_owner_index();
         world
             .rebuild_uaid_account_index()
             .expect("duplicate UAID in world constructor");
@@ -11229,6 +11849,10 @@ impl World {
             .rebuild_contract_alias_indexes()
             .expect("duplicate contract alias in world constructor");
         world.rebuild_asset_definition_indexes();
+        world.rebuild_nft_owner_index();
+        world.rebuild_rwa_owner_index();
+        world.rebuild_escrow_indexes();
+        world.rebuild_proof_status_index();
         world
             .rebuild_opaque_uaid_index()
             .expect("duplicate opaque id in world constructor");
@@ -11393,7 +12017,18 @@ impl World {
         };
 
         self.account_scope_directory = rebuilt.into_iter().collect();
+        self.rebuild_account_scope_accounts_index();
         Ok(())
+    }
+
+    fn rebuild_account_scope_accounts_index(&mut self) {
+        let mut index = BTreeMap::<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>::new();
+        for (account_id, entry) in self.account_scope_directory.view().iter() {
+            for key in account_scope_index_keys(entry) {
+                index.entry(key).or_default().insert(account_id.clone());
+            }
+        }
+        self.account_scope_accounts = index.into_iter().collect();
     }
 
     fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
@@ -11531,12 +12166,16 @@ impl World {
 
     fn rebuild_asset_definition_indexes(&mut self) {
         let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
-        for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
-            let Some(domain_id) = definition_id.try_domain() else {
-                continue;
-            };
-            domain_definitions
-                .entry(domain_id.clone())
+        let mut definitions_by_owner = BTreeMap::<AccountId, BTreeSet<AssetDefinitionId>>::new();
+        for (definition_id, definition) in self.asset_definitions.view().iter() {
+            if let Some(domain_id) = definition_id.try_domain() {
+                domain_definitions
+                    .entry(domain_id.clone())
+                    .or_default()
+                    .insert(definition_id.clone());
+            }
+            definitions_by_owner
+                .entry(definition.owned_by().clone())
                 .or_default()
                 .insert(definition_id.clone());
         }
@@ -11553,8 +12192,104 @@ impl World {
                 .insert(asset_id.clone());
         }
         self.domain_asset_definitions = domain_definitions.into_iter().collect();
+        self.asset_definitions_by_owner = definitions_by_owner.into_iter().collect();
         self.asset_definition_holders = holders.into_iter().collect();
         self.asset_definition_assets = definition_assets.into_iter().collect();
+    }
+
+    fn rebuild_domain_owner_index(&mut self) {
+        let mut by_owner = BTreeMap::<AccountId, BTreeSet<DomainId>>::new();
+        for (domain_id, domain) in self.domains.view().iter() {
+            by_owner
+                .entry(domain.owned_by().clone())
+                .or_default()
+                .insert(domain_id.clone());
+        }
+        self.domains_by_owner = by_owner.into_iter().collect();
+    }
+
+    fn rebuild_nft_owner_index(&mut self) {
+        let mut by_owner = BTreeMap::<AccountId, BTreeSet<NftId>>::new();
+        for (nft_id, nft) in self.nfts.view().iter() {
+            by_owner
+                .entry(nft.owned_by.clone())
+                .or_default()
+                .insert(nft_id.clone());
+        }
+        self.nfts_by_owner = by_owner.into_iter().collect();
+    }
+
+    fn rebuild_rwa_owner_index(&mut self) {
+        let mut by_owner = BTreeMap::<AccountId, BTreeSet<RwaId>>::new();
+        for (rwa_id, rwa) in self.rwas.view().iter() {
+            by_owner
+                .entry(rwa.owned_by.clone())
+                .or_default()
+                .insert(rwa_id.clone());
+        }
+        self.rwas_by_owner = by_owner.into_iter().collect();
+    }
+
+    fn rebuild_escrow_indexes(&mut self) {
+        let mut public_by_seller = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
+        let mut public_by_buyer = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
+        let mut public_by_status = BTreeMap::<AssetEscrowStatus, BTreeSet<EscrowId>>::new();
+        for (escrow_id, record) in self.asset_escrows.view().iter() {
+            public_by_seller
+                .entry(record.seller.clone())
+                .or_default()
+                .insert(*escrow_id);
+            if let Some(buyer) = record.buyer.as_ref() {
+                public_by_buyer
+                    .entry(buyer.clone())
+                    .or_default()
+                    .insert(*escrow_id);
+            }
+            public_by_status
+                .entry(record.status)
+                .or_default()
+                .insert(*escrow_id);
+        }
+        self.asset_escrows_by_seller = public_by_seller.into_iter().collect();
+        self.asset_escrows_by_buyer = public_by_buyer.into_iter().collect();
+        self.asset_escrows_by_status = public_by_status.into_iter().collect();
+
+        let mut anonymous_by_seller = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
+        let mut anonymous_by_buyer = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
+        let mut anonymous_by_status = BTreeMap::<AssetEscrowStatus, BTreeSet<EscrowId>>::new();
+        for (escrow_id, record) in self.anonymous_asset_escrows.view().iter() {
+            anonymous_by_seller
+                .entry(record.seller.clone())
+                .or_default()
+                .insert(*escrow_id);
+            if let Some(buyer) = record.buyer.as_ref() {
+                anonymous_by_buyer
+                    .entry(buyer.clone())
+                    .or_default()
+                    .insert(*escrow_id);
+            }
+            anonymous_by_status
+                .entry(record.status)
+                .or_default()
+                .insert(*escrow_id);
+        }
+        self.anonymous_asset_escrows_by_seller = anonymous_by_seller.into_iter().collect();
+        self.anonymous_asset_escrows_by_buyer = anonymous_by_buyer.into_iter().collect();
+        self.anonymous_asset_escrows_by_status = anonymous_by_status.into_iter().collect();
+    }
+
+    fn rebuild_proof_status_index(&mut self) {
+        let mut by_status = BTreeMap::<
+            iroha_data_model::proof::ProofStatus,
+            BTreeSet<iroha_data_model::proof::ProofId>,
+        >::new();
+        for (proof_id, record) in self.proofs.view().iter() {
+            by_status
+                .entry(record.status)
+                .or_default()
+                .insert(proof_id.clone());
+        }
+        self.proofs_by_status = by_status.into_iter().collect();
     }
 
     fn rebuild_opaque_uaid_index(&mut self) -> Result<(), String> {
@@ -11673,12 +12408,14 @@ impl World {
             domain_endorsements: self.domain_endorsements.view(),
             domain_endorsements_by_domain: self.domain_endorsements_by_domain.view(),
             domains: self.domains.view(),
+            domains_by_owner: self.domains_by_owner.view(),
             domain_selectors: self.domain_selectors.view(),
             accounts: self.accounts.view(),
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             account_aliases_by_account: self.account_aliases_by_account.view(),
             account_scope_directory: self.account_scope_directory.view(),
+            account_scope_accounts: self.account_scope_accounts.view(),
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
@@ -11692,12 +12429,15 @@ impl World {
             contract_aliases: self.contract_aliases.view(),
             contract_alias_bindings: self.contract_alias_bindings.view(),
             domain_asset_definitions: self.domain_asset_definitions.view(),
+            asset_definitions_by_owner: self.asset_definitions_by_owner.view(),
             asset_definition_holders: self.asset_definition_holders.view(),
             asset_definition_assets: self.asset_definition_assets.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
+            nfts_by_owner: self.nfts_by_owner.view(),
             rwas: self.rwas.view(),
+            rwas_by_owner: self.rwas_by_owner.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -11716,7 +12456,14 @@ impl World {
             viral_escrows: self.viral_escrows.view(),
             viral_bonus_paid: self.viral_bonus_paid.view(),
             asset_escrows: self.asset_escrows.view(),
+            asset_escrows_by_seller: self.asset_escrows_by_seller.view(),
+            asset_escrows_by_buyer: self.asset_escrows_by_buyer.view(),
+            asset_escrows_by_status: self.asset_escrows_by_status.view(),
             anonymous_asset_escrows: self.anonymous_asset_escrows.view(),
+            anonymous_asset_escrows_by_seller: self.anonymous_asset_escrows_by_seller.view(),
+            anonymous_asset_escrows_by_buyer: self.anonymous_asset_escrows_by_buyer.view(),
+            anonymous_asset_escrows_by_status: self.anonymous_asset_escrows_by_status.view(),
+            vpn_leases: self.vpn_leases.view(),
             uaid_dataspaces: self.uaid_dataspaces.view(),
             space_directory_manifests: self.space_directory_manifests.view(),
             axt_policies: self.axt_policies.view(),
@@ -11731,6 +12478,7 @@ impl World {
             poseidon_params: self.poseidon_params.view(),
             runtime_upgrades: self.runtime_upgrades.view(),
             proofs: self.proofs.view(),
+            proofs_by_status: self.proofs_by_status.view(),
             proof_tags: self.proof_tags.view(),
             proofs_by_tag: self.proofs_by_tag.view(),
             commit_qcs: self.commit_qcs.view(),
@@ -11874,6 +12622,20 @@ fn derive_account_scope_directory_entry(
     Ok(Some(entry))
 }
 
+fn account_scope_index_keys(
+    entry: &AccountScopeDirectoryEntry,
+) -> BTreeSet<(DataSpaceId, AccountAliasDomain)> {
+    entry
+        .iter()
+        .flat_map(|(dataspace, domains)| {
+            domains
+                .iter()
+                .cloned()
+                .map(move |domain| (*dataspace, domain))
+        })
+        .collect()
+}
+
 /// Read-only view over world-level resources.
 ///
 /// Provides accessors to parameters, peers, domains, accounts, assets,
@@ -11891,6 +12653,8 @@ pub trait WorldReadOnly {
     fn peers(&self) -> &Peers;
     /// Domain storage (read-only).
     fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain>;
+    /// Domain owner index (read-only).
+    fn domains_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>>;
     /// Domain selector index for account address resolution.
     fn domain_selectors(&self) -> &impl StorageReadOnly<AccountDomainSelector, DomainId>;
     /// Endorsement committees (read-only).
@@ -11921,6 +12685,10 @@ pub trait WorldReadOnly {
     fn account_scope_directory(
         &self,
     ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry>;
+    /// Reverse read-side account scope index by `(dataspace, alias-domain)`.
+    fn account_scope_accounts(
+        &self,
+    ) -> &impl StorageReadOnly<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -11999,6 +12767,10 @@ pub trait WorldReadOnly {
     fn domain_asset_definitions(
         &self,
     ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>>;
+    /// Asset-definition ids grouped by owner account.
+    fn asset_definitions_by_owner(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AssetDefinitionId>>;
     /// Holder index keyed by asset definition id.
     fn asset_definition_holders(
         &self,
@@ -12013,8 +12785,12 @@ pub trait WorldReadOnly {
     fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata>;
     /// NFT storage (read-only).
     fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
+    /// NFT owner index (read-only).
+    fn nfts_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<NftId>>;
     /// RWA storage (read-only).
     fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
+    /// RWA owner index (read-only).
+    fn rwas_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<RwaId>>;
     /// Role storage (read-only).
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     /// Account permissions mapping (read-only).
@@ -12062,10 +12838,32 @@ pub trait WorldReadOnly {
     fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool>;
     /// Native asset escrow records keyed by escrow identifier.
     fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord>;
+    /// Native asset escrow ids grouped by seller account.
+    fn asset_escrows_by_seller(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
+    /// Native asset escrow ids grouped by buyer account.
+    fn asset_escrows_by_buyer(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
+    /// Native asset escrow ids grouped by lifecycle status.
+    fn asset_escrows_by_status(
+        &self,
+    ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
     /// Native anonymous asset escrow records keyed by escrow identifier.
     fn anonymous_asset_escrows(
         &self,
     ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord>;
+    /// Native anonymous asset escrow ids grouped by seller account.
+    fn anonymous_asset_escrows_by_seller(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
+    /// Native anonymous asset escrow ids grouped by buyer account.
+    fn anonymous_asset_escrows_by_buyer(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
+    /// Native anonymous asset escrow ids grouped by lifecycle status.
+    fn anonymous_asset_escrows_by_status(
+        &self,
+    ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
+    /// Native SoraNet VPN lease escrow records keyed by lease identifier.
+    fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1>;
     /// UAID dataspace bindings managed by the Space Directory.
     fn uaid_dataspaces(&self) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings>;
     /// UAID capability manifests maintained by the Space Directory.
@@ -12146,6 +12944,42 @@ pub trait WorldReadOnly {
     fn proofs(
         &self,
     ) -> &impl StorageReadOnly<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>;
+    /// Inverted proof status index (read-only).
+    fn proofs_by_status(
+        &self,
+    ) -> &impl StorageReadOnly<
+        iroha_data_model::proof::ProofStatus,
+        BTreeSet<iroha_data_model::proof::ProofId>,
+    >;
+    /// Iterate proof records for one backend using the proof id key prefix.
+    fn proofs_by_backend_iter<'a>(
+        &'a self,
+        backend: &'a str,
+    ) -> impl Iterator<
+        Item = (
+            &'a iroha_data_model::proof::ProofId,
+            &'a iroha_data_model::proof::ProofRecord,
+        ),
+    > {
+        self.proofs()
+            .range::<dyn AsProofIdBackendCompare>(ProofByBackendBounds::new(backend))
+    }
+    /// Iterate proof records with one verification status using the status index.
+    fn proofs_by_status_iter<'a>(
+        &'a self,
+        status: &'a iroha_data_model::proof::ProofStatus,
+    ) -> impl Iterator<
+        Item = (
+            &'a iroha_data_model::proof::ProofId,
+            &'a iroha_data_model::proof::ProofRecord,
+        ),
+    > {
+        self.proofs_by_status()
+            .get(status)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|proof_id| self.proofs().get_key_value(proof_id))
+    }
     /// Stored ZK1 TLV tags per proof id (read-only).
     fn proof_tags(&self) -> &impl StorageReadOnly<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>;
     /// Inverted index from TLV tag to proof ids (read-only).
@@ -12445,6 +13279,18 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
+    /// Iterate domains owned by an account.
+    fn domains_owned_by_iter<'a>(
+        &'a self,
+        owner: &'a AccountId,
+    ) -> impl Iterator<Item = &'a Domain> {
+        self.domains_by_owner()
+            .get(owner)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|domain_id| self.domains().get(domain_id))
+    }
+
     /// Collect the account's dataspace -> domain hierarchy from primary label
     /// materialization, Space Directory bindings, and bound aliases.
     ///
@@ -12511,14 +13357,32 @@ pub trait WorldReadOnly {
         }
     }
 
+    /// Convert a fully qualified domain id to the raw account-scope index key.
+    fn account_scope_domain_key(&self, id: &DomainId) -> Option<(DataSpaceId, AccountAliasDomain)> {
+        let dataspace_id = self
+            .dataspace_catalog()
+            .by_alias(id.dataspace().as_ref())?
+            .id;
+        Some((dataspace_id, AccountAliasDomain::new(id.name().clone())))
+    }
+
     /// Iterate accounts in domain.
     #[allow(clippy::type_complexity)]
     fn accounts_in_domain_iter<'a>(
         &'a self,
         id: &'a DomainId,
     ) -> impl Iterator<Item = AccountEntry<'a>> {
-        self.accounts_iter()
-            .filter(move |account| self.account_has_alias_domain(account.id(), id))
+        let account_ids = self
+            .account_scope_domain_key(id)
+            .and_then(|key| self.account_scope_accounts().get(&key));
+        account_ids
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|account_id| {
+                self.accounts()
+                    .get_key_value(account_id)
+                    .map(|(id, value)| AccountEntry::new(id, value))
+            })
     }
 
     /// Returns reference for accounts map
@@ -12559,9 +13423,9 @@ pub trait WorldReadOnly {
 
     /// List account subjects linked to a specific domain.
     fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountId> {
-        self.accounts_in_domain_iter(id)
-            .map(|account| account.id().clone())
-            .collect()
+        self.account_scope_domain_key(id)
+            .and_then(|key| self.account_scope_accounts().get(&key))
+            .map_or_else(Vec::new, |accounts| accounts.iter().cloned().collect())
     }
 
     /// Iterate asset definitions in domain
@@ -12570,6 +13434,18 @@ pub trait WorldReadOnly {
         id: &DomainId,
     ) -> impl Iterator<Item = &'slf AssetDefinition> {
         self.domain_asset_definitions()
+            .get(id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|definition_id| self.asset_definitions().get(definition_id))
+    }
+
+    /// Iterate asset definitions owned by an account.
+    fn asset_definitions_owned_by_iter<'slf>(
+        &'slf self,
+        id: &AccountId,
+    ) -> impl Iterator<Item = &'slf AssetDefinition> {
+        self.asset_definitions_by_owner()
             .get(id)
             .into_iter()
             .flat_map(BTreeSet::iter)
@@ -12690,11 +13566,13 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a DomainId,
     ) -> impl Iterator<Item = AssetEntry<'a>> {
-        let mut assets = Vec::new();
-        for account in self.accounts_in_domain_iter(id) {
-            assets.extend(self.assets_in_account_iter(account.id()));
-        }
-        assets.into_iter()
+        let account_ids = self
+            .accounts_in_domain_iter(id)
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        account_ids.into_iter().flat_map(move |account_id| {
+            self.assets_in_account_iter(&account_id).collect::<Vec<_>>()
+        })
     }
 
     /// Iterate assets matching a specific definition.
@@ -12894,6 +13772,19 @@ pub trait WorldReadOnly {
             .map(|(id, value)| NftEntry::new(id, value))
     }
 
+    /// Iterate NFTs owned by an account.
+    fn nfts_in_account_iter<'a>(&'a self, id: &'a AccountId) -> impl Iterator<Item = NftEntry<'a>> {
+        self.nfts_by_owner()
+            .get(id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|nft_id| {
+                self.nfts()
+                    .get_key_value(nft_id)
+                    .map(|(id, value)| NftEntry::new(id, value))
+            })
+    }
+
     /// Get `Rwa` immutable view.
     ///
     /// # Errors
@@ -12914,9 +13805,24 @@ pub trait WorldReadOnly {
     }
 
     /// Iterate RWAs in domain.
+    #[allow(clippy::type_complexity)]
     fn rwas_in_domain_iter<'a>(&'a self, id: &'a DomainId) -> impl Iterator<Item = RwaEntry<'a>> {
-        self.rwas_iter()
-            .filter(move |entry| entry.id().domain() == id)
+        self.rwas()
+            .range::<dyn AsRwaIdDomainCompare>(RwaByDomainBounds::new(id))
+            .map(|(id, value)| RwaEntry::new(id, value))
+    }
+
+    /// Iterate RWAs owned by an account.
+    fn rwas_in_account_iter<'a>(&'a self, id: &'a AccountId) -> impl Iterator<Item = RwaEntry<'a>> {
+        self.rwas_by_owner()
+            .get(id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|rwa_id| {
+                self.rwas()
+                    .get_key_value(rwa_id)
+                    .map(|(id, value)| RwaEntry::new(id, value))
+            })
     }
 
     // Role-related methods
@@ -12946,6 +13852,9 @@ macro_rules! impl_world_ro {
             }
             fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain> {
                 &self.domains
+            }
+            fn domains_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>> {
+                &self.domains_by_owner
             }
             fn domain_selectors(&self) -> &impl StorageReadOnly<AccountDomainSelector, DomainId> {
                 &self.domain_selectors
@@ -12986,6 +13895,11 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry> {
                 &self.account_scope_directory
+            }
+            fn account_scope_accounts(
+                &self,
+            ) -> &impl StorageReadOnly<(DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>> {
+                &self.account_scope_accounts
             }
             fn opaque_uaids(
                 &self,
@@ -13048,6 +13962,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>> {
                 &self.domain_asset_definitions
             }
+            fn asset_definitions_by_owner(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AssetDefinitionId>> {
+                &self.asset_definitions_by_owner
+            }
             fn asset_definition_holders(
                 &self,
             ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>> {
@@ -13067,8 +13986,14 @@ macro_rules! impl_world_ro {
             fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
                 &self.nfts
             }
+            fn nfts_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<NftId>> {
+                &self.nfts_by_owner
+            }
             fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue> {
                 &self.rwas
+            }
+            fn rwas_by_owner(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<RwaId>> {
+                &self.rwas_by_owner
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -13149,10 +14074,43 @@ macro_rules! impl_world_ro {
             fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord> {
                 &self.asset_escrows
             }
+            fn asset_escrows_by_seller(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
+                &self.asset_escrows_by_seller
+            }
+            fn asset_escrows_by_buyer(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
+                &self.asset_escrows_by_buyer
+            }
+            fn asset_escrows_by_status(
+                &self,
+            ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
+                &self.asset_escrows_by_status
+            }
             fn anonymous_asset_escrows(
                 &self,
             ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord> {
                 &self.anonymous_asset_escrows
+            }
+            fn anonymous_asset_escrows_by_seller(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
+                &self.anonymous_asset_escrows_by_seller
+            }
+            fn anonymous_asset_escrows_by_buyer(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
+                &self.anonymous_asset_escrows_by_buyer
+            }
+            fn anonymous_asset_escrows_by_status(
+                &self,
+            ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
+                &self.anonymous_asset_escrows_by_status
+            }
+            fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1> {
+                &self.vpn_leases
             }
             fn uaid_dataspaces(
                 &self,
@@ -13223,6 +14181,12 @@ macro_rules! impl_world_ro {
                 iroha_data_model::proof::ProofRecord,
             > {
                 &self.proofs
+            }
+            fn proofs_by_status(&self) -> &impl StorageReadOnly<
+                iroha_data_model::proof::ProofStatus,
+                BTreeSet<iroha_data_model::proof::ProofId>,
+            > {
+                &self.proofs_by_status
             }
             fn proof_tags(&self) -> &impl StorageReadOnly<
                 iroha_data_model::proof::ProofId,
@@ -13739,12 +14703,14 @@ impl<'world> WorldBlock<'world> {
             domain_endorsements,
             domain_endorsements_by_domain,
             domains,
+            domains_by_owner,
             domain_selectors,
             accounts,
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
             account_scope_directory,
+            account_scope_accounts,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -13758,12 +14724,15 @@ impl<'world> WorldBlock<'world> {
             contract_aliases,
             contract_alias_bindings,
             domain_asset_definitions,
+            asset_definitions_by_owner,
             asset_definition_holders,
             asset_definition_assets,
             assets,
             asset_metadata,
             nfts,
+            nfts_by_owner,
             rwas,
+            rwas_by_owner,
             roles,
             account_permissions,
             account_roles,
@@ -13782,7 +14751,14 @@ impl<'world> WorldBlock<'world> {
             viral_escrows,
             viral_bonus_paid,
             asset_escrows,
+            asset_escrows_by_seller,
+            asset_escrows_by_buyer,
+            asset_escrows_by_status,
             anonymous_asset_escrows,
+            anonymous_asset_escrows_by_seller,
+            anonymous_asset_escrows_by_buyer,
+            anonymous_asset_escrows_by_status,
+            vpn_leases,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -13799,6 +14775,7 @@ impl<'world> WorldBlock<'world> {
             poseidon_params,
             runtime_upgrades,
             proofs,
+            proofs_by_status,
             proof_tags,
             proofs_by_tag,
             commit_qcs,
@@ -13903,6 +14880,7 @@ impl<'world> WorldBlock<'world> {
         poseidon_params.commit();
         runtime_upgrades.commit();
         proofs.commit();
+        proofs_by_status.commit();
         proof_tags.commit();
         proofs_by_tag.commit();
         commit_qcs.commit();
@@ -14006,7 +14984,14 @@ impl<'world> WorldBlock<'world> {
         viral_bonus_paid.commit();
         viral_escrows.commit();
         asset_escrows.commit();
+        asset_escrows_by_seller.commit();
+        asset_escrows_by_buyer.commit();
+        asset_escrows_by_status.commit();
         anonymous_asset_escrows.commit();
+        anonymous_asset_escrows_by_seller.commit();
+        anonymous_asset_escrows_by_buyer.commit();
+        anonymous_asset_escrows_by_status.commit();
+        vpn_leases.commit();
         viral_binding_claims.commit();
         viral_daily_counters.commit();
         viral_campaign_budget.commit();
@@ -14020,7 +15005,9 @@ impl<'world> WorldBlock<'world> {
         tx_sequences.commit();
         roles.commit();
         rwas.commit();
+        rwas_by_owner.commit();
         nfts.commit();
+        nfts_by_owner.commit();
         assets.commit();
         identifier_claims.commit();
         identifier_policies.commit();
@@ -14035,6 +15022,7 @@ impl<'world> WorldBlock<'world> {
         contract_aliases.commit();
         asset_definition_assets.commit();
         asset_definition_holders.commit();
+        asset_definitions_by_owner.commit();
         domain_asset_definitions.commit();
         asset_definitions.commit();
         accounts.commit();
@@ -14042,8 +15030,10 @@ impl<'world> WorldBlock<'world> {
         account_aliases.commit();
         account_aliases_by_account.commit();
         account_scope_directory.commit();
+        account_scope_accounts.commit();
         opaque_uaids.commit();
         domains.commit();
+        domains_by_owner.commit();
         domain_selectors.commit();
         peers.commit();
         parameters.commit();
@@ -14094,13 +15084,74 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    fn remove_account_scope_accounts_index_entry(&mut self, account_id: &AccountId) {
+        let Some(entry) = self.account_scope_directory.get(account_id).cloned() else {
+            return;
+        };
+        for key in account_scope_index_keys(&entry) {
+            let remove_key = self
+                .account_scope_accounts
+                .get_mut(&key)
+                .is_some_and(|accounts| {
+                    accounts.remove(account_id);
+                    accounts.is_empty()
+                });
+            if remove_key {
+                self.account_scope_accounts.remove(key);
+            }
+        }
+    }
+
+    fn replace_account_scope_accounts_index_entry(
+        &mut self,
+        account_id: &AccountId,
+        previous: Option<&AccountScopeDirectoryEntry>,
+        next: Option<&AccountScopeDirectoryEntry>,
+    ) {
+        let previous_keys = previous.map(account_scope_index_keys).unwrap_or_default();
+        let next_keys = next.map(account_scope_index_keys).unwrap_or_default();
+
+        for key in previous_keys.difference(&next_keys) {
+            let remove_key = self
+                .account_scope_accounts
+                .get_mut(key)
+                .is_some_and(|accounts| {
+                    accounts.remove(account_id);
+                    accounts.is_empty()
+                });
+            if remove_key {
+                self.account_scope_accounts.remove(key.clone());
+            }
+        }
+        for key in next_keys.difference(&previous_keys) {
+            if self.account_scope_accounts.get(key).is_none() {
+                self.account_scope_accounts
+                    .insert(key.clone(), BTreeSet::new());
+            }
+            if let Some(accounts) = self.account_scope_accounts.get_mut(key) {
+                accounts.insert(account_id.clone());
+            }
+        }
+    }
+
     fn refresh_account_scope_directory_entry(&mut self, account_id: &AccountId) {
+        let previous = self.account_scope_directory.get(account_id).cloned();
         match derive_account_scope_directory_entry(self, account_id) {
             Ok(Some(entry)) => {
+                self.replace_account_scope_accounts_index_entry(
+                    account_id,
+                    previous.as_ref(),
+                    Some(&entry),
+                );
                 self.account_scope_directory
                     .insert(account_id.clone(), entry);
             }
             Ok(None) => {
+                self.replace_account_scope_accounts_index_entry(
+                    account_id,
+                    previous.as_ref(),
+                    None,
+                );
                 self.account_scope_directory.remove(account_id.clone());
             }
             Err(error) => {
@@ -14896,12 +15947,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domain_endorsements,
             domain_endorsements_by_domain,
             domains,
+            domains_by_owner,
             domain_selectors,
             accounts,
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
             account_scope_directory,
+            account_scope_accounts,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -14915,12 +15968,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_aliases,
             contract_alias_bindings,
             domain_asset_definitions,
+            asset_definitions_by_owner,
             asset_definition_holders,
             asset_definition_assets,
             assets,
             asset_metadata,
             nfts,
+            nfts_by_owner,
             rwas,
+            rwas_by_owner,
             roles,
             account_permissions,
             account_roles,
@@ -14939,7 +15995,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             viral_escrows,
             viral_bonus_paid,
             asset_escrows,
+            asset_escrows_by_seller,
+            asset_escrows_by_buyer,
+            asset_escrows_by_status,
             anonymous_asset_escrows,
+            anonymous_asset_escrows_by_seller,
+            anonymous_asset_escrows_by_buyer,
+            anonymous_asset_escrows_by_status,
+            vpn_leases,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -14956,6 +16019,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             poseidon_params,
             runtime_upgrades,
             proofs,
+            proofs_by_status,
             proof_tags,
             proofs_by_tag,
             commit_qcs,
@@ -15043,6 +16107,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         poseidon_params.apply();
         runtime_upgrades.apply();
         proofs.apply();
+        proofs_by_status.apply();
         proof_tags.apply();
         proofs_by_tag.apply();
         commit_qcs.apply();
@@ -15140,7 +16205,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         viral_bonus_paid.apply();
         viral_escrows.apply();
         asset_escrows.apply();
+        asset_escrows_by_seller.apply();
+        asset_escrows_by_buyer.apply();
+        asset_escrows_by_status.apply();
         anonymous_asset_escrows.apply();
+        anonymous_asset_escrows_by_seller.apply();
+        anonymous_asset_escrows_by_buyer.apply();
+        anonymous_asset_escrows_by_status.apply();
+        vpn_leases.apply();
         viral_binding_claims.apply();
         viral_daily_counters.apply();
         viral_campaign_budget.apply();
@@ -15153,7 +16225,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_permissions.apply();
         roles.apply();
         rwas.apply();
+        rwas_by_owner.apply();
         nfts.apply();
+        nfts_by_owner.apply();
         identifier_claims.apply();
         identifier_policies.apply();
         ram_lfe_program_policies.apply();
@@ -15168,6 +16242,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         contract_aliases.apply();
         asset_definition_assets.apply();
         asset_definition_holders.apply();
+        asset_definitions_by_owner.apply();
         domain_asset_definitions.apply();
         asset_definitions.apply();
         accounts.apply();
@@ -15175,8 +16250,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_aliases.apply();
         account_aliases_by_account.apply();
         account_scope_directory.apply();
+        account_scope_accounts.apply();
         opaque_uaids.apply();
         domains.apply();
+        domains_by_owner.apply();
         domain_selectors.apply();
         peers.apply();
         parameters.apply();
@@ -15631,6 +16708,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 DataEvent::Domain(data_pre::DomainEvent::Account(
                     data_pre::AccountEvent::Deleted(account_id),
                 )) => {
+                    self.remove_account_scope_accounts_index_entry(account_id);
                     self.account_scope_directory.remove(account_id.clone());
                 }
                 _ => {}
@@ -17260,6 +18338,9 @@ impl State {
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
         let pipeline_cache_size = pipeline.cache_size;
+        let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
+            .and_then(|height| kura.get_block(height))
+            .map(|block| block.header());
         let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
         let tiered_snapshot_worker = TieredSnapshotWorker::new(
             Arc::clone(&tiered_backend),
@@ -17269,6 +18350,7 @@ impl State {
         let mut s = Self {
             world,
             block_hashes: BlockHashes::default(),
+            latest_block_header: parking_lot::RwLock::new(latest_block_header),
             transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
@@ -17876,6 +18958,7 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -18355,6 +19438,7 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -18392,8 +19476,21 @@ impl State {
     /// consensus paths that only need access to parameters/consensus keys.
     #[track_caller]
     pub fn world_view(&self) -> WorldView<'_> {
+        let nexus = self.nexus_snapshot();
+        self.world_view_with_nexus(&nexus)
+    }
+
+    /// Create a point-in-time world view using an already-snapshotted Nexus configuration.
+    ///
+    /// This is intended for hot paths that need both Nexus and world data and should avoid
+    /// cloning Nexus twice just to populate the dataspace alias catalog.
+    #[track_caller]
+    pub(crate) fn world_view_with_nexus(
+        &self,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> WorldView<'_> {
         let mut world = self.world.view();
-        world.dataspace_catalog = self.nexus_snapshot().dataspace_catalog;
+        world.dataspace_catalog = nexus.dataspace_catalog.clone();
         world
     }
 
@@ -18553,15 +19650,23 @@ impl State {
             .and_then(|height| self.block_by_height(height))
     }
 
-    /// Latest committed block header loaded from Kura.
+    /// Latest committed block header from the state cache.
     ///
     /// This avoids acquiring a full [`StateView`] when callers only need the
     /// latest committed header for contextual validation.
     #[track_caller]
     pub fn latest_block_header_fast(&self) -> Option<BlockHeader> {
-        NonZeroUsize::new(self.committed_height())
-            .and_then(|height| self.block_by_height(height))
-            .map(|block| block.header())
+        self.latest_block_header.read().clone()
+    }
+
+    fn update_latest_block_header_cache(&self, header: BlockHeader) {
+        *self.latest_block_header.write() = Some(header);
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Override the latest committed block-header cache in tests.
+    pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
+        self.update_latest_block_header_cache(header);
     }
 
     /// Produce Merkle proofs for an entrypoint hash at the given block height.
@@ -18584,9 +19689,9 @@ impl State {
     #[track_caller]
     pub fn time_triggers_due_for_block_fast(&self, block_header: &BlockHeader) -> bool {
         let to = block_header.creation_time();
-        let since = NonZeroUsize::new(self.committed_height())
-            .and_then(|height| self.block_by_height(height))
-            .map_or(to, |latest_block| latest_block.header().creation_time());
+        let since = self
+            .latest_block_header_fast()
+            .map_or(to, |latest_header| latest_header.creation_time());
         let (since, length) = to.checked_sub(since).map_or_else(
             || {
                 warn!(
@@ -18649,6 +19754,46 @@ impl State {
     #[track_caller]
     pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
         self.transactions.view().get(&hash).is_some()
+    }
+
+    /// Return the transaction admission limits used by ingress validation.
+    ///
+    /// This avoids acquiring a full [`WorldView`] when transaction admission only
+    /// needs current Sumeragi clock drift and transaction limit parameters.
+    #[track_caller]
+    #[must_use]
+    pub fn transaction_admission_limits(
+        &self,
+    ) -> (
+        Duration,
+        iroha_data_model::parameter::system::TransactionParameters,
+    ) {
+        let params = self.world.parameters.view();
+        (params.sumeragi().max_clock_drift(), params.transaction())
+    }
+
+    /// Effective block time from current Sumeragi parameters.
+    ///
+    /// This avoids acquiring a full [`StateView`] when queue pressure bookkeeping
+    /// only needs the current age budget input.
+    #[track_caller]
+    #[must_use]
+    pub fn sumeragi_effective_block_time(&self) -> Duration {
+        self.world
+            .parameters
+            .view()
+            .sumeragi()
+            .effective_block_time()
+    }
+
+    /// Return whether the canonical account exists in current world state.
+    ///
+    /// This avoids constructing a full [`WorldView`] for Torii admission checks
+    /// that only need account membership.
+    #[track_caller]
+    #[must_use]
+    pub fn has_account(&self, account_id: &AccountId) -> bool {
+        self.world.accounts.view().get(account_id).is_some()
     }
 
     /// Committed block height for a transaction hash, if present in the index.
@@ -20275,6 +21420,7 @@ impl State {
                 }
             }
             tx.commit();
+            self.world.rebuild_account_scope_accounts_index();
         }
 
         // Drop AXT policy entries targeting removed dataspaces so runtime policy
@@ -21164,22 +22310,6 @@ fn block_proofs_for_entry_from_kura(
             block_height,
         })?;
 
-    let external_count = block.external_transactions().len();
-    let entry_root = if entry_index < external_count {
-        header
-            .merkle_root()
-            .ok_or(BlockProofError::MerkleProofUnavailable {
-                entry_hash,
-                block_height,
-            })?
-    } else {
-        block
-            .full_entry_merkle_root()
-            .ok_or(BlockProofError::MerkleProofUnavailable {
-                entry_hash,
-                block_height,
-            })?
-    };
     let entry_index_u32: u32 =
         entry_index
             .try_into()
@@ -21188,14 +22318,42 @@ fn block_proofs_for_entry_from_kura(
                 block_height,
             })?;
 
-    let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
-    let entry_receipt_proof =
-        entry_merkle
-            .get_proof(entry_index_u32)
+    let external_count = block.external_entrypoint_count();
+    let (entry_root, entry_receipt_proof) = if entry_index < external_count {
+        let entry_root = header
+            .merkle_root()
             .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
             })?;
+        let external_hashes = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash());
+        let external_merkle: CanonMerkleTree<_> = external_hashes.collect();
+        let proof = external_merkle.get_proof(entry_index_u32).ok_or(
+            BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            },
+        )?;
+        (entry_root, proof)
+    } else {
+        let entry_root =
+            block
+                .full_entry_merkle_root()
+                .ok_or(BlockProofError::MerkleProofUnavailable {
+                    entry_hash,
+                    block_height,
+                })?;
+        let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
+        let proof = entry_merkle.get_proof(entry_index_u32).ok_or(
+            BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            },
+        )?;
+        (entry_root, proof)
+    };
 
     let entry_receipt = BlockReceiptProof::new(entry_hash, entry_receipt_proof);
 
@@ -22065,9 +23223,32 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Drain the accumulated transfer transcripts recorded while executing this block.
+    pub(crate) fn submit_transfer_transcript_digest_batch(
+        &self,
+    ) -> Option<crate::fastpq::PendingTransferTranscriptDigests> {
+        crate::fastpq::try_submit_transfer_transcript_digests_in_map(&self.fastpq_transcripts)
+    }
+
+    /// Drain accumulated transfer transcripts, using a previously submitted digest batch when it
+    /// still matches the transcript map.
+    pub(crate) fn drain_transfer_transcripts_with_pending(
+        &mut self,
+        pending: Option<crate::fastpq::PendingTransferTranscriptDigests>,
+    ) -> BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>> {
+        crate::fastpq::finalize_transfer_transcript_digests_in_map_with_pending(
+            &mut self.fastpq_transcripts,
+            pending,
+        );
+        crate::sumeragi::witness::apply_fastpq_transcript_digests(&self.fastpq_transcripts);
+        mem::take(&mut self.fastpq_transcripts)
+    }
+
+    /// Drain the accumulated transfer transcripts recorded while executing this block.
     pub fn drain_transfer_transcripts(
         &mut self,
     ) -> BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>> {
+        crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut self.fastpq_transcripts);
+        crate::sumeragi::witness::apply_fastpq_transcript_digests(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
 
@@ -22090,6 +23271,8 @@ impl<'state> StateBlock<'state> {
                 .iter()
                 .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
                 .collect();
+            let has_fastpq =
+                !witness.fastpq_transcripts.is_empty() || !witness.fastpq_batches.is_empty();
             let tx_set_hash = if witness.fastpq_transcripts.is_empty()
                 && witness.fastpq_batches.is_empty()
             {
@@ -22117,33 +23300,13 @@ impl<'state> StateBlock<'state> {
                         self.world.roles.iter(),
                     ))
                 };
-            if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
-                let template = crate::fastpq::public_inputs_template_from_block(
+            let public_inputs = perm_root.map(|perm_root| {
+                crate::fastpq::public_inputs_template_from_block(
                     &self._curr_block,
                     &witness,
-                    perm_root.unwrap_or([0u8; 32]),
-                );
-                let tx_set_hash = tx_set_hash.unwrap_or([0u8; 32]);
-                match crate::fastpq::batches_from_bundles(
-                    crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
-                    template,
-                    tx_set_hash,
-                    witness.fastpq_transcripts.iter(),
-                ) {
-                    Ok(batches) => {
-                        witness.fastpq_batches = batches
-                            .iter()
-                            .map(crate::fastpq::transition_batch_to_dto)
-                            .collect();
-                    }
-                    Err(err) => {
-                        iroha_logger::warn!(
-                            ?err,
-                            "failed to build FASTPQ batches for exec witness"
-                        );
-                    }
-                }
-            }
+                    perm_root,
+                )
+            });
             if !entry_dsid_bytes.is_empty()
                 && !witness.fastpq_batches.is_empty()
                 && !witness.fastpq_transcripts.is_empty()
@@ -22168,6 +23331,12 @@ impl<'state> StateBlock<'state> {
                     batch.public_inputs.perm_root = perm_root;
                 }
             }
+            self.fastpq_witness_context =
+                has_fastpq.then_some(crate::fastpq::FastpqWitnessContext {
+                    public_inputs,
+                    tx_set_hash,
+                    entry_dataspaces: entry_dsid_bytes,
+                });
             self.exec_witness = Some(witness);
         } else {
             let _ = crate::sumeragi::witness::drain_exec_witness();
@@ -22177,6 +23346,13 @@ impl<'state> StateBlock<'state> {
     /// Take the captured execution witness, if any, transferring ownership to the caller.
     pub(crate) fn take_exec_witness(&mut self) -> Option<crate::sumeragi::consensus::ExecWitness> {
         self.exec_witness.take()
+    }
+
+    /// Take the local-only FASTPQ witness context, if one was captured.
+    pub(crate) fn take_fastpq_witness_context(
+        &mut self,
+    ) -> Option<crate::fastpq::FastpqWitnessContext> {
+        self.fastpq_witness_context.take()
     }
 
     fn ingest_da_pin_intent_bundle(
@@ -22294,6 +23470,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
             current_tx_hash: None,
+            current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             replay_compatibility: self.replay_compatibility,
@@ -22334,6 +23511,7 @@ impl<'state> StateBlock<'state> {
             confidential_registry_dirty,
             view_lock,
             tiered_backend,
+            _curr_block,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
             ..
@@ -22429,6 +23607,7 @@ impl<'state> StateBlock<'state> {
                 return Err(err);
             }
         }
+        state_ref.update_latest_block_header_cache(_curr_block);
         if confidential_registry_dirty {
             state_ref.confidential_digest_cache.bump();
         }
@@ -22522,11 +23701,40 @@ impl<'state> StateBlock<'state> {
             .height()
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
-        let transactions = block
-            .as_ref()
-            .external_transactions()
-            .map(SignedTransaction::hash)
-            .collect();
+        let signed_block = block.as_ref();
+        let transactions: std::collections::HashSet<_> = if let Some(entrypoints) =
+            signed_block.external_entrypoints_slice()
+        {
+            if entrypoints
+                .iter()
+                .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
+            {
+                entrypoints
+                    .iter()
+                    .map(|entrypoint| {
+                        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(
+                            entrypoint.hash(),
+                        ))
+                    })
+                    .collect()
+            } else {
+                entrypoints
+                    .iter()
+                    .filter_map(|entrypoint| match entrypoint {
+                        TransactionEntrypoint::External(tx) => Some(
+                            crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash,
+                        ),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        } else {
+            signed_block
+                .transactions_vec()
+                .iter()
+                .map(|tx| crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash)
+                .collect()
+        };
         self.transactions.insert_block(transactions, block_height);
 
         if let Some(bundle) = block.as_ref().da_commitments() {
@@ -23377,6 +24585,7 @@ impl<'state> StateBlock<'state> {
     ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
         let nft_seq_base =
             Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
+        let current_block_height = self._curr_block.height().get();
         let mut transaction = self.transaction();
 
         let mut entrypoint = TimeTriggerEntrypoint {
@@ -23409,10 +24618,28 @@ impl<'state> StateBlock<'state> {
             .world
             .triggers
             .set_time_trigger_retry_state(trg_id, None);
-        transaction
+        let registered_in_current_block = transaction
             .world
             .triggers
-            .decrease_repeats([trg_id].into_iter());
+            .time_triggers()
+            .get(trg_id)
+            .and_then(|action| {
+                let key = "__registered_block_height".parse::<Name>().ok()?;
+                action
+                    .metadata()
+                    .get(&key)
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok())
+            })
+            .is_some_and(|height| height == current_block_height);
+        // A trigger body may unregister and re-register the same id, for example
+        // subscription billing scheduling its next charge. The fresh action has
+        // its own repeat budget and must not be consumed by this invocation.
+        if !registered_in_current_block {
+            transaction
+                .world
+                .triggers
+                .decrease_repeats([trg_id].into_iter());
+        }
 
         transaction.apply();
 
@@ -23861,11 +25088,12 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
-        tx.record_transfer_transcript(&ALICE_ID, delta);
+        tx.record_transfer_transcript(&ALICE_ID, delta)
+            .expect("record transcript");
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         let entry = transcripts
@@ -23881,7 +25109,7 @@ mod transfer_transcript_tests {
     }
 
     #[test]
-    fn transfer_transcripts_synthesize_hash_when_missing_call_hash() {
+    fn transfer_transcripts_reject_missing_call_hash() {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), Arc::clone(&kura), query);
@@ -23902,31 +25130,38 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
-        let expected = {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(b"iroha:fastpq:v1:synthetic|");
-            buf.extend_from_slice(&1u64.to_be_bytes());
-            buf.extend_from_slice(&0u64.to_be_bytes());
-            iroha_crypto::Hash::new(buf)
-        };
-        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &expected);
-        tx.record_transfer_transcript(&ALICE_ID, delta);
+        let err = tx
+            .record_transfer_transcript(&ALICE_ID, delta)
+            .expect_err("missing transaction call_hash must fail");
+        assert!(
+            err.to_string().contains("transaction call_hash"),
+            "unexpected error: {err}"
+        );
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
-        assert_eq!(transcripts.len(), 1);
-        let entry = transcripts
-            .get(&expected)
-            .expect("transcripts recorded under synthetic hash");
-        assert_eq!(entry.len(), 1);
-        let transcript = &entry[0];
-        assert_eq!(
-            transcript.authority_digest,
-            crate::fastpq::authority_digest(&ALICE_ID)
+        assert!(transcripts.is_empty());
+    }
+
+    #[test]
+    fn generated_rwa_id_rejects_missing_call_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let domain = DomainId::try_new("wonderland", "universal").unwrap();
+
+        let err = tx
+            .next_generated_rwa_id(&domain, "test")
+            .expect_err("missing transaction call_hash must fail");
+        assert!(
+            err.to_string().contains("transaction call_hash"),
+            "unexpected error: {err}"
         );
-        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
     }
 
     #[test]
@@ -23937,6 +25172,9 @@ mod transfer_transcript_tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+            [1_u8; iroha_crypto::Hash::LENGTH],
+        ));
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -23951,8 +25189,8 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::from(90_u32),
             to_balance_before: Numeric::from(0_u32),
             to_balance_after: Numeric::from(10_u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let delta_b = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
@@ -23963,10 +25201,11 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::from(85_u32),
             to_balance_before: Numeric::from(10_u32),
             to_balance_after: Numeric::from(15_u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
-        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()]);
+        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()])
+            .expect("record batch transcript");
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert_eq!(transcripts.len(), 1);
@@ -24084,8 +25323,8 @@ mod fastpq_tx_set_hash_tests {
             from_balance_after: Numeric::from(90u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(10u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x11; 32]);
         let transcript = TransferTranscript {
@@ -24101,11 +25340,11 @@ mod fastpq_tx_set_hash_tests {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("exec witness");
-        assert_eq!(witness.fastpq_batches.len(), 1);
-        assert_eq!(
-            witness.fastpq_batches[0].public_inputs.tx_set_hash,
-            tx_set_hash
-        );
+        let context = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert!(witness.fastpq_batches.is_empty());
+        assert_eq!(context.tx_set_hash, Some(tx_set_hash));
     }
 
     #[test]
@@ -24130,8 +25369,8 @@ mod fastpq_tx_set_hash_tests {
             from_balance_after: Numeric::from(90u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(10u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x22; 32]);
         let transcript = TransferTranscript {
@@ -24152,10 +25391,13 @@ mod fastpq_tx_set_hash_tests {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("exec witness");
-        assert_eq!(witness.fastpq_batches.len(), 1);
+        let context = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert!(witness.fastpq_batches.is_empty());
         assert_eq!(
-            witness.fastpq_batches[0].public_inputs.dsid,
-            crate::fastpq::dataspace_id_bytes(dsid)
+            context.entry_dataspaces.get(&batch_hash),
+            Some(&crate::fastpq::dataspace_id_bytes(dsid))
         );
     }
 
@@ -24196,8 +25438,8 @@ mod fastpq_tx_set_hash_tests {
             from_balance_after: Numeric::from(90u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(10u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x33; 32]);
         let transcript = TransferTranscript {
@@ -24213,8 +25455,14 @@ mod fastpq_tx_set_hash_tests {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("exec witness");
-        assert_eq!(witness.fastpq_batches.len(), 1);
-        assert_eq!(witness.fastpq_batches[0].public_inputs.perm_root, expected);
+        let context = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert!(witness.fastpq_batches.is_empty());
+        assert_eq!(
+            context.public_inputs.expect("public inputs").perm_root,
+            expected
+        );
     }
 }
 
@@ -24456,6 +25704,71 @@ pub(crate) fn remap_block_signature_indices_to_topology(
     Ok(())
 }
 
+fn ensure_replayed_results_match_committed(
+    height: u64,
+    committed: &SignedBlock,
+    replayed: &SignedBlock,
+) -> Result<()> {
+    if !committed.has_results() {
+        return Err(eyre!(
+            "committed block #{height} does not contain stored execution results"
+        ));
+    }
+    if !replayed.has_results() {
+        return Err(eyre!(
+            "replayed block #{height} did not produce execution results"
+        ));
+    }
+
+    let committed_result_root = committed.header().result_merkle_root();
+    let replayed_result_root = replayed.header().result_merkle_root();
+    if committed_result_root != replayed_result_root {
+        return Err(eyre!(
+            "replayed block #{height} result root mismatch: committed={committed_result_root:?} replayed={replayed_result_root:?}"
+        ));
+    }
+
+    let committed_entry_root = committed.full_entry_merkle_root();
+    let replayed_entry_root = replayed.full_entry_merkle_root();
+    if committed_entry_root != replayed_entry_root {
+        return Err(eyre!(
+            "replayed block #{height} entry root mismatch: committed={committed_entry_root:?} replayed={replayed_entry_root:?}"
+        ));
+    }
+
+    let committed_entry_hashes = committed.entrypoint_hashes().collect::<Vec<_>>();
+    let replayed_entry_hashes = replayed.entrypoint_hashes().collect::<Vec<_>>();
+    if committed_entry_hashes != replayed_entry_hashes {
+        return Err(eyre!(
+            "replayed block #{height} entrypoint sequence mismatch: committed_len={} replayed_len={}",
+            committed_entry_hashes.len(),
+            replayed_entry_hashes.len()
+        ));
+    }
+
+    let committed_result_hashes = committed.result_hashes().collect::<Vec<_>>();
+    let replayed_result_hashes = replayed.result_hashes().collect::<Vec<_>>();
+    if committed_result_hashes != replayed_result_hashes {
+        return Err(eyre!(
+            "replayed block #{height} result hash sequence mismatch: committed_len={} replayed_len={}",
+            committed_result_hashes.len(),
+            replayed_result_hashes.len()
+        ));
+    }
+
+    let committed_results = committed.results().cloned().collect::<Vec<_>>();
+    let replayed_results = replayed.results().cloned().collect::<Vec<_>>();
+    if committed_results != replayed_results {
+        return Err(eyre!(
+            "replayed block #{height} transaction result payload mismatch: committed_len={} replayed_len={}",
+            committed_results.len(),
+            replayed_results.len()
+        ));
+    }
+
+    Ok(())
+}
+
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
 /// Uses the configured consensus mode as a fallback when resolving topology rotation.
@@ -24525,6 +25838,15 @@ pub fn replay_blocks_from_kura_range(
         );
     }
 
+    let mut wsv_checkpoint_seen = if start_height > 1 {
+        let previous_height = u64::try_from(start_height.saturating_sub(1))?;
+        kura.has_wsv_checkpoint_at_or_before(previous_height)
+            .wrap_err_with(|| {
+                format!("failed to scan WSV checkpoints before block #{start_height}")
+            })?
+    } else {
+        false
+    };
     for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
@@ -24537,6 +25859,16 @@ pub fn replay_blocks_from_kura_range(
         let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
+        let wsv_checkpoint = kura
+            .wsv_checkpoint(height)
+            .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?;
+        if wsv_checkpoint.is_some() {
+            wsv_checkpoint_seen = true;
+        } else if wsv_checkpoint_seen {
+            return Err(eyre!(
+                "missing WSV checkpoint for block #{height} after checkpointed history began"
+            ));
+        }
         let (effective_mode, prf_seed) = {
             let view = state.view();
             let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
@@ -24687,7 +26019,27 @@ pub fn replay_blocks_from_kura_range(
                 });
             }
         };
-        let committed_block = valid_block.commit_unchecked().unpack(|_| {});
+        let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
+        let mut committed_block = replayed_committed_block;
+        if let Err(err) =
+            ensure_replayed_results_match_committed(height, &signed_block, committed_block.as_ref())
+        {
+            let legacy_uncheckpointed_history = wsv_checkpoint.is_none() && !wsv_checkpoint_seen;
+            if legacy_uncheckpointed_history {
+                iroha_logger::warn!(
+                    height,
+                    error = %err,
+                    "legacy uncheckpointed block replay produced different execution-result material; preserving committed Kura block hash and continuing"
+                );
+                committed_block = ValidBlock::committed_from_replay_signed_block(signed_block);
+            } else {
+                return Err(err).wrap_err_with(|| {
+                    format!(
+                        "failed to verify replayed block #{height} against committed execution results"
+                    )
+                });
+            }
+        }
         let tx_count = committed_block.as_ref().external_transactions().count();
         let mut rejected = Vec::new();
         for idx in 0..tx_count {
@@ -24729,22 +26081,42 @@ pub fn replay_blocks_from_kura_range(
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
+        if let Some(checkpoint) = wsv_checkpoint {
+            let actual = crate::snapshot::canonical_state_snapshot_hash(state);
+            if actual != checkpoint.state_hash() {
+                return Err(eyre!(
+                    "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
+                    checkpoint.state_hash()
+                ));
+            }
+        }
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod replay_validation_tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use iroha_config::parameters::actual::ConsensusMode;
+    use iroha_crypto::SignatureOf;
     use iroha_data_model::{
-        ChainId,
-        block::SignedBlock,
-        isi::Log,
+        ChainId, ValidationFail,
+        account::{AccountAlias, AccountAliasDomain, AccountId},
+        asset::{AssetDefinition, AssetDefinitionId, AssetId},
+        block::{BlockSignature, SignedBlock},
+        isi::{
+            InstructionBox, Log, Mint, Register, SetKeyValue,
+            domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
+        },
+        name::Name,
+        nexus::{
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            LaneVisibility,
+        },
         peer::PeerId,
         prelude::{Account, Domain, DomainId},
-        transaction::TransactionBuilder,
+        transaction::{TransactionBuilder, error::TransactionRejectionReason},
     };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
@@ -24782,6 +26154,164 @@ mod replay_validation_tests {
             ),
             stake_snapshot: None,
         }
+    }
+
+    fn commit_replay_validated_block_with_options(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+        skip_block_signatures: bool,
+        store_wsv_checkpoint: bool,
+    ) -> SignedBlock {
+        let time_source = TimeSource::new_system();
+        let mut voting_block = None;
+        let (valid_block, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
+            block,
+            topology,
+            chain_id,
+            genesis_account,
+            &time_source,
+            state,
+            &mut voting_block,
+            false,
+            skip_block_signatures,
+            skip_block_signatures,
+        )
+        .unpack(|_| {})
+        .expect("block validates for replay fixture");
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+        let committed_signed = committed.as_ref().clone();
+        state
+            .kura
+            .store_block(Arc::new(committed_signed.clone()))
+            .expect("store committed replay fixture block");
+        let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
+        state_block.commit().expect("commit replay fixture block");
+        if store_wsv_checkpoint {
+            state
+                .kura
+                .store_wsv_checkpoint(
+                    committed_signed.header().height().get(),
+                    committed_signed.hash(),
+                    crate::snapshot::canonical_state_snapshot_hash(state),
+                )
+                .expect("store committed replay fixture WSV checkpoint");
+        }
+        committed_signed
+    }
+
+    fn commit_replay_validated_block_with_signature_mode(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+        skip_block_signatures: bool,
+    ) -> SignedBlock {
+        commit_replay_validated_block_with_options(
+            state,
+            topology,
+            block,
+            chain_id,
+            genesis_account,
+            skip_block_signatures,
+            true,
+        )
+    }
+
+    fn commit_replay_validated_block(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+    ) -> SignedBlock {
+        commit_replay_validated_block_with_signature_mode(
+            state,
+            topology,
+            block,
+            chain_id,
+            genesis_account,
+            false,
+        )
+    }
+
+    fn strip_execution_context_and_resign_for_test(
+        block: &mut SignedBlock,
+        private_key: &iroha_crypto::PrivateKey,
+        signatory_idx: u64,
+    ) {
+        block.set_execution_context(None);
+        let signature = BlockSignature::new(
+            signatory_idx,
+            SignatureOf::from_hash(private_key, block.header().hash()),
+        );
+        block
+            .replace_signatures(BTreeSet::from([signature]))
+            .expect("replace block signatures");
+    }
+
+    fn configure_private_replay_route(
+        state: &mut State,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) {
+        let lane_catalog = LaneCatalog::new(
+            std::num::NonZeroU32::new(4).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: "private-fixture".to_owned(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "private-fixture".to_owned(),
+                description: Some("private replay fixture dataspace".to_owned()),
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog;
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+            nexus.routing_policy.default_lane = lane_id;
+            nexus.routing_policy.default_dataspace = dataspace_id;
+        }
+    }
+
+    fn replay_fixture_state(
+        kura: Arc<Kura>,
+        chain_id: ChainId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> State {
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let world = World::with(
+            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [new_genesis_account(&genesis_id).build(&genesis_id)],
+            [],
+        );
+        let mut state = State::new_with_chain(
+            world,
+            kura,
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        configure_private_replay_route(&mut state, lane_id, dataspace_id);
+        state
     }
 
     #[test]
@@ -24879,7 +26409,54 @@ mod replay_validation_tests {
             .unpack(|_| {});
         let signed_block3: SignedBlock = block3.into();
 
+        let make_world = || {
+            World::with(
+                [
+                    Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                    Domain::new(user_domain_id.clone()).build(&genesis_id),
+                ],
+                [
+                    new_genesis_account(&genesis_id).build(&genesis_id),
+                    Account::new(user_id.clone()).build(&genesis_id),
+                ],
+                [],
+            )
+        };
         let kura = Kura::blank_kura_for_testing();
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+        let genesis_block = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        let signed_block2 = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            signed_block2,
+            &chain_id,
+            &genesis_id,
+        );
+        let signed_block3 = commit_replay_validated_block_with_options(
+            &materialize_state,
+            &topology,
+            signed_block3,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
         kura.store_block(Arc::new(genesis_block))
             .expect("store genesis");
         kura.store_block(Arc::new(signed_block2.clone()))
@@ -24887,19 +26464,8 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(signed_block3.clone()))
             .expect("store block3");
 
-        let world = World::with(
-            [
-                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                Domain::new(user_domain_id.clone()).build(&genesis_id),
-            ],
-            [
-                new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone()).build(&genesis_id),
-            ],
-            [],
-        );
         let mut state = State::new_with_chain(
-            world,
+            make_world(),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
             chain_id,
@@ -24914,6 +26480,29 @@ mod replay_validation_tests {
             .expect("replay first two blocks");
         assert_eq!(state.view().height(), 2);
 
+        let missing_checkpoint = replay_blocks_from_kura_range(
+            &kura,
+            &mut state,
+            &topology,
+            3,
+            3,
+            ConsensusMode::Permissioned,
+        )
+        .expect_err("range replay must reject missing checkpoint after checkpointed history");
+        assert!(
+            missing_checkpoint
+                .to_string()
+                .contains("missing WSV checkpoint"),
+            "{missing_checkpoint:?}"
+        );
+        assert_eq!(state.view().height(), 2);
+
+        kura.store_wsv_checkpoint(
+            3,
+            signed_block3.hash(),
+            crate::snapshot::canonical_state_snapshot_hash(&materialize_state),
+        )
+        .expect("store block3 checkpoint");
         replay_blocks_from_kura_range(
             &kura,
             &mut state,
@@ -24996,24 +26585,14 @@ mod replay_validation_tests {
         let genesis_signed = genesis_block.0.clone();
 
         let kura = Kura::blank_kura_for_testing();
-        let live_query = crate::query::store::LiveQueryStore::start_test();
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let world = World::with(
-            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        );
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), live_query, chain_id.clone());
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-
-        let genesis_arc = Arc::new(genesis_signed.clone());
-        kura.store_block(Arc::clone(&genesis_arc))
-            .expect("store genesis");
+        let make_world = || {
+            World::with(
+                [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+                [new_genesis_account(&genesis_id).build(&genesis_id)],
+                [],
+            )
+        };
 
         let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(
@@ -25040,8 +26619,50 @@ mod replay_validation_tests {
         let signed_block: SignedBlock = new_block.into();
 
         let block_arc = Arc::new(signed_block);
-        kura.store_block(Arc::clone(&block_arc))
+        let mut validation_topology =
+            crate::sumeragi::network_topology::Topology::new(peers.clone());
+        validation_topology.rotate_preserve_view_to_front(leader_index);
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+        let genesis_signed = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_signed,
+            &chain_id,
+            &genesis_id,
+        );
+        let signed_block = commit_replay_validated_block(
+            &materialize_state,
+            &validation_topology,
+            (*block_arc).clone(),
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_signed))
+            .expect("store genesis");
+        kura.store_block(Arc::new(signed_block))
             .expect("store block");
+
+        let mut state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
 
         replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
             .expect("replay should validate prf leader");
@@ -25119,10 +26740,6 @@ mod replay_validation_tests {
             .expect("genesis");
         let genesis_signed = genesis_block.0.clone();
 
-        let genesis_arc = Arc::new(genesis_signed.clone());
-        kura.store_block(Arc::clone(&genesis_arc))
-            .expect("store genesis");
-
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -25140,6 +26757,17 @@ mod replay_validation_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
+        let genesis_signed = commit_replay_validated_block_with_options(
+            &state,
+            &crate::sumeragi::network_topology::Topology::new(roster.clone()),
+            genesis_signed,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
+        kura.store_block(Arc::new(genesis_signed.clone()))
+            .expect("store genesis");
 
         let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(
@@ -25180,8 +26808,16 @@ mod replay_validation_tests {
             .replace_signatures(signature_set)
             .expect("replace signatures");
 
-        let block_arc = Arc::new(signed_block.clone());
-        kura.store_block(Arc::clone(&block_arc))
+        let signed_block = commit_replay_validated_block_with_options(
+            &state,
+            &signature_topology,
+            signed_block,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
+        kura.store_block(Arc::new(signed_block.clone()))
             .expect("store block");
 
         let signatures: Vec<_> = signed_block.signatures().cloned().collect();
@@ -25314,6 +26950,15 @@ mod replay_validation_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
+        let genesis_block = commit_replay_validated_block(
+            &state,
+            &fallback_topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
 
         let height = 2_u64;
         let view = 0_u64;
@@ -25355,8 +27000,14 @@ mod replay_validation_tests {
             .replace_signatures(BTreeSet::from([forged_signature]))
             .expect("replace signatures");
 
-        kura.store_block(Arc::new(genesis_block))
-            .expect("store genesis");
+        let signed_block2 = commit_replay_validated_block_with_signature_mode(
+            &state,
+            &expected_topology,
+            signed_block2,
+            &chain_id,
+            &genesis_id,
+            true,
+        );
         kura.store_block(Arc::new(signed_block2.clone()))
             .expect("store block2");
 
@@ -25395,6 +27046,388 @@ mod replay_validation_tests {
         assert_eq!(
             replay_state.view().latest_block_hash(),
             Some(signed_block2.hash())
+        );
+    }
+
+    #[test]
+    fn replay_rejects_committed_result_mismatch_before_applying_block() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, Hash, KeyPair};
+        use iroha_data_model::transaction::signed::TransactionResultInner;
+
+        let chain_id = ChainId::from("iroha:test:replay-result-mismatch");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
+        let user_id = AccountId::new(user_keypair.public_key().clone());
+        let make_world = || {
+            World::with(
+                [
+                    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                    Domain::new(user_domain_id.clone()).build(&genesis_id),
+                ],
+                [
+                    new_genesis_account(&genesis_id).build(&genesis_id),
+                    Account::new(user_id.clone()).build(&genesis_id),
+                ],
+                [],
+            )
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let genesis_block = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "result mismatch".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut signed_block2: SignedBlock = block2.into();
+        let entry_hashes = signed_block2
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        let bad_result: TransactionResultInner = Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("forced mismatch".to_owned()),
+        ));
+        signed_block2.set_transaction_results(Vec::new(), &entry_hashes, vec![bad_result]);
+        let block2_hash = signed_block2.hash();
+        kura.store_block(Arc::new(signed_block2))
+            .expect("store mismatched block");
+        kura.store_wsv_checkpoint(2, block2_hash, Hash::new(b"not the replayed WSV"))
+            .expect("store mismatched block WSV checkpoint");
+
+        let mut replay_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let result = replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            ConsensusMode::Permissioned,
+        );
+        let err = result.expect_err("result mismatch must stop replay");
+        assert!(
+            format!("{err:?}").contains("result"),
+            "replay error should report the result mismatch: {err:?}"
+        );
+        assert_eq!(
+            replay_state.view().height(),
+            1,
+            "mismatched block must not be committed"
+        );
+    }
+
+    #[test]
+    fn replay_rejects_wsv_checkpoint_mismatch_after_applying_block() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, Hash, KeyPair};
+
+        let chain_id = ChainId::from("iroha:test:replay-wsv-checkpoint-mismatch");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
+        let user_id = AccountId::new(user_keypair.public_key().clone());
+        let make_world = || {
+            World::with(
+                [
+                    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                    Domain::new(user_domain_id.clone()).build(&genesis_id),
+                ],
+                [
+                    new_genesis_account(&genesis_id).build(&genesis_id),
+                    Account::new(user_id.clone()).build(&genesis_id),
+                ],
+                [],
+            )
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let genesis_block = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "checkpoint mismatch".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let signed_block2 = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            block2.into(),
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(signed_block2.clone()))
+            .expect("store block2");
+        kura.store_wsv_checkpoint(
+            2,
+            signed_block2.hash(),
+            Hash::new(b"not the replayed canonical WSV"),
+        )
+        .expect("overwrite block2 WSV checkpoint");
+
+        let mut replay_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let result = replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            ConsensusMode::Permissioned,
+        );
+        let err = result.expect_err("WSV checkpoint mismatch must stop replay");
+        assert!(
+            format!("{err:?}").contains("WSV checkpoint"),
+            "replay error should report the WSV checkpoint mismatch: {err:?}"
+        );
+    }
+
+    #[test]
+    fn replay_legacy_route_sensitive_block_reconstructs_canonical_state() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_primitives::{json::Json, numeric::Numeric};
+
+        let chain_id = ChainId::from("iroha:test:legacy-route-replay");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(10);
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let kura = Kura::blank_kura_for_testing();
+        let original_state =
+            replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
+        {
+            let mut params_block = original_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let genesis_block = commit_replay_validated_block(
+            &original_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
+
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_id = AccountId::new(user_keypair.public_key().clone());
+        let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
+        let primary_alias = AccountAlias::new(
+            "merchant".parse::<Name>().expect("primary alias"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace_id,
+        );
+        let secondary_alias = AccountAlias::new(
+            "cashier".parse::<Name>().expect("secondary alias"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace_id,
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "credit".parse().expect("asset definition name"),
+        );
+        let asset_id = AssetId::of(asset_definition_id.clone(), user_id.clone());
+        let instructions = vec![
+            InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+            InstructionBox::from(Register::account(Account::new(user_id.clone()))),
+            InstructionBox::from(SetPrimaryAccountAlias::bind(
+                user_id.clone(),
+                primary_alias,
+                Some(10_000),
+            )),
+            InstructionBox::from(SetAccountAliasBinding::bind(
+                user_id.clone(),
+                secondary_alias,
+                Some(10_001),
+            )),
+            InstructionBox::from(Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name("credit".to_owned()),
+            )),
+            InstructionBox::from(Mint::asset_numeric(Numeric::from(7_u32), asset_id.clone())),
+            InstructionBox::from(SetKeyValue::account(
+                user_id.clone(),
+                "tier".parse::<Name>().expect("account metadata key"),
+                Json::new("preferred"),
+            )),
+            InstructionBox::from(SetKeyValue::domain(
+                domain_id.clone(),
+                "quota".parse::<Name>().expect("domain metadata key"),
+                Json::new(7_u32),
+            )),
+            InstructionBox::from(SetKeyValue::asset_definition(
+                asset_definition_id,
+                "class".parse::<Name>().expect("asset metadata key"),
+                Json::new("retail"),
+            )),
+        ];
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions::<InstructionBox>(instructions)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let block = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut legacy_block: SignedBlock = block.into();
+        strip_execution_context_and_resign_for_test(&mut legacy_block, leader.private_key(), 0);
+        assert!(
+            legacy_block.execution_context().is_none(),
+            "fixture must exercise the legacy missing-context replay path"
+        );
+        let legacy_block = commit_replay_validated_block(
+            &original_state,
+            &topology,
+            legacy_block,
+            &chain_id,
+            &genesis_id,
+        );
+        assert!(legacy_block.has_results());
+        kura.store_block(Arc::new(legacy_block.clone()))
+            .expect("store legacy block");
+
+        let mut replay_state =
+            replay_fixture_state(Arc::clone(&kura), chain_id, lane_id, dataspace_id);
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay should reconstruct canonical state");
+        assert_eq!(replay_state.view().height(), 2);
+        assert_eq!(
+            replay_state.view().latest_block_hash(),
+            Some(legacy_block.hash())
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state),
         );
     }
 }
@@ -26778,8 +28811,8 @@ impl StateTransaction<'_, '_> {
         &mut self,
         authority: &AccountId,
         delta: TransferDeltaTranscript,
-    ) {
-        self.record_transfer_transcripts(authority, vec![delta]);
+    ) -> Result<(), Error> {
+        self.record_transfer_transcripts(authority, vec![delta])
     }
 
     /// Record a multi-delta transfer transcript so the FASTPQ prover can consume batch witnesses.
@@ -26787,53 +28820,52 @@ impl StateTransaction<'_, '_> {
         &mut self,
         authority: &AccountId,
         mut deltas: Vec<TransferDeltaTranscript>,
-    ) {
+    ) -> Result<(), Error> {
         if deltas.is_empty() {
-            return;
+            return Ok(());
         }
-        let batch_hash = self
-            .tx_call_hash
-            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let batch_hash = self.tx_call_hash.ok_or_else(|| {
+            Error::InvariantViolation(
+                "FastPQ transfer transcript recording requires a transaction call_hash".into(),
+            )
+        })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
-        let poseidon_digest = if deltas.len() > 1 {
-            None
-        } else {
-            Some(crate::fastpq::poseidon_preimage_digest(
-                &deltas[0],
-                &batch_hash,
-            ))
-        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
             authority_digest,
-            poseidon_preimage_digest: poseidon_digest,
+            poseidon_preimage_digest: None,
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
+        Ok(())
     }
 
     /// Generate the next canonical RWA identifier for this transaction scope.
     ///
-    /// The id is derived from the current transaction entrypoint hash when available and
-    /// falls back to a deterministic synthetic batch hash for ad-hoc execution contexts.
-    #[must_use]
-    pub fn next_generated_rwa_id(&mut self, domain: &DomainId, purpose: &str) -> RwaId {
-        let batch_hash = self
-            .tx_call_hash
-            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+    /// The id is derived from the current transaction entrypoint hash.
+    pub fn next_generated_rwa_id(
+        &mut self,
+        domain: &DomainId,
+        purpose: &str,
+    ) -> Result<RwaId, Error> {
+        let call_hash = self.tx_call_hash.ok_or_else(|| {
+            Error::InvariantViolation(
+                "RWA identifier generation requires a transaction call_hash".into(),
+            )
+        })?;
         let ordinal = self.rwa_generated_id_ordinal;
         self.rwa_generated_id_ordinal = self.rwa_generated_id_ordinal.saturating_add(1);
 
         let mut bytes = Vec::with_capacity(
-            b"iroha:rwa:id:v2|".len() + purpose.len() + batch_hash.as_ref().len() + 8,
+            b"iroha:rwa:id:v1|".len() + purpose.len() + call_hash.as_ref().len() + 8,
         );
-        bytes.extend_from_slice(b"iroha:rwa:id:v2|");
+        bytes.extend_from_slice(b"iroha:rwa:id:v1|");
         bytes.extend_from_slice(purpose.as_bytes());
         bytes.push(0xff);
-        bytes.extend_from_slice(batch_hash.as_ref());
+        bytes.extend_from_slice(call_hash.as_ref());
         bytes.extend_from_slice(&ordinal.to_le_bytes());
-        RwaId::generated(domain.clone(), Hash::new(bytes))
+        Ok(RwaId::generated(domain.clone(), Hash::new(bytes)))
     }
 
     /// Record a completed AXT envelope for persistence within the current block.
@@ -27158,7 +29190,7 @@ impl StateTransaction<'_, '_> {
         event: &ExecuteTriggerEvent,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         if self.tx_call_hash.is_none() {
-            self.seed_trigger_batch_hash(event);
+            self.seed_trigger_call_hash(event);
         }
         let (executable, action_authority) = {
             let action = self
@@ -27481,12 +29513,16 @@ impl StateTransaction<'_, '_> {
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let (res, outcome_override) = match executable {
-            ExecutableRef::Instructions(instructions) => (
-                // Route trigger instructions through the executor so custom
-                // validation/fuel policies apply consistently.
-                self.execute_instructions(instructions.clone(), authority),
-                None,
-            ),
+            ExecutableRef::Instructions(instructions) => {
+                let step = ExecutionStep(instructions.clone());
+                self.seed_time_trigger_call_hash(id, authority, &event, &step);
+                (
+                    // Route trigger instructions through the executor so custom
+                    // validation/fuel policies apply consistently.
+                    self.execute_instructions(instructions.clone(), authority),
+                    None,
+                )
+            }
             ExecutableRef::ContractCall(invocation) => {
                 let record = crate::smartcontracts::code::fetch_bound_contract_record(
                     self,
@@ -27607,6 +29643,8 @@ impl StateTransaction<'_, '_> {
                     );
                 }
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let step = ExecutionStep(ConstVec::from(artifacts.queued_instructions()));
+                self.seed_time_trigger_call_hash(id, authority, &event, &step);
                 let queued = artifacts.apply_to_transaction(self, authority)?;
                 let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                 (Ok(cvs.into()), None)
@@ -27740,6 +29778,8 @@ impl StateTransaction<'_, '_> {
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
                     let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                    let step = ExecutionStep(ConstVec::from(artifacts.queued_instructions()));
+                    self.seed_time_trigger_call_hash(id, authority, &event, &step);
                     let queued = artifacts.apply_to_transaction(self, authority)?;
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                     (Ok(cvs.into()), None)
@@ -27920,25 +29960,7 @@ impl StateTransaction<'_, '_> {
             .any(|allowed| allowed.subject_id() == sponsor.subject_id())
     }
 
-    fn ensure_synthetic_batch_hash_with<F>(&mut self, extra: F) -> iroha_crypto::Hash
-    where
-        F: FnOnce(&mut Vec<u8>),
-    {
-        if let Some(hash) = self.tx_call_hash {
-            return hash;
-        }
-        let mut buf = Vec::with_capacity(96);
-        buf.extend_from_slice(b"iroha:fastpq:v1:synthetic|");
-        buf.extend_from_slice(&self._curr_block.height().get().to_be_bytes());
-        let ordinal = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
-        buf.extend_from_slice(&ordinal.to_be_bytes());
-        extra(&mut buf);
-        let hash = iroha_crypto::Hash::new(buf);
-        self.tx_call_hash = Some(hash);
-        hash
-    }
-
-    fn seed_trigger_batch_hash(&mut self, event: &ExecuteTriggerEvent) {
+    fn seed_trigger_call_hash(&mut self, event: &ExecuteTriggerEvent) {
         use norito::codec::Encode as _;
         if self.tx_call_hash.is_some() {
             return;
@@ -27946,11 +29968,33 @@ impl StateTransaction<'_, '_> {
         let trigger_id = event.trigger_id();
         let authority = event.authority();
         let args = event.args();
-        self.ensure_synthetic_batch_hash_with(|buf| {
-            buf.extend_from_slice(&trigger_id.encode());
-            buf.extend_from_slice(&authority.encode());
-            buf.extend_from_slice(&args.encode());
-        });
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"iroha:trigger:call_hash:v1|");
+        buf.extend_from_slice(&self._curr_block.height().get().to_be_bytes());
+        let ordinal = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
+        buf.extend_from_slice(&ordinal.to_be_bytes());
+        buf.extend_from_slice(&trigger_id.encode());
+        buf.extend_from_slice(&authority.encode());
+        buf.extend_from_slice(&args.encode());
+        self.tx_call_hash = Some(iroha_crypto::Hash::new(buf));
+    }
+
+    fn seed_time_trigger_call_hash(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        event: &EventBox,
+        step: &ExecutionStep,
+    ) {
+        if self.tx_call_hash.is_some() || !matches!(event, EventBox::Time(_)) {
+            return;
+        }
+        let entrypoint = TimeTriggerEntrypoint {
+            id: id.clone(),
+            instructions: step.clone(),
+            authority: authority.clone(),
+        };
+        self.tx_call_hash = Some(iroha_crypto::Hash::from(entrypoint.hash_as_entrypoint()));
     }
 }
 
@@ -27958,6 +30002,7 @@ impl StateTransaction<'_, '_> {
 mod range_bounds {
     use core::ops::{Bound, RangeBounds};
 
+    use iroha_data_model::proof::ProofId;
     use iroha_primitives::{cmpext::MinMaxExt, impl_as_dyn_key};
 
     use super::*;
@@ -28069,6 +30114,114 @@ mod range_bounds {
         target: NftId,
         key: NftIdDomainCompare<'_>,
         trait: AsNftIdDomainCompare
+    }
+
+    /// `DomainId` wrapper for fetching RWAs belonging to a domain from the global store.
+    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
+    pub struct RwaIdDomainCompare<'a> {
+        domain_id: &'a DomainId,
+        hash: MinMaxExt<&'a Hash>,
+    }
+
+    /// Bounds for range queries over RWAs by domain.
+    pub struct RwaByDomainBounds<'a> {
+        start: RwaIdDomainCompare<'a>,
+        end: RwaIdDomainCompare<'a>,
+    }
+
+    impl<'a> RwaByDomainBounds<'a> {
+        /// Create range bounds for range queries over RWAs by domain.
+        pub fn new(domain_id: &'a DomainId) -> Self {
+            Self {
+                start: RwaIdDomainCompare {
+                    domain_id,
+                    hash: MinMaxExt::Min,
+                },
+                end: RwaIdDomainCompare {
+                    domain_id,
+                    hash: MinMaxExt::Max,
+                },
+            }
+        }
+    }
+
+    impl<'a> RangeBounds<dyn AsRwaIdDomainCompare + 'a> for RwaByDomainBounds<'a> {
+        fn start_bound(&self) -> Bound<&(dyn AsRwaIdDomainCompare + 'a)> {
+            Bound::Excluded(&self.start)
+        }
+
+        fn end_bound(&self) -> Bound<&(dyn AsRwaIdDomainCompare + 'a)> {
+            Bound::Excluded(&self.end)
+        }
+    }
+
+    impl AsRwaIdDomainCompare for RwaId {
+        fn as_key(&self) -> RwaIdDomainCompare<'_> {
+            RwaIdDomainCompare {
+                domain_id: self.domain(),
+                hash: self.hash().into(),
+            }
+        }
+    }
+
+    impl_as_dyn_key! {
+        target: RwaId,
+        key: RwaIdDomainCompare<'_>,
+        trait: AsRwaIdDomainCompare
+    }
+
+    /// `ProofId` wrapper for fetching proof records belonging to one backend.
+    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
+    pub struct ProofIdBackendCompare<'a> {
+        backend: &'a str,
+        proof_hash: MinMaxExt<&'a [u8; 32]>,
+    }
+
+    /// Bounds for range queries over proofs by backend.
+    pub struct ProofByBackendBounds<'a> {
+        start: ProofIdBackendCompare<'a>,
+        end: ProofIdBackendCompare<'a>,
+    }
+
+    impl<'a> ProofByBackendBounds<'a> {
+        /// Create range bounds for proof queries by backend.
+        pub fn new(backend: &'a str) -> Self {
+            Self {
+                start: ProofIdBackendCompare {
+                    backend,
+                    proof_hash: MinMaxExt::Min,
+                },
+                end: ProofIdBackendCompare {
+                    backend,
+                    proof_hash: MinMaxExt::Max,
+                },
+            }
+        }
+    }
+
+    impl<'a> RangeBounds<dyn AsProofIdBackendCompare + 'a> for ProofByBackendBounds<'a> {
+        fn start_bound(&self) -> Bound<&(dyn AsProofIdBackendCompare + 'a)> {
+            Bound::Excluded(&self.start)
+        }
+
+        fn end_bound(&self) -> Bound<&(dyn AsProofIdBackendCompare + 'a)> {
+            Bound::Excluded(&self.end)
+        }
+    }
+
+    impl AsProofIdBackendCompare for ProofId {
+        fn as_key(&self) -> ProofIdBackendCompare<'_> {
+            ProofIdBackendCompare {
+                backend: self.backend.as_str(),
+                proof_hash: (&self.proof_hash).into(),
+            }
+        }
+    }
+
+    impl_as_dyn_key! {
+        target: ProofId,
+        key: ProofIdBackendCompare<'_>,
+        trait: AsProofIdBackendCompare
     }
 
     /// `AccountId` wrapper for fetching assets beloning to an account from the global store
@@ -28384,6 +30537,20 @@ pub(crate) mod deserialize {
         )
     }
 
+    pub(super) fn validate_ram_lfe_program_policies(
+        policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
+    ) -> Result<(), json::Error> {
+        for (program_id, policy) in policies.view().iter() {
+            crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(
+                |err| json::Error::InvalidField {
+                    field: format!("world.ram_lfe_program_policies.{program_id}"),
+                    message: err.to_string(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     fn take_optional_default_lossy<T>(
         map: &mut json::native::Map,
         key: &str,
@@ -28481,6 +30648,7 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "account_aliases_by_account")?;
         let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
+        validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let account_recovery_policies =
@@ -28626,6 +30794,7 @@ pub(crate) mod deserialize {
         let content_chunks = take_optional_default(&mut map, "content_chunks")?;
         let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
         let anonymous_asset_escrows = take_optional_default(&mut map, "anonymous_asset_escrows")?;
+        let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
         let merge_hint_roots: Cell<Vec<Hash>> =
             take_optional_default(&mut map, "merge_hint_roots")?;
         let merge_global_state_root: Cell<Option<Hash>> =
@@ -28636,12 +30805,14 @@ pub(crate) mod deserialize {
             parameters,
             peers,
             domains,
+            domains_by_owner: Storage::default(),
             domain_selectors: Storage::default(),
             accounts,
             uaid_accounts: Storage::default(),
             account_aliases,
             account_aliases_by_account,
             account_scope_directory,
+            account_scope_accounts: Storage::default(),
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
@@ -28655,12 +30826,15 @@ pub(crate) mod deserialize {
             contract_aliases: Storage::default(),
             contract_alias_bindings,
             domain_asset_definitions: Storage::default(),
+            asset_definitions_by_owner: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
             assets,
             asset_metadata,
             nfts,
+            nfts_by_owner: Storage::default(),
             rwas,
+            rwas_by_owner: Storage::default(),
             roles,
             account_permissions,
             account_roles,
@@ -28679,7 +30853,14 @@ pub(crate) mod deserialize {
             viral_escrows: Storage::default(),
             viral_bonus_paid: Storage::default(),
             asset_escrows,
+            asset_escrows_by_seller: Storage::default(),
+            asset_escrows_by_buyer: Storage::default(),
+            asset_escrows_by_status: Storage::default(),
             anonymous_asset_escrows,
+            anonymous_asset_escrows_by_seller: Storage::default(),
+            anonymous_asset_escrows_by_buyer: Storage::default(),
+            anonymous_asset_escrows_by_status: Storage::default(),
+            vpn_leases,
             uaid_dataspaces: Storage::default(),
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),
@@ -28696,6 +30877,7 @@ pub(crate) mod deserialize {
             poseidon_params,
             runtime_upgrades,
             proofs,
+            proofs_by_status: Storage::default(),
             proof_tags,
             proofs_by_tag,
             commit_qcs,
@@ -28796,6 +30978,7 @@ pub(crate) mod deserialize {
                 field: "domain_selectors".into(),
                 message,
             })?;
+        world.rebuild_domain_owner_index();
         world
             .rebuild_uaid_account_index()
             .map_err(|message| json::Error::InvalidField {
@@ -28833,6 +31016,10 @@ pub(crate) mod deserialize {
                 message,
             })?;
         world.rebuild_asset_definition_indexes();
+        world.rebuild_nft_owner_index();
+        world.rebuild_rwa_owner_index();
+        world.rebuild_escrow_indexes();
+        world.rebuild_proof_status_index();
         world
             .rebuild_opaque_uaid_index()
             .map_err(|message| json::Error::InvalidField {
@@ -28959,9 +31146,13 @@ pub(crate) mod deserialize {
             #[cfg(feature = "telemetry")]
             Some(telemetry_seed.clone()),
         );
+        let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
+            .and_then(|height| kura.get_block(height))
+            .map(|block| block.header());
         let state = State {
             world,
             block_hashes,
+            latest_block_header: parking_lot::RwLock::new(latest_block_header),
             merge_ledger: MergeLedgerStore::with_default_capacity(),
             transactions,
             commit_topology,
@@ -29474,7 +31665,10 @@ mod tests {
     };
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, RamLfeBackend, RamLfeVerificationMode,
+        Signature,
+    };
     use iroha_data_model::account::AccountDetails;
     use iroha_data_model::isi::verifying_keys;
     use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
@@ -29508,18 +31702,21 @@ mod tests {
         name::Name,
         nexus::{
             AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
-            AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
-            AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog,
-            DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
-            LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet,
-            LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion,
-            ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
-            RemoteSpendIntent, SpendOp, TouchManifest,
+            AxtFastpqBinding, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry,
+            AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment, AxtRejectReason,
+            AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+            GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
+            LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
+            LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
+            PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent,
+            SpendOp, TouchManifest,
         },
         peer::PeerId,
         prelude::*,
         proof::{ProofId, ProofRecord, ProofStatus},
-        query::error::FindError,
+        query::{
+            dsl::CompoundPredicate, error::FindError, proof::prelude::FindProofRecordsByStatus,
+        },
         sorafs::pin_registry::ManifestDigest,
         transaction::ExecutionStep,
     };
@@ -29531,8 +31728,124 @@ mod tests {
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    fn axt_test_digest(domain: &[u8], parts: &[&[u8]]) -> Hash {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(domain);
+        for part in parts {
+            payload.extend_from_slice(part);
+        }
+        Hash::new(payload)
+    }
+
+    fn axt_proof_blob_for(
+        dsid: DataSpaceId,
+        manifest_root: [u8; 32],
+        proof_seed: &[u8],
+        expiry_slot: u64,
+    ) -> ProofBlob {
+        let source_tx_commitment = axt_test_digest(b"axt-state-test:source-tx", &[proof_seed]);
+        let claim_digest = axt_test_digest(b"axt-state-test:claim", &[proof_seed]);
+        let witness_commitment = axt_test_digest(b"axt-state-test:witness", &[proof_seed]);
+        let policy_commitment = axt_test_digest(b"axt-state-test:policy", &[&manifest_root]);
+        let binding = AxtFastpqBinding {
+            parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: format!("state-test-dataspace-{}", dsid.as_u64()),
+            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_owned(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "test_effect".to_owned(),
+            corridor: "state-test-corridor".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        };
+        let mut dsid_bytes = [0_u8; 16];
+        dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+        let mut batch = fastpq_prover::TransitionBatch::new(
+            fastpq_prover::AXT_DEFAULT_PARAMETER,
+            fastpq_prover::PublicInputs {
+                dsid: dsid_bytes,
+                slot: expiry_slot,
+                old_root: axt_test_digest(b"axt-state-test:old-root", &[proof_seed]).into(),
+                new_root: manifest_root,
+                perm_root: axt_test_digest(b"axt-state-test:perm-root", &[proof_seed]).into(),
+                tx_set_hash: axt_test_digest(b"axt-state-test:tx-set", &[proof_seed]).into(),
+            },
+        );
+        batch.push(fastpq_prover::StateTransition::new(
+            b"axt/state/proof".to_vec(),
+            proof_seed.to_vec(),
+            manifest_root.to_vec(),
+            fastpq_prover::OperationKind::MetaSet,
+        ));
+        batch.sort();
+        batch.metadata.insert(
+            "entry_hash".to_owned(),
+            source_tx_commitment.as_ref().to_vec(),
+        );
+        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT state test batch");
+        let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+            .expect("FASTPQ prover")
+            .prove(&batch)
+            .expect("FASTPQ proof");
+        let fastpq_payload =
+            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: fastpq_payload,
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        ProofBlob {
+            payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+            expiry_slot: Some(expiry_slot),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_ram_lfe_program_policy_storage() {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let resolver = KeyPair::random();
+        let program_id: RamLfeProgramId = "test_program".parse().expect("program id");
+        let policy = RamLfeProgramPolicy::new(
+            program_id.clone(),
+            owner,
+            RamLfeBackend::HkdfSha3_512PrfV1,
+            RamLfeVerificationMode::Proof,
+            PolicyCommitment {
+                backend: RamLfeBackend::HkdfSha3_512PrfV1,
+                policy_hash: Hash::new(b"policy"),
+                public_parameters: Vec::new(),
+            },
+            resolver.public_key().clone(),
+        );
+        let mut policies = Storage::default();
+        policies.insert(program_id, policy);
+
+        let err = deserialize::validate_ram_lfe_program_policies(&policies)
+            .expect_err("invalid policy must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("world.ram_lfe_program_policies.test_program"),
+            "expected field path in error, got {message}"
+        );
+        assert!(
+            message.contains("cannot use proof verification"),
+            "expected policy validation message, got {message}"
+        );
+    }
 
     fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -30300,6 +32613,7 @@ mod tests {
             )),
             retail_dataspace,
         );
+        let retail_domain = DomainId::try_new("treasury", "retail").expect("retail domain id");
 
         let initial_scopes = stx
             .world
@@ -30313,6 +32627,12 @@ mod tests {
             initial_scopes,
             BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
             "materialized accounts should start in the universal dataspace only",
+        );
+        assert!(
+            stx.world
+                .account_subjects_in_domain(&retail_domain)
+                .is_empty(),
+            "reverse account-scope index should start empty for the retail domain",
         );
 
         stx.world
@@ -30338,6 +32658,11 @@ mod tests {
             ]),
             "alias binds should immediately refresh the account scope directory",
         );
+        assert_eq!(
+            stx.world.account_subjects_in_domain(&retail_domain),
+            vec![account_id.clone()],
+            "alias binds should update the reverse account-scope index",
+        );
 
         stx.world.remove_account_alias_binding(&retail_alias);
         let unbound_scopes = stx
@@ -30353,6 +32678,296 @@ mod tests {
             BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
             "alias unbinds should remove the extra dataspace from the account scope directory",
         );
+        assert!(
+            stx.world
+                .account_subjects_in_domain(&retail_domain)
+                .is_empty(),
+            "alias unbinds should update the reverse account-scope index",
+        );
+    }
+
+    #[test]
+    fn rwas_in_domain_iter_uses_domain_range() {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let alpha_domain = DomainId::try_new("alpha", "universal").expect("alpha domain");
+        let beta_domain = DomainId::try_new("beta", "universal").expect("beta domain");
+        let alpha_first_id = RwaId::generated(alpha_domain.clone(), Hash::new("alpha-1"));
+        let alpha_second_id = RwaId::generated(alpha_domain.clone(), Hash::new("alpha-2"));
+        let beta_id = RwaId::generated(beta_domain, Hash::new("beta-1"));
+
+        let lot = |id: RwaId| {
+            Rwa::new(
+                id,
+                Numeric::new(1, 0),
+                NumericSpec::integer(),
+                "certificate".to_owned(),
+                None,
+                Metadata::default(),
+                Vec::new(),
+                RwaControlPolicy {
+                    controller_accounts: Vec::new(),
+                    controller_roles: Vec::new(),
+                    freeze_enabled: false,
+                    hold_enabled: false,
+                    force_transfer_enabled: false,
+                    redeem_enabled: false,
+                },
+                owner.clone(),
+            )
+            .into_key_value()
+        };
+
+        let mut world = World::default();
+        let (id, value) = lot(alpha_first_id.clone());
+        world.rwas.insert(id, value);
+        let (id, value) = lot(beta_id);
+        world.rwas.insert(id, value);
+        let (id, value) = lot(alpha_second_id.clone());
+        world.rwas.insert(id, value);
+
+        let alpha_ids = world
+            .view()
+            .rwas_in_domain_iter(&alpha_domain)
+            .map(|entry| entry.id().clone())
+            .collect::<Vec<_>>();
+
+        let mut expected = vec![alpha_first_id, alpha_second_id];
+        expected.sort();
+        assert_eq!(
+            alpha_ids, expected,
+            "domain range should only return RWAs in the requested domain",
+        );
+    }
+
+    #[test]
+    fn rwas_in_account_iter_uses_owner_index() {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let other_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let domain = DomainId::try_new("vault", "universal").expect("domain");
+        let owner_first_id = RwaId::generated(domain.clone(), Hash::new("owner-1"));
+        let owner_second_id = RwaId::generated(domain.clone(), Hash::new("owner-2"));
+        let other_id = RwaId::generated(domain, Hash::new("other-1"));
+
+        let lot = |id: RwaId, owner: AccountId| {
+            Rwa::new(
+                id,
+                Numeric::new(1, 0),
+                NumericSpec::integer(),
+                "certificate".to_owned(),
+                None,
+                Metadata::default(),
+                Vec::new(),
+                RwaControlPolicy::default(),
+                owner,
+            )
+            .into_key_value()
+        };
+
+        let mut world = World::default();
+        let (id, value) = lot(owner_first_id.clone(), owner.clone());
+        world.rwas.insert(id, value);
+        let (id, value) = lot(other_id, other_owner);
+        world.rwas.insert(id, value);
+        let (id, value) = lot(owner_second_id.clone(), owner.clone());
+        world.rwas.insert(id, value);
+        world.rebuild_rwa_owner_index();
+
+        let owner_ids = world
+            .view()
+            .rwas_in_account_iter(&owner)
+            .map(|entry| entry.id().clone())
+            .collect::<Vec<_>>();
+
+        let mut expected = vec![owner_first_id, owner_second_id];
+        expected.sort();
+        assert_eq!(
+            owner_ids, expected,
+            "owner index should only return RWA lots owned by the requested account",
+        );
+    }
+
+    #[test]
+    fn proofs_by_backend_iter_uses_backend_range() {
+        let backend = "halo2/ipa";
+        let other_backend = "stark/fri";
+        let first_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x11; 32],
+        };
+        let second_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x22; 32],
+        };
+        let other_id = ProofId {
+            backend: other_backend.into(),
+            proof_hash: [0x33; 32],
+        };
+
+        let record = |id: &ProofId, status: ProofStatus| ProofRecord {
+            id: id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status,
+            verified_at_height: Some(1),
+            bridge: None,
+        };
+
+        let mut world = World::default();
+        world
+            .proofs
+            .insert(first_id.clone(), record(&first_id, ProofStatus::Verified));
+        world
+            .proofs
+            .insert(other_id.clone(), record(&other_id, ProofStatus::Rejected));
+        world
+            .proofs
+            .insert(second_id.clone(), record(&second_id, ProofStatus::Verified));
+        world.rebuild_proof_status_index();
+
+        let proof_ids = world
+            .view()
+            .proofs_by_backend_iter(backend)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            proof_ids,
+            vec![first_id, second_id],
+            "backend range should only return proofs from the requested backend",
+        );
+
+        let verified_ids = world
+            .view()
+            .proofs_by_status_iter(&ProofStatus::Verified)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            verified_ids, proof_ids,
+            "status index should only return proofs with the requested status",
+        );
+    }
+
+    #[test]
+    fn find_proof_records_by_status_uses_status_index_updates() {
+        let backend = "halo2/ipa";
+        let verified_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x11; 32],
+        };
+        let rejected_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x22; 32],
+        };
+        let updated_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x33; 32],
+        };
+
+        let record = |id: &ProofId, status: ProofStatus| ProofRecord {
+            id: id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status,
+            verified_at_height: Some(1),
+            bridge: None,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        stx.world
+            .insert_proof_record(record(&verified_id, ProofStatus::Verified));
+        stx.world
+            .insert_proof_record(record(&rejected_id, ProofStatus::Rejected));
+        stx.world
+            .insert_proof_record(record(&updated_id, ProofStatus::Submitted));
+        stx.world
+            .insert_proof_record(record(&updated_id, ProofStatus::Verified));
+
+        let verified_ids = FindProofRecordsByStatus {
+            status: ProofStatus::Verified,
+        }
+        .execute(CompoundPredicate::PASS, &stx)
+        .expect("query verified proof records")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+        assert_eq!(verified_ids, vec![verified_id, updated_id]);
+
+        let submitted_ids = FindProofRecordsByStatus {
+            status: ProofStatus::Submitted,
+        }
+        .execute(CompoundPredicate::PASS, &stx)
+        .expect("query submitted proof records")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+        assert!(
+            submitted_ids.is_empty(),
+            "replacement should remove stale status-index entries",
+        );
+    }
+
+    #[test]
+    fn proof_status_index_roundtrips_through_state_json() {
+        let backend = "halo2/ipa";
+        let verified_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x11; 32],
+        };
+        let rejected_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x22; 32],
+        };
+
+        let record = |id: &ProofId, status: ProofStatus| ProofRecord {
+            id: id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status,
+            verified_at_height: Some(1),
+            bridge: None,
+        };
+
+        let mut world = World::default();
+        world.proofs.insert(
+            verified_id.clone(),
+            record(&verified_id, ProofStatus::Verified),
+        );
+        world.proofs.insert(
+            rejected_id.clone(),
+            record(&rejected_id, ProofStatus::Rejected),
+        );
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.view();
+
+        let verified_ids = FindProofRecordsByStatus {
+            status: ProofStatus::Verified,
+        }
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query verified proof records")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+
+        assert_eq!(verified_ids, vec![verified_id]);
     }
 
     #[test]
@@ -30726,6 +33341,195 @@ mod tests {
     }
 
     #[test]
+    fn apply_without_execution_indexes_sealed_commitment_entrypoint_hash() {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .sign(keypair.private_key());
+        let salt = [0x57; 32];
+        let reveal_deadline_height = 3;
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                &chain_id,
+                &inner_tx,
+                salt,
+                reveal_deadline_height,
+            );
+        let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+            chain_id,
+            authority,
+            commitment,
+            reveal_after_height: 2,
+            reveal_deadline_height,
+            nonce: None,
+        };
+        let entrypoint = TransactionEntrypoint::SealedCommitment(
+            iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                payload,
+                keypair.private_key(),
+            ),
+        );
+        let entrypoint_hash = entrypoint.hash();
+        let indexed_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash));
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint));
+
+        let new_block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(new_block.header());
+        let valid_block = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("sealed commitment block should commit");
+
+        assert!(state.has_committed_transaction(indexed_hash));
+        assert_eq!(
+            state.committed_transaction_height(&indexed_hash),
+            Some(nonzero!(1_usize))
+        );
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_plain_external_transaction_hashes() {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let tx = TransactionBuilder::new(chain_id, authority.clone())
+            .with_instructions([Log::new(Level::INFO, "external".to_owned())])
+            .sign(keypair.private_key());
+        let tx_hash = tx.hash();
+
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let new_block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(new_block.header());
+        let valid_block = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("plain external block should commit");
+
+        assert!(state.has_committed_transaction(tx_hash));
+        assert_eq!(
+            state.committed_transaction_height(&tx_hash),
+            Some(nonzero!(1_usize))
+        );
+    }
+
+    #[test]
+    fn block_proofs_for_sealed_commitment_use_external_merkle_root() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let chain: ChainId = "block-proof-sealed".parse().expect("chain id");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let tx =
+            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let reveal_deadline_height = 5;
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                &chain,
+                &tx,
+                [0xA5; 32],
+                reveal_deadline_height,
+            );
+        let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+            chain_id: chain,
+            authority: authority.clone(),
+            commitment,
+            reveal_after_height: 2,
+            reveal_deadline_height,
+            nonce: None,
+        };
+        let sealed_entrypoint = TransactionEntrypoint::SealedCommitment(
+            iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                payload,
+                keypair.private_key(),
+            ),
+        );
+        let sealed_hash = sealed_entrypoint.hash();
+        let time_trigger = iroha_data_model::trigger::TimeTriggerEntrypoint {
+            id: "sealed-cleanup".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority,
+        };
+        let time_hash = time_trigger.hash_as_entrypoint();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, Vec::<SignedTransaction>::new());
+        block.set_external_entrypoints(vec![sealed_entrypoint]);
+        block.set_transaction_results(
+            vec![time_trigger],
+            &[sealed_hash, time_hash],
+            vec![
+                TransactionResultInner::Ok(
+                    iroha_data_model::trigger::DataTriggerSequence::default(),
+                ),
+                TransactionResultInner::Ok(
+                    iroha_data_model::trigger::DataTriggerSequence::default(),
+                ),
+            ],
+        );
+        let block_arc = Arc::new(block);
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store block");
+
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(block_arc.hash());
+            hashes.commit();
+        }
+
+        let proofs = state
+            .block_proofs_for_entry(block_arc.header().height(), sealed_hash)
+            .expect("proofs available");
+        let external_root = block_arc.header().merkle_root().expect("external root");
+        assert_ne!(block_arc.full_entry_merkle_root(), Some(external_root));
+        assert_eq!(proofs.entry_root, external_root);
+        assert!(proofs.entry_proof.verify(&external_root));
+        assert_eq!(
+            block_arc.entrypoint_hashes().collect::<Vec<_>>()[1],
+            time_hash
+        );
+    }
+
+    #[test]
     fn prev_block_hash_fast_reads_block_hash_journal() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -30917,6 +33721,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
         let block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, keypair.private_key());
+        let header = block.header();
         let block_hash = block.hash();
         kura.store_block(Arc::new(block))
             .expect("store block in kura");
@@ -30925,6 +33730,7 @@ mod tests {
             block_hashes.push_for_tests(block_hash);
             block_hashes.commit_for_tests();
         }
+        state.update_latest_block_header_cache_for_tests(header);
 
         let latest = state
             .latest_block_header_fast()
@@ -33236,9 +36042,17 @@ mod tests {
         envelope: &LaneRelayEnvelope,
         view: u64,
     ) -> LaneFastpqProofMaterial {
-        let verified_at_height = Some(envelope.block_height.saturating_add(view));
+        let verified_at_height = envelope.block_height.saturating_add(view);
         LaneFastpqProofMaterial {
-            proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
+            proof_digest: Hash::new(
+                format!(
+                    "state-test-fastpq-proof:{}:{}:{}:{verified_at_height}",
+                    envelope.dataspace_id.as_u64(),
+                    envelope.lane_id.as_u32(),
+                    envelope.block_height
+                )
+                .as_bytes(),
+            ),
             verified_at_height,
         }
     }
@@ -33361,7 +36175,7 @@ mod tests {
         let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap);
         envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
             proof_digest: Hash::prehashed([0u8; Hash::LENGTH]),
-            verified_at_height: Some(2),
+            verified_at_height: 2,
         });
 
         let err = state
@@ -38108,10 +40922,7 @@ mod tests {
         };
         let proof_fragment = AxtProofFragment {
             dsid,
-            proof: ProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(5),
-            },
+            proof: axt_proof_blob_for(dsid, manifest_root, b"state-restart", 5),
         };
         let merchant_id = gen_account_in("wonderland").0;
         let handle_fragment = AxtHandleFragment {
@@ -38348,10 +41159,7 @@ mod tests {
         };
         let proof_fragment = AxtProofFragment {
             dsid,
-            proof: ProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(8),
-            },
+            proof: axt_proof_blob_for(dsid, manifest_root, b"state-retention", 8),
         };
         let handle_fragment = AxtHandleFragment {
             handle: AssetHandle {
@@ -39288,10 +42096,7 @@ mod tests {
         };
         let proof_fragment = AxtProofFragment {
             dsid,
-            proof: ProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(5),
-            },
+            proof: axt_proof_blob_for(dsid, manifest_root, b"persisted-block-replay", 5),
         };
         let handle_fragment = AxtHandleFragment {
             handle: AssetHandle {
@@ -40754,6 +43559,21 @@ mod tests {
                 .all(|(_, definitions)| !definitions.contains(&opaque_id)),
             "opaque asset definitions must not create internal domain index entries"
         );
+        let alice_definitions = stx
+            .world
+            .asset_definitions_owned_by_iter(&ALICE_ID)
+            .map(|definition| definition.id().clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            alice_definitions,
+            BTreeSet::from([
+                rose_id.clone(),
+                tulip_id.clone(),
+                cactus_id.clone(),
+                opaque_id.clone()
+            ]),
+            "owner index should include domain-scoped and opaque definitions"
+        );
 
         Unregister::asset_definition(cactus_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -40768,6 +43588,13 @@ mod tests {
         assert!(
             stx.world.domain_asset_definitions.get(&denoland).is_none(),
             "empty domain index entries should be removed"
+        );
+        assert!(
+            !stx.world
+                .asset_definitions_by_owner
+                .get(&ALICE_ID)
+                .is_some_and(|definitions| definitions.contains(&cactus_id)),
+            "unregister should remove the definition from the owner index"
         );
     }
 
@@ -41407,6 +44234,107 @@ mod tests {
         assert_eq!(entrypoint.instructions, expected_step);
         assert_eq!(entrypoint.id, trigger_id);
         assert_eq!(entrypoint.authority, *ALICE_ID);
+
+        Ok(())
+    }
+
+    #[test]
+    fn time_trigger_same_id_reschedule_keeps_new_repeat_budget() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+            h.creation_time_ms = 0;
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let trigger_id: TriggerId = "self_reschedule".parse()?;
+        {
+            let mut stx = state_block.transaction();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+            Register::domain(Domain::new(domain_id))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+
+            let replacement_schedule = Schedule {
+                start_ms: 10_000,
+                period_ms: None,
+            };
+            let replacement_trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter(ExecutionTime::Schedule(replacement_schedule)),
+                ),
+            );
+            let instructions = vec![
+                InstructionBox::from(Unregister::trigger(trigger_id.clone())),
+                InstructionBox::from(Register::trigger(replacement_trigger)),
+            ];
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    instructions,
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter(ExecutionTime::Schedule(Schedule {
+                        start_ms: 0,
+                        period_ms: None,
+                    })),
+                ),
+            );
+            Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
+            stx.apply();
+        }
+        let _ = state_block.apply_without_execution(&block1, Vec::new());
+        state_block.commit()?;
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+            h.creation_time_ms = 2;
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let time_event = state_block.create_time_event(&block2.as_ref().header());
+        let original_action = state_block
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .expect("original trigger should be registered")
+            .clone();
+        let (_entrypoint, result) =
+            state_block.execute_time_trigger(&trigger_id, &original_action, &time_event, 0);
+        assert!(
+            result.is_ok(),
+            "self-rescheduling trigger should execute successfully: {:?}",
+            result
+        );
+
+        let action = state_block
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .expect("replacement trigger should remain registered");
+        assert_eq!(action.repeats, Repeats::Exactly(1));
+        assert_eq!(
+            action
+                .metadata()
+                .get(&"__registered_block_height".parse::<Name>()?)
+                .and_then(|json| json.try_into_any_norito::<u64>().ok()),
+            Some(2)
+        );
+        match action.filter.0 {
+            ExecutionTime::Schedule(schedule) => {
+                assert_eq!(schedule.start_ms, 10_000);
+                assert_eq!(schedule.period_ms, None);
+            }
+            ExecutionTime::PreCommit => panic!("expected replacement schedule"),
+        }
 
         Ok(())
     }

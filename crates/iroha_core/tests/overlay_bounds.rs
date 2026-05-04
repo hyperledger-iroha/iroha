@@ -140,6 +140,7 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
     // Expect first tx rejected with NotPermitted("overlay exceeds max bytes: ...") and second approved
     let block = vb.as_ref();
     let errors = [block.error(0), block.error(1)];
+    let expected_rejection = format!("overlay exceeds max bytes: {big_bytes} > {small_bytes}");
     let overlay_errs = errors
         .iter()
         .filter(|e| {
@@ -149,7 +150,7 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                         iroha_data_model::ValidationFail::NotPermitted(msg)
                     )
-                ) if msg.contains("overlay exceeds max bytes")
+                ) if msg == &expected_rejection
             )
         })
         .count();

@@ -240,7 +240,7 @@ pub struct QcVote {
     pub view: View,
     /// Epoch index for `NPoS`; 0 in permissioned.
     pub epoch: u64,
-    /// Highest known QC for `NewView` votes (advisory; not signed).
+    /// Highest known QC for `NewView` votes, bound into the vote signature.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_qc: Option<QcRef>,
@@ -286,7 +286,7 @@ pub struct Qc {
     pub epoch: u64,
     /// Consensus mode tag used to domain-separate signatures.
     pub mode_tag: String,
-    /// Highest known QC that justifies a `NewView` QC (advisory; not signed).
+    /// Highest known QC that justifies a `NewView` QC, bound into the aggregate signature.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_qc: Option<QcRef>,
@@ -2256,8 +2256,8 @@ pub struct ExecWitnessMsg {
     pub witness: ExecWitness,
 }
 
-/// VRF commit (`NPoS` only).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+/// VRF commit used by the Sumeragi epoch-randomness path.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfCommit {
     /// Epoch index to which the commit applies.
     pub epoch: u64,
@@ -2265,10 +2265,12 @@ pub struct VrfCommit {
     pub commitment: [u8; 32],
     /// Signer index within the validator set.
     pub signer: ValidatorIndex,
+    /// BLS signature over the canonical VRF-commit preimage.
+    pub bls_sig: Vec<u8>,
 }
 
-/// VRF reveal (`NPoS` only).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+/// VRF reveal used by the Sumeragi epoch-randomness path.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfReveal {
     /// Epoch index to which the reveal applies.
     pub epoch: u64,
@@ -2276,6 +2278,8 @@ pub struct VrfReveal {
     pub reveal: [u8; 32],
     /// Signer index within the validator set.
     pub signer: ValidatorIndex,
+    /// BLS signature over the canonical VRF-reveal preimage.
+    pub bls_sig: Vec<u8>,
 }
 
 /// Reconfiguration payload (permissioned governance path).
@@ -2833,6 +2837,7 @@ mod tests {
             epoch: 7,
             commitment: [0xAB; 32],
             signer: 5,
+            bls_sig: Vec::new(),
         }
     }
 
@@ -2841,6 +2846,7 @@ mod tests {
             epoch: 7,
             reveal: [0xCD; 32],
             signer: 5,
+            bls_sig: Vec::new(),
         }
     }
 
@@ -2942,6 +2948,8 @@ mod tests {
         let key_pair = KeyPair::random();
         let payload = crate::transaction::TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            signed_transaction_hash: None,
             submitted_at_ms: 10,
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),

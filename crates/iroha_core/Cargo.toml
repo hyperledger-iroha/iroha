@@ -54,6 +54,8 @@ expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable portable SIMD acceleration for small-set helpers.
 simd = []
 profiling = []
+# Enable FASTPQ GPU helper paths used by the daemon feature of the same name.
+fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 # Compatibility marker for older benchmark commands; Criterion is a dev-dependency.
 bench = []
 # Enable IDs-only query projections
@@ -213,6 +215,11 @@ path = "benches/blocks/validate_blocks_benchmark.rs"
 name = "zk_poseidon"
 harness = false
 required-features = ["zk-halo2", "zk-halo2-ipa", "zk-halo2-ipa-poseidon"]
+
+[[bench]]
+name = "crypto_hotpaths"
+harness = false
+required-features = ["zk-halo2", "zk-halo2-ipa"]
 
 [[bench]]
 name = "isi_gas_calibration"

@@ -212,13 +212,19 @@ pub mod isi {
                 ));
             }
 
-            let asset_definition = state_transaction.world.asset_definition_mut(&object)?;
+            {
+                let asset_definition = state_transaction.world.asset_definition_mut(&object)?;
 
-            if asset_definition.owned_by() != &source {
-                return Err(Error::Find(FindError::Account(source)));
+                if asset_definition.owned_by() != &source {
+                    return Err(Error::Find(FindError::Account(source)));
+                }
+
+                asset_definition.set_owned_by(destination.clone());
             }
+            state_transaction
+                .world
+                .replace_asset_definition_owner_index(&object, &source, &destination);
 
-            asset_definition.set_owned_by(destination.clone());
             state_transaction
                 .world
                 .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
@@ -1208,12 +1214,25 @@ pub mod query {
         matches!(field, "id" | "account" | "account_id")
     }
 
+    fn account_field_is_domain(field: &str) -> bool {
+        matches!(field, "domain" | "id.domain" | "account.domain")
+    }
+
     fn parse_account_id_value(value: &Value) -> Option<AccountId> {
         match value {
             Value::String(raw) => AccountId::parse_encoded(raw)
                 .ok()
                 .map(|parsed| parsed.into_account_id())
                 .or_else(|| raw.parse::<PublicKey>().ok().map(AccountId::new)),
+            _ => None,
+        }
+    }
+
+    fn parse_account_domain_value(value: &Value) -> Option<DomainId> {
+        match value {
+            Value::String(raw) => DomainId::parse_fully_qualified(raw)
+                .ok()
+                .or_else(|| DomainId::try_new(raw, "universal").ok()),
             _ => None,
         }
     }
@@ -1261,6 +1280,56 @@ pub mod query {
         }
 
         candidates.map(Arc::new)
+    }
+
+    fn account_predicate_candidate_domain_ids(
+        world: &impl WorldReadOnly,
+        predicate: &PredicateJson,
+    ) -> Option<Arc<BTreeSet<AccountId>>> {
+        let mut candidates: Option<BTreeSet<AccountId>> = None;
+
+        for cond in &predicate.equals {
+            if !account_field_is_domain(&cond.field) {
+                continue;
+            }
+            let next = parse_account_domain_value(&cond.value)
+                .into_iter()
+                .flat_map(|domain| world.account_subjects_in_domain(&domain))
+                .collect::<BTreeSet<_>>();
+            intersect_account_id_candidates(&mut candidates, next);
+        }
+
+        for cond in &predicate.r#in {
+            if !account_field_is_domain(&cond.field) {
+                continue;
+            }
+            let next = cond
+                .values
+                .iter()
+                .filter_map(parse_account_domain_value)
+                .flat_map(|domain| world.account_subjects_in_domain(&domain))
+                .collect::<BTreeSet<_>>();
+            intersect_account_id_candidates(&mut candidates, next);
+        }
+
+        candidates.map(Arc::new)
+    }
+
+    fn merge_account_candidate_sets(
+        ids: Option<Arc<BTreeSet<AccountId>>>,
+        domains: Option<Arc<BTreeSet<AccountId>>>,
+    ) -> Option<Arc<BTreeSet<AccountId>>> {
+        match (ids, domains) {
+            (Some(ids), Some(domains)) => Some(Arc::new(
+                ids.iter()
+                    .filter(|account_id| domains.contains(*account_id))
+                    .cloned()
+                    .collect(),
+            )),
+            (Some(ids), None) => Some(ids),
+            (None, Some(domains)) => Some(domains),
+            (None, None) => None,
+        }
     }
 
     enum AccountSimpleIdPath {
@@ -1316,51 +1385,87 @@ pub mod query {
                 .all(|field| account_field_is_id(field))
     }
 
-    /// Evaluate JSON predicate fields that can be resolved directly from account id/details
-    /// without building a full `Account` object.
+    enum AccountPredicateMatch {
+        Matched,
+        Mismatched,
+        NeedsJsonFallback(PredicateJson),
+    }
+
+    /// Evaluate account-id, UAID, and domain-alias predicate fields directly.
     ///
-    /// Returns:
-    /// - `Some(true|false)` when all predicate fields were alias-resolved.
-    /// - `None` when at least one field requires full JSON evaluation fallback.
+    /// Fields consumed here are stripped from the JSON fallback so synthetic account-domain
+    /// aliases are not re-evaluated against the plain `Account` JSON shape.
     fn predicate_matches_account_aliases(
+        world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         account_id: &AccountId,
         account_value: &AccountValue,
-    ) -> Option<bool> {
+    ) -> AccountPredicateMatch {
+        let mut remaining = PredicateJson::default();
+
         for cond in &predicate.equals {
-            let Some(alias) = account_alias_value(account_id, account_value, &cond.field) else {
-                return None;
-            };
-            let Some(alias) = alias else {
-                return Some(false);
-            };
-            if !predicate_value_equals_str(&cond.value, &alias) {
-                return Some(false);
+            match account_alias_value(account_id, account_value, &cond.field) {
+                Some(Some(alias)) => {
+                    if !predicate_value_equals_str(&cond.value, &alias) {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
+                Some(None) => return AccountPredicateMatch::Mismatched,
+                None if account_field_is_domain(&cond.field) => {
+                    let Some(domain) = parse_account_domain_value(&cond.value) else {
+                        return AccountPredicateMatch::Mismatched;
+                    };
+                    if !world.account_has_alias_domain(account_id, &domain) {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
+                None => remaining.equals.push(cond.clone()),
             }
         }
 
         for cond in &predicate.r#in {
-            let Some(alias) = account_alias_value(account_id, account_value, &cond.field) else {
-                return None;
-            };
-            let Some(alias) = alias else {
-                return Some(false);
-            };
-            if !predicate_values_contain_str(&cond.values, &alias) {
-                return Some(false);
+            match account_alias_value(account_id, account_value, &cond.field) {
+                Some(Some(alias)) => {
+                    if !predicate_values_contain_str(&cond.values, &alias) {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
+                Some(None) => return AccountPredicateMatch::Mismatched,
+                None if account_field_is_domain(&cond.field) => {
+                    if !cond
+                        .values
+                        .iter()
+                        .filter_map(parse_account_domain_value)
+                        .any(|domain| world.account_has_alias_domain(account_id, &domain))
+                    {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
+                None => remaining.r#in.push(cond.clone()),
             }
         }
 
         for field in &predicate.exists {
-            let Some(alias) = account_alias_value(account_id, account_value, field) else {
-                return None;
-            };
-            if alias.is_none() {
-                return Some(false);
+            match account_alias_value(account_id, account_value, field) {
+                Some(Some(_)) => {}
+                Some(None) => return AccountPredicateMatch::Mismatched,
+                None if account_field_is_domain(field) => {
+                    let Ok(domains) = world.account_domains(account_id) else {
+                        return AccountPredicateMatch::Mismatched;
+                    };
+                    if domains.is_empty() {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
+                None => remaining.exists.push(field.clone()),
             }
         }
 
-        Some(true)
+        if remaining.is_empty() {
+            AccountPredicateMatch::Matched
+        } else {
+            AccountPredicateMatch::NeedsJsonFallback(remaining)
+        }
     }
 
     fn account_matches_filter(
@@ -1370,14 +1475,23 @@ pub mod query {
         account_id: &AccountId,
         account_value: &AccountValue,
     ) -> Option<Account> {
-        if let Some(predicate) = predicate_json
-            && let Some(matches) =
-                predicate_matches_account_aliases(predicate, account_id, account_value)
-        {
-            if !matches {
-                return None;
+        if let Some(predicate) = predicate_json {
+            match predicate_matches_account_aliases(world, predicate, account_id, account_value) {
+                AccountPredicateMatch::Matched => {
+                    return Some(account_from_entry(world, account_id, account_value));
+                }
+                AccountPredicateMatch::Mismatched => return None,
+                AccountPredicateMatch::NeedsJsonFallback(remaining) => {
+                    let account = account_from_entry(world, account_id, account_value);
+                    return remaining
+                        .into_compound::<Account>()
+                        .map_or_else(
+                            |_| filter.applies(&account),
+                            |filter| filter.applies(&account),
+                        )
+                        .then_some(account);
+                }
             }
-            return Some(account_from_entry(world, account_id, account_value));
         }
 
         let account = account_from_entry(world, account_id, account_value);
@@ -1463,9 +1577,14 @@ pub mod query {
                 return Ok(iter);
             }
 
-            let candidate_ids = predicate_json
-                .as_ref()
-                .and_then(account_predicate_candidate_ids);
+            let candidate_ids = merge_account_candidate_sets(
+                predicate_json
+                    .as_ref()
+                    .and_then(account_predicate_candidate_ids),
+                predicate_json
+                    .as_ref()
+                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
+            );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
             if let Some(candidates) = candidate_ids {
@@ -1513,10 +1632,41 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = AccountId>, Error> {
             let world = state_ro.world();
-            Ok(world
-                .accounts_iter()
-                .map(|entry| entry.id().clone())
-                .filter(move |account_id| filter.applies(account_id)))
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            if let Some(path) = predicate_json
+                .as_ref()
+                .and_then(account_predicate_simple_id_path)
+            {
+                let iter: Box<dyn Iterator<Item = AccountId> + '_> = match path {
+                    AccountSimpleIdPath::One(account_id) => Box::new(
+                        world
+                            .accounts()
+                            .get_key_value(&account_id)
+                            .map(|(account_id, _)| account_id.clone())
+                            .into_iter(),
+                    ),
+                    AccountSimpleIdPath::Set(account_ids) => {
+                        let account_ids = account_ids.iter().cloned().collect::<Vec<_>>();
+                        Box::new(account_ids.into_iter().filter_map(move |account_id| {
+                            world
+                                .accounts()
+                                .get_key_value(&account_id)
+                                .map(|(account_id, _)| account_id.clone())
+                        }))
+                    }
+                };
+                return Ok(iter);
+            }
+
+            let iter: Box<dyn Iterator<Item = AccountId> + '_> = Box::new(
+                world
+                    .accounts_iter()
+                    .map(|entry| entry.id().clone())
+                    .filter(move |account_id| filter.applies(account_id)),
+            );
+            Ok(iter)
         }
     }
 
@@ -1607,9 +1757,14 @@ pub mod query {
                 return Ok(iter);
             }
 
-            let candidate_ids = predicate_json
-                .as_ref()
-                .and_then(account_predicate_candidate_ids);
+            let candidate_ids = merge_account_candidate_sets(
+                predicate_json
+                    .as_ref()
+                    .and_then(account_predicate_candidate_ids),
+                predicate_json
+                    .as_ref()
+                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
+            );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
             let subjects = match (
@@ -1893,6 +2048,16 @@ pub mod query {
         fn root_alias(label: &str) -> AccountAlias {
             AccountAlias::domainless(
                 label.parse().expect("account alias label"),
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            )
+        }
+
+        fn alias_in_domain(label: &str, domain_id: &DomainId) -> AccountAlias {
+            AccountAlias::new(
+                label.parse().expect("account alias label"),
+                Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                    domain_id.name().clone(),
+                )),
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             )
         }
@@ -2475,6 +2640,125 @@ pub mod query {
         }
 
         #[test]
+        fn find_accounts_filters_by_domain_with_scope_index() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").unwrap();
+            Register::domain(Domain::new(wonderland_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(oasis_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("oasis");
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc1,
+                &alias_in_domain("hatter", &wonderland_id),
+            );
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc2,
+                &alias_in_domain("merchant", &oasis_id),
+            );
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.equals("domain", wonderland_id.to_string())
+            });
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_applies_mixed_domain_and_metadata_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").unwrap();
+            Register::domain(Domain::new(wonderland_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(oasis_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            let (acc3, _kp3) = gen_account_in("oasis");
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc1,
+                &alias_in_domain("hatter", &wonderland_id),
+            );
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc2,
+                &alias_in_domain("merchant", &wonderland_id),
+            );
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc3,
+                &alias_in_domain("caravan", &oasis_id),
+            );
+
+            let tier_key: Name = "tier".parse().unwrap();
+            SetKeyValue::account(acc1.clone(), tier_key.clone(), Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc2.clone(), tier_key.clone(), Json::from("silver"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc3, tier_key, Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.equals("id.domain", wonderland_id.to_string())
+                    .equals("metadata.tier", "gold")
+            });
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
         fn find_accounts_applies_mixed_id_and_metadata_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -2520,6 +2804,45 @@ pub mod query {
                 .map(|account| account.id)
                 .collect();
             assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_account_ids_uses_direct_id_lookup_for_id_predicates() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            let (acc3, _kp3) = gen_account_in("wonderland");
+            for account_id in [&acc1, &acc2, &acc3] {
+                Register::account(Account::new(account_id.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+            }
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<AccountId>::build(|p| {
+                p.in_values("id", [acc1.to_string(), acc3.to_string()])
+            });
+            let mut results: Vec<_> = FindAccountIds.execute(predicate, &view).unwrap().collect();
+            results.sort();
+
+            let mut expected = vec![acc1, acc3];
+            expected.sort();
+            assert_eq!(results, expected);
         }
 
         #[test]
@@ -2583,6 +2906,74 @@ pub mod query {
                 .unwrap()
                 .map(|account| account.id)
                 .collect();
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_with_asset_filters_by_domain_with_scope_index() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").unwrap();
+            Register::domain(Domain::new(wonderland_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(oasis_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("oasis");
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc1,
+                &alias_in_domain("hatter", &wonderland_id),
+            );
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc2,
+                &alias_in_domain("merchant", &oasis_id),
+            );
+
+            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                wonderland_id.clone(),
+                "test_coin".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = ad.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.equals("domain", wonderland_id.to_string())
+            });
+            let results: Vec<_> = FindAccountsWithAsset::new(ad)
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+
             assert_eq!(results, vec![acc1]);
         }
 
@@ -3063,6 +3454,8 @@ pub mod query {
                 .asset_definition_mut(&asset_definition)
                 .unwrap()
                 .set_owned_by(source.clone());
+            stx.world
+                .replace_asset_definition_owner_index(&asset_definition, &ALICE_ID, &source);
 
             let err = Transfer::asset_definition(
                 source.clone(),
@@ -3128,6 +3521,8 @@ pub mod query {
                 .asset_definition_mut(&asset_definition)
                 .unwrap()
                 .set_owned_by(source.clone());
+            stx.world
+                .replace_asset_definition_owner_index(&asset_definition, &ALICE_ID, &source);
 
             Transfer::asset_definition(
                 source.clone(),
@@ -3142,6 +3537,13 @@ pub mod query {
                     .unwrap()
                     .owned_by(),
                 &destination
+            );
+            assert!(
+                stx.world
+                    .asset_definitions_by_owner
+                    .get(&destination)
+                    .is_some_and(|definitions| definitions.contains(&asset_definition)),
+                "successful transfer should update the owner index",
             );
         }
     }

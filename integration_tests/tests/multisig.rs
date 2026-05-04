@@ -4,6 +4,7 @@
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -403,13 +404,14 @@ fn wait_for_authority_multisig_approvals(
 }
 
 fn run_multisig_list_all_cli(
+    cli_program: &Path,
     client: &Client,
     account_domain: &DomainId,
     key_pair: &KeyPair,
     extra_args: &[&str],
 ) -> Result<std::process::Output> {
     let cli_dir = tempfile::tempdir().wrap_err("create CLI working directory")?;
-    let mut command = std::process::Command::new(iroha_program()?);
+    let mut command = std::process::Command::new(cli_program);
     command
         .current_dir(cli_dir.path())
         .envs(cli_envs_for_signatory(client, account_domain, key_pair));
@@ -648,6 +650,8 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
 #[test]
 fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     let context = stringify!(multisig_cli_list_all_resolves_hashed_role_suffixes);
+    let cli_program =
+        iroha_program().wrap_err("resolve `iroha` CLI before creating expiring proposals")?;
     let builder = NetworkBuilder::new().with_min_peers(4);
     let Some((network, _rt)) = start_network(builder, context) else {
         return Ok(());
@@ -744,6 +748,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
             .wrap_err("wait for authority-scoped approvals before invoking CLI")?;
 
     let json_output = run_multisig_list_all_cli(
+        &cli_program,
         &proposer_client,
         &domain,
         &proposer.1,
@@ -807,6 +812,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     );
 
     let text_output = run_multisig_list_all_cli(
+        &cli_program,
         &proposer_client,
         &domain,
         &proposer.1,
@@ -842,6 +848,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     )));
 
     let paged_output = run_multisig_list_all_cli(
+        &cli_program,
         &proposer_client,
         &domain,
         &proposer.1,

@@ -111,7 +111,7 @@ Publish` run (roadmap reference: `roadmap.md:2209`).
 مسارات Torii الحالية:| الطريق | الغرض |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | يسرد سياسات برنامج RAM-LFE النشطة وغير النشطة بالإضافة إلى بيانات تعريف التنفيذ العامة الخاصة بها، بما في ذلك معلمات BFV `input_encryption` الاختيارية والواجهة الخلفية المبرمجة `ram_fhe_profile`. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | يقبل بالضبط واحدًا من `{ input_hex }` أو `{ encrypted_input }` ويعيد `RamLfeExecutionReceipt` بالإضافة إلى `{ output_hex, output_hash, receipt_hash }` للبرنامج المحدد. يُصدر وقت التشغيل Torii الحالي إيصالات للواجهة الخلفية BFV المبرمجة. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | يقبل بالضبط واحدًا من `{ input_hex }` أو `{ encrypted_input }` ويعيد `RamLfeExecutionReceipt` بالإضافة إلى `{ output_hash, receipt_hash }` للبرنامج المحدد. لا يعيد Torii مخرجات RAM-LFE ذات النص الصريح. يُصدر وقت التشغيل Torii الحالي إيصالات للواجهة الخلفية BFV المبرمجة. |
 | `POST /v1/ram-lfe/receipts/verify` | يتحقق بدون حالة من صحة `RamLfeExecutionReceipt` مقابل سياسة البرنامج المنشورة على السلسلة ويتحقق بشكل اختياري من أن `output_hex` المقدم من المتصل يطابق الإيصال `output_hash`. |
 | `GET /v1/identifier-policies` | يسرد مساحات أسماء سياسة الوظائف المخفية النشطة وغير النشطة بالإضافة إلى بيانات التعريف العامة الخاصة بها، بما في ذلك معلمات BFV `input_encryption` الاختيارية، ووضع `normalization` المطلوب للإدخال المشفر من جانب العميل، و`ram_fhe_profile` لسياسات BFV المبرمجة. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | يقبل بالضبط واحدًا من `{ input }` أو `{ encrypted_input }`. يتم تسوية النص العادي `input` من جانب الخادم؛ يجب أن تتم تسوية BFV `encrypted_input` بالفعل وفقًا لوضع السياسة المنشور. تقوم نقطة النهاية بعد ذلك باشتقاق المقبض `opaque:` وإرجاع إيصال موقع يمكن لـ `ClaimIdentifier` إرساله على السلسلة، بما في ذلك كل من `signature_payload_hex` الخام و`signature_payload`. || `POST /v1/identifiers/resolve` | يقبل بالضبط واحدًا من `{ input }` أو `{ encrypted_input }`. يتم تسوية النص العادي `input` من جانب الخادم؛ يجب أن تتم تسوية BFV `encrypted_input` بالفعل وفقًا لوضع السياسة المنشور. تقوم نقطة النهاية بتحليل المعرف إلى `{ opaque_id, receipt_hash, uaid, account_id, signature }` عند وجود مطالبة نشطة، وتقوم أيضًا بإرجاع الحمولة الموقعة الأساسية كـ `{ signature_payload_hex, signature_payload }`. |
@@ -227,8 +227,9 @@ Publish` run (roadmap reference: `roadmap.md:2209`).
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```قم دائمًا بتخزين الحرف الحرفي بأحرف صغيرة وقم بتطبيع المسافة البيضاء قبل التجزئة.
 مساعدي CLI مثل `iroha app space-directory manifest scaffold` وAndroid
 يطبق المحلل اللغوي `UaidLiteral` نفس قواعد التشذيب حتى تتمكن مراجعات الإدارة من ذلك

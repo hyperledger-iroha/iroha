@@ -2,6 +2,9 @@
 
 use norito::columnar::*;
 
+type StrRow<'a> = (u64, &'a str, u32, bool);
+type BytesRow<'a> = (u64, &'a [u8], u32, bool);
+
 fn pad_to(buf: &mut Vec<u8>, align: usize) {
     let mis = buf.len() & (align - 1);
     if mis != 0 {
@@ -22,7 +25,7 @@ fn write_var_u64(buf: &mut Vec<u8>, mut value: u64) {
     buf.push(value as u8);
 }
 
-fn encode_str_u32_delta(rows: &[(u64, &str, u32, bool)]) -> Vec<u8> {
+fn encode_str_u32_delta(rows: &[StrRow<'_>]) -> Vec<u8> {
     const DESC: u8 = 0x37;
     let n = rows.len();
     let mut buf = Vec::new();
@@ -68,7 +71,7 @@ fn encode_str_u32_delta(rows: &[(u64, &str, u32, bool)]) -> Vec<u8> {
     buf
 }
 
-fn encode_bytes_u32_delta(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u8> {
+fn encode_bytes_u32_delta(rows: &[BytesRow<'_>]) -> Vec<u8> {
     const DESC: u8 = 0x38;
     let n = rows.len();
     let mut buf = Vec::new();
@@ -116,7 +119,7 @@ fn encode_bytes_u32_delta(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u8> {
 
 #[test]
 fn str_u32_delta_roundtrip() {
-    let cases: Vec<Vec<(u64, &str, u32, bool)>> = vec![
+    let cases: Vec<Vec<StrRow<'_>>> = vec![
         Vec::new(),
         vec![(7, "", 0, false)],
         vec![
@@ -146,7 +149,7 @@ fn bytes_u32_delta_roundtrip() {
     let empty: &[u8] = &[];
     let short: &[u8] = &[0, 1, 2];
     let maxish: &[u8] = &[255, 254, 253, 252];
-    let cases: Vec<Vec<(u64, &[u8], u32, bool)>> = vec![
+    let cases: Vec<Vec<BytesRow<'_>>> = vec![
         Vec::new(),
         vec![(13, empty, 0, false)],
         vec![

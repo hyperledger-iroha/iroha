@@ -171,12 +171,8 @@ IVM/Crypto በሚቀጥለው የአሲል መጥረግ እነዚህን ሁለ�
 
 | መስክ | ነባሪ | ዓላማ |
 |-------|---------|-----|
-| `min_compress_bytes_cpu` | `256` ባይት | ከዚህ በታች፣ ከአቅም በላይ ጫናዎች ለማስቀረት zstdን ሙሉ በሙሉ ይዘላሉ። |
-| `min_compress_bytes_gpu` | `1_048_576` ባይት (1ሚቢ) | `norito::core::hw::has_gpu_compression()` እውነት ሲሆን በዚህ ገደብ ወይም ከዚያ በላይ የሚጫኑ ጭነቶች ወደ ጂፒዩ zstd ይቀየራሉ። |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | የሲፒዩ መጭመቂያ ደረጃዎች ለ<32KiB እና ≥32KiB እንደቅደም ተከተላቸው። |
-| `zstd_level_gpu` | `1` | የትዕዛዝ ወረፋዎችን በሚሞሉበት ጊዜ ዘግይቶ እንዲቆይ ለማድረግ ወግ አጥባቂ የጂፒዩ ደረጃ። |
-| `large_threshold` | `32_768` ባይት | በ"ትንሽ" እና "ትልቅ" ሲፒዩ zstd ደረጃዎች መካከል ያለው የመጠን ወሰን። |
-| `aos_ncb_small_n` | `64` ረድፎች | ከዚህ የረድፍ ቆጠራ በታች የሚለምደዉ ኢንኮደሮች ሁለቱንም የAoS እና የኤንሲቢ አቀማመጦችን ይመረምራሉ ትንሹን ክፍያ ለመምረጥ። |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` ረድፎች | 1-2 ረድፎች ባዶ ህዋሶችን ሲይዙ u32/id delta ኢንኮዲንግ ማንቃትን ይከለክላል። |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | ዴልታዎች ቢያንስ ሁለት ረድፎች ካሉ አንድ ጊዜ ብቻ ነው የሚገቡት። |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | ሁሉም የዴልታ ትራንስፎርሜሽን በነባሪነት ጥሩ ባህሪ ላላቸው ግብዓቶች ነቅተዋል። |
@@ -189,7 +185,7 @@ IVM/Crypto በሚቀጥለው የአሲል መጥረግ እነዚህን ሁለ�
 የሽቦ ቅርጸቱን የሚቀይር ውሳኔ በጭራሽ አያደርግም, እና ጣራዎቹ ተስተካክለዋል
 በአንድ ልቀት. ፕሮፌሽናል ማድረግ የተሻሉ የመለያየት ነጥቦችን ሲያገኝ፣ Norito ያዘምናል
 ቀኖናዊ `Heuristics::canonical` ትግበራ እና `docs/source/benchmarks.md` plus
-`status.md` ለውጡን ከተቀየረው ማስረጃ ጋር ይመዘግባል።የጂፒዩ zstd አጋዥ በተመሳሳይ `min_compress_bytes_gpu` መቆራረጥን ያስፈጽማል
+`status.md` ለውጡን ከተቀየረው ማስረጃ ጋር ይመዘግባል።የጂፒዩ zstd አጋዥ በተመሳሳይ compiled GPU cutoff መቆራረጥን ያስፈጽማል
 በቀጥታ ተጠርቷል (ለምሳሌ በ `norito::core::gpu_zstd::encode_all`) ፣ በጣም ትንሽ
 የጂፒዩ መገኘት ምንም ይሁን ምን የክፍያ ጭነቶች ሁል ጊዜ በሲፒዩ መንገድ ላይ ይቆያሉ።
 

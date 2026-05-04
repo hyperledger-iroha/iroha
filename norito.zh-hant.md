@@ -26,7 +26,7 @@ Norito 標頭始終存在於線路和磁盤上。它構建有效負載
 |魔法| 4 | ASCII `NRT0` |
 |專業| 1 | `VERSION_MAJOR = 0` |
 |次要| 1 | `VERSION_MINOR = 0x00` |
-|架構哈希 | 16 | 16 FNV-1a 完全限定類型名稱的哈希值 (v1) |
+|架構哈希 | 16 | First 16 bytes of a domain-separated SHA-256 schema digest |
 |壓縮| 1 | `0 = None`、`1 = Zstd` |
 |有效負載長度| 8 |未壓縮的有效負載長度（u64，小端）|
 | CRC64 | 8 |有效負載上的 CRC64-XZ（ECMA 多項式、反射、初始化/異或所有）|
@@ -174,13 +174,12 @@ NCB 有效負載是精確且規範的：
 
 ## 架構哈希詳細信息
 
-16 字節模式哈希計算如下：
+The 16-byte schema hash is computed as the first 16 bytes of SHA-256 over a domain prefix followed by canonical schema bytes:
 
-- 默認值：FNV-1a 完全限定類型名稱的 64 位哈希（Rust
-  `core::any::type_name::<T>()`)，複製以填充 16 個字節。
-- 使用 `schema-structural`: 生成的規範 JSON 模式
-  `iroha_schema::IntoSchema`，使用 Norito 的 JSON writer 進行序列化並進行哈希處理
-  具有相同的 FNV-1a 例程。
+- Default: `SHA-256("norito:v1:type-name\0" || fully-qualified type name)`.
+  Rust uses `core::any::type_name::<T>()` for the type-name bytes.
+- With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" || canonical JSON schema)`, where the schema is produced by
+  `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
 
 類型化解碼器必須拒絕其標頭架構哈希與
 預期類型。 `ArchiveView::decode` 強制執行此檢查； `decode_unchecked`

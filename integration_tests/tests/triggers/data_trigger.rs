@@ -23,6 +23,8 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::task::spawn_blocking;
 
+const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
 }
@@ -66,8 +68,8 @@ fn test_account_alias_register_request(
         pricing_class_hint: None,
         payment: PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: 120,
-            net_amount: 120,
+            gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+            net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
             settlement_tx: Json::from("mock-settlement"),
             payer: owner.clone(),
             signature: Json::from("mock-signature"),

@@ -3654,6 +3654,10 @@ mod tests {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            signed_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0xB6; 32],
+            ))),
             submitted_at_ms: 42,
             submitted_at_height: 7,
             signer: key_pair.public_key().clone(),

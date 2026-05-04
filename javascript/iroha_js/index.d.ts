@@ -1574,6 +1574,47 @@ export interface ToriiVpnProfile {
   tunnelAddresses: ReadonlyArray<string>;
   mtuBytes: number;
   displayBillingLabel: string;
+  feeAssetId: string;
+  escrowAccountId: string;
+  operatorAccountId: string;
+  leaseFeeNanos: number;
+  settlementGraceSecs: number;
+  flowLabelBits: number;
+  paddingBudgetMs: number;
+  relayTlsSpkiSha256Hex: string | null;
+}
+
+export interface ToriiVpnTxInstruction {
+  wireId: string;
+  payloadHex: string;
+}
+
+export interface ToriiVpnQuote {
+  quoteId: string;
+  leaseIdHex: string;
+  sessionIdHex: string;
+  paymentReference: string;
+  accountId: string;
+  exitClass: string;
+  relayEndpoint: string;
+  leaseSecs: number;
+  quoteExpiresAtMs: number;
+  feeAssetId: string;
+  escrowAccountId: string;
+  operatorAccountId: string;
+  leaseFeeNanos: number;
+  routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
+  dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
+  meterFamily: string;
+  flowLabelBits: number;
+  paddingBudgetMs: number;
+  relayTlsSpkiSha256Hex: string | null;
+  meteringPublicKeyHex: string;
+  openLeaseInstruction: ToriiVpnTxInstruction | null;
+  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
 }
 
 export interface ToriiVpnSession {
@@ -1585,6 +1626,16 @@ export interface ToriiVpnSession {
   expiresAtMs: number;
   connectedAtMs: number;
   meterFamily: string;
+  quoteId: string;
+  paymentReference: string;
+  paymentTxHash: string;
+  feeAssetId: string;
+  escrowAccountId: string;
+  operatorAccountId: string;
+  leaseFeeNanos: number;
+  flowLabelBits: number;
+  paddingBudgetMs: number;
+  relayTlsSpkiSha256Hex: string | null;
   routePushes: ReadonlyArray<string>;
   excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
@@ -1609,6 +1660,17 @@ export interface ToriiVpnReceipt {
   bytesOut: number;
   status: string;
   receiptSource: string;
+  quoteId: string;
+  paymentTxHash: string;
+  feeAssetId: string;
+  escrowAccountId: string;
+  operatorAccountId: string;
+  leaseFeeNanos: number;
+  earnedFeeNanos: number;
+  refundedFeeNanos: number;
+  leaseIdHex: string;
+  settleLeaseInstruction: ToriiVpnTxInstruction | null;
+  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
 }
 
 export type SnsNameStatus =
@@ -7283,9 +7345,24 @@ export declare class ToriiClient {
     },
   ): Promise<ToriiExplorerAccountQrSnapshot>;
   getVpnProfile(options?: { signal?: AbortSignal }): Promise<ToriiVpnProfile | null>;
+  createVpnQuote(
+    request: {
+      exitClass?: string;
+      meteringPublicKeyHex: string;
+    },
+    options: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnQuote>;
   createVpnSession(
-    request?: { exitClass?: string },
-    options?: {
+    request: {
+      exitClass?: string;
+      quoteId: string;
+      paymentTxHash: string;
+      meteringPublicKeyHex: string;
+    },
+    options: {
       signal?: AbortSignal;
       canonicalAuth: CanonicalRequestAuth;
     },
@@ -7304,6 +7381,17 @@ export declare class ToriiClient {
       canonicalAuth: CanonicalRequestAuth;
     },
   ): Promise<ToriiVpnReceipt | null>;
+  submitVpnReceipt(
+    request: {
+      relayReceiptHex: string;
+      clientVoucherHex: string;
+      leaseIdHex?: string;
+    },
+    options: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnReceipt>;
   listVpnReceipts(options: {
     signal?: AbortSignal;
     canonicalAuth: CanonicalRequestAuth;

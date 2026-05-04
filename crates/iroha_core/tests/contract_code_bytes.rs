@@ -9,18 +9,40 @@ use iroha_core::{
 use mv::storage::StorageReadOnly;
 
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-    let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1,
         abi_version,
     };
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        compiler_fingerprint: "contract-code-bytes-test".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+        states: Vec::new(),
+    };
+    let mut code = Vec::new();
+    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut out = meta.encode();
+    out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
+    ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
     out
 }
 

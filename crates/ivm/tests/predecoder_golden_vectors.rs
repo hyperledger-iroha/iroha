@@ -86,7 +86,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
         assert_eq!(&*golden, &*decode(&m), "mode 0x{mode:02x}");
     }
 
-    for vlen in [0u8, 1, 4, 8, 16, 32, 64, 255] {
+    for vlen in [0u8, 1, 4, 8, 16, 32, 64] {
         let mut m = base.clone();
         m.vector_length = vlen;
         assert_eq!(&*golden, &*decode(&m), "vlen {vlen}");
@@ -101,6 +101,13 @@ fn decode_artifact_invariant_across_metadata_fields() {
     let mut m = base.clone();
     m.abi_version = 1;
     assert_eq!(&*golden, &*decode(&m), "abi 1");
+
+    let mut m = base.clone();
+    m.vector_length = 65;
+    let mut artifact = m.encode();
+    artifact.extend_from_slice(&code);
+    let err = IvmCache::decode_artifact(&artifact).expect_err("oversize vector length rejects");
+    assert_eq!(err, VMError::InvalidMetadata);
 }
 
 #[test]

@@ -82,11 +82,11 @@ use iroha_data_model::{
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
         DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob,
-        proof_matches_manifest,
     },
     peer::PeerId,
     transaction::{
-        SignedTransaction, TransactionEntrypoint, error::TransactionRejectionReason,
+        SignedTransaction, TransactionEntrypoint,
+        error::{TransactionLimitError, TransactionRejectionReason},
         signed::TransactionResultInner,
     },
 };
@@ -99,6 +99,7 @@ use mv::storage::StorageReadOnly;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
+use sha2::Digest as _;
 
 #[cfg(feature = "bls")]
 fn bls_pop_from_metadata(
@@ -111,6 +112,14 @@ fn bls_pop_from_metadata(
         JsonValue::String(s) => hex::decode(s).ok(),
         _ => None,
     }
+}
+
+#[cfg(feature = "bls")]
+fn bls_small_pop_from_metadata(
+    metadata: &Metadata,
+    key: &iroha_data_model::name::Name,
+) -> Option<Vec<u8>> {
+    bls_pop_from_metadata(metadata, key)
 }
 
 /// Convert overlay build errors into transaction rejection reasons with stable labels.
@@ -177,6 +186,38 @@ fn missing_authority_requires_rejection(
         && !crate::tx::allows_unregistered_authority(tx.instructions(), authority)
 }
 
+fn validate_block_transaction_admission(
+    state_tx: &mut crate::state::StateTransaction<'_, '_>,
+    tx: &SignedTransaction,
+    routing: crate::queue::RoutingDecision,
+) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
+    StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
+}
+
+fn commit_stateful_admission_sequence(
+    state_tx: &mut crate::state::StateTransaction<'_, '_>,
+    admission: &crate::tx::StatefulAdmission,
+) {
+    if let Some(seq) = admission.sequence_to_commit {
+        state_tx
+            .world
+            .tx_sequences
+            .insert(admission.authority.clone(), seq);
+    }
+}
+
+fn commit_stateful_admission_sequence_to_block(
+    state_block: &mut StateBlock<'_>,
+    admission: &crate::tx::StatefulAdmission,
+) {
+    if admission.sequence_to_commit.is_none() {
+        return;
+    }
+    let mut state_tx = state_block.transaction();
+    commit_stateful_admission_sequence(&mut state_tx, admission);
+    state_tx.apply();
+}
+
 #[cfg(test)]
 mod overlay_error_tests {
     use iroha_data_model::{
@@ -213,14 +254,6 @@ mod overlay_error_tests {
     }
 }
 
-#[cfg(feature = "bls")]
-fn bls_small_pop_from_metadata(
-    metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
-) -> Option<Vec<u8>> {
-    bls_pop_from_metadata(metadata, key)
-}
-
 #[cfg(feature = "telemetry")]
 const PIPELINE_LAYER_WIDTH_THRESHOLDS: [u64; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
@@ -228,7 +261,6 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 #[cfg(feature = "telemetry")]
 use settlement_router::haircut::LiquidityProfile;
 use settlement_router::{MicroXor, policy::BufferStatus};
-use sha2::Digest as _;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -304,19 +336,6 @@ fn attach_manifest_roots_to_relays(
 ) {
     for envelope in envelopes {
         envelope.manifest_root = manifest_roots.get(&envelope.dataspace_id).copied();
-    }
-}
-
-fn attach_fastpq_proof_material_to_relays(envelopes: &mut [LaneRelayEnvelope]) {
-    #[cfg(not(test))]
-    let _ = envelopes;
-    #[cfg(test)]
-    for envelope in envelopes {
-        let verified_at_height = Some(envelope.block_height);
-        envelope.fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
-            proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
-            verified_at_height,
-        });
     }
 }
 
@@ -502,8 +521,6 @@ fn record_lane_settlement_metrics(
 // Tests or embedding code may set a classifier at runtime.
 use std::sync::{Arc, Mutex, OnceLock};
 
-use iroha_data_model::Encode as _;
-
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
@@ -522,11 +539,18 @@ use crate::{
         compute_confidential_feature_digest,
     },
     sumeragi::{VotingBlock, network_topology::Topology, status},
-    tx::{AcceptTransactionFail, LaneAssignment, enforce_fraud_policy},
+    tx::{
+        AcceptTransactionFail, LaneAssignment, SignatureRejectionCode, SignatureVerificationFail,
+        enforce_fraud_policy,
+    },
 };
 type QuarantineClassifier = fn(&iroha_data_model::transaction::SignedTransaction) -> bool;
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
 type WithCommittedBlockEvents = WithEvents<CommittedBlockEval>;
+
+struct PreparedBlockTransaction {
+    metadata: crate::tx::PreparedTransactionMetadata,
+}
 
 static QUARANTINE_CLASSIFIER: OnceLock<Mutex<Option<QuarantineClassifier>>> = OnceLock::new();
 
@@ -1896,7 +1920,7 @@ pub fn check_genesis_block(
         return Err(InvalidGenesisError::InvalidHeader);
     }
 
-    let transactions = block.transactions_vec().as_slice();
+    let transactions: Vec<_> = block.external_transactions().collect();
     let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
     if transactions.is_empty() || transactions.len() > MAX_GENESIS_TRANSACTIONS {
         return Err(InvalidGenesisError::BadTransactionsAmount);
@@ -2008,7 +2032,7 @@ mod pending {
             let mut transactions: Vec<_> = transactions
                 .into_iter()
                 .enumerate()
-                .map(|(idx, tx)| (tx.as_ref().hash_as_entrypoint(), idx, tx))
+                .map(|(idx, tx)| (tx.hash_as_entrypoint(), idx, tx))
                 .collect();
             // Canonicalize payload order by (call_hash, original index) so scheduler tie-breaks
             // remain stable regardless of submission order.
@@ -2052,8 +2076,7 @@ mod pending {
                 .0
                 .transactions
                 .iter()
-                .map(AsRef::as_ref)
-                .map(SignedTransaction::creation_time)
+                .map(crate::tx::AcceptedTransaction::creation_time)
                 .max()
                 // No transactions present; validation still rejects empty payloads.
                 .unwrap_or(Duration::ZERO);
@@ -2084,8 +2107,7 @@ mod pending {
                 .0
                 .transactions
                 .iter()
-                .map(AsRef::as_ref)
-                .map(SignedTransaction::hash_as_entrypoint)
+                .map(crate::tx::AcceptedTransaction::hash_as_entrypoint)
                 .collect::<MerkleTree<_>>()
                 .root();
             let creation_time_ms = creation_time
@@ -2238,6 +2260,7 @@ mod chained {
                 );
                 builder = builder.with_da_proof_policies(Some(default_policies));
             }
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
                 let default_context = builder
                     .0
@@ -2498,14 +2521,15 @@ pub(crate) mod valid {
     use std::{num::NonZeroUsize, time::Instant};
 
     use commit::CommittedBlock;
+    #[cfg(test)]
+    use iroha_data_model::soracloud::{
+        SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+    };
     use iroha_data_model::{
         ChainId,
         events::pipeline::PipelineEventBox,
         nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
-        soracloud::{
-            SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-            SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        },
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
@@ -2516,15 +2540,18 @@ pub(crate) mod valid {
     };
     use crate::{
         smartcontracts::ivm::cache::IvmCache,
+        state::{
+            StateBlock, StateReadOnlyWithTransactions, storage_transactions::TransactionsReadOnly,
+        },
+        sumeragi::network_topology::Role,
+    };
+    #[cfg(test)]
+    use crate::{
         soracloud_runtime::{
             SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
             SoracloudRuntimeExecutionError,
         },
-        state::{
-            StateBlock, StateReadOnly, StateReadOnlyWithTransactions, StateTransaction,
-            storage_transactions::TransactionsReadOnly,
-        },
-        sumeragi::network_topology::Role,
+        state::{StateReadOnly, StateTransaction},
     };
 
     fn charge_rejected_overlay_fees(
@@ -2632,6 +2659,7 @@ pub(crate) mod valid {
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
+    #[cfg(test)]
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<SoraServiceMailboxMessageV1> {
@@ -2671,6 +2699,7 @@ pub(crate) mod valid {
         messages
     }
 
+    #[cfg(test)]
     fn authoritative_pending_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
         service_name: &iroha_data_model::name::Name,
@@ -2694,6 +2723,7 @@ pub(crate) mod valid {
         .unwrap_or(u32::MAX)
     }
 
+    #[cfg(test)]
     fn synthetic_mailbox_runtime_failure(
         request: SoracloudOrderedMailboxExecutionRequest,
         error: SoracloudRuntimeExecutionError,
@@ -2772,6 +2802,7 @@ pub(crate) mod valid {
         }
     }
 
+    #[cfg(test)]
     fn validate_mailbox_runtime_receipt(
         request: &SoracloudOrderedMailboxExecutionRequest,
         receipt: &SoraRuntimeReceiptV1,
@@ -2831,6 +2862,12 @@ pub(crate) mod valid {
         Ok(())
     }
 
+    /// Test-only harness for legacy block-time mailbox execution.
+    ///
+    /// Production replay must not depend on a local SoraCloud runtime. Runtime
+    /// effects must be persisted through explicit SoraCloud ISIs in committed
+    /// transactions so Kura replay reconstructs the same WSV on every peer.
+    #[cfg(test)]
     fn execute_soracloud_mailbox_runtime(state_block: &mut StateBlock<'_>) {
         let Some(runtime) = state_block.soracloud_runtime.clone() else {
             return;
@@ -3150,7 +3187,18 @@ pub(crate) mod valid {
                         None,
                     ));
                 }
-                if !proof_matches_manifest(proof, dsid, policy.manifest_root) {
+                let envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+                    .map_err(|err| {
+                        make_axt_error_with(
+                            AxtRejectReason::Proof,
+                            &format!("proof payload is not an AXT proof envelope: {err}"),
+                            Some(dsid),
+                            Some(policy.target_lane),
+                            None,
+                            None,
+                        )
+                    })?;
+                if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
                     return Err(make_axt_error_with(
                         AxtRejectReason::Manifest,
                         "proof does not match policy manifest root",
@@ -3200,6 +3248,16 @@ pub(crate) mod valid {
                         }
                     }
                 }
+                fastpq_prover::verify_axt_proof_envelope(&envelope).map_err(|err| {
+                    make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        &format!("FASTPQ verification failed: {err}"),
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    )
+                })?;
                 Ok(())
             };
 
@@ -3896,6 +3954,12 @@ pub(crate) mod valid {
             }
         }
 
+        pub(crate) fn committed_from_replay_signed_block(block: SignedBlock) -> CommittedBlock {
+            Self::new_signatures_verified(block)
+                .commit_unchecked()
+                .unpack(|_| {})
+        }
+
         #[cfg(test)]
         fn mark_signatures_verified(&mut self) {
             self.signatures_verified = true;
@@ -4425,7 +4489,7 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
-            skip_tx_signature_validation: bool,
+            trust_replay_tx_signatures: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -4438,7 +4502,7 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
-                skip_tx_signature_validation,
+                trust_replay_tx_signatures,
                 true,
             )
         }
@@ -4484,7 +4548,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
-            skip_tx_signature_validation: bool,
+            trust_replay_tx_signatures: bool,
             replay_compatibility: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
@@ -4543,16 +4607,14 @@ pub(crate) mod valid {
                     }
                 }
             };
+            let prepared_txs = Self::prepare_external_transactions(&block);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                Self::committed_heights_for_block(&block, &transactions_view)
+                Self::committed_heights_for_prepared_transactions(&prepared_txs, &transactions_view)
             };
-            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let now_ms = block.header().creation_time().as_millis();
-            let mut cached_ok = vec![false; txs_for_cache.len()];
             let cache_context = if cache_enabled {
                 Some(StatelessValidationContext::new(
                     expected_chain_id.clone(),
@@ -4563,16 +4625,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(context) = cache_context.clone() {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -4584,8 +4636,8 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
-                cache_enabled.then_some(cached_ok.as_slice()),
-                skip_tx_signature_validation,
+                &prepared_txs,
+                trust_replay_tx_signatures,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -4606,10 +4658,10 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cached_ok[idx] {
-                        continue;
-                    }
+                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
+                    .into_iter()
+                    .zip(prepared_txs.iter())
+                {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4618,7 +4670,7 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -4657,11 +4709,12 @@ pub(crate) mod valid {
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             let tx_start = Instant::now();
-            Self::validate_and_record_transactions(
+            Self::validate_and_record_transactions_with_prepared(
                 &mut block,
                 &mut state_block,
                 timings.as_deref_mut(),
                 true,
+                Some(&prepared_txs),
             );
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_tx_ms = to_ms(tx_start.elapsed());
@@ -4756,16 +4809,14 @@ pub(crate) mod valid {
                     }
                 }
             };
+            let prepared_txs = Self::prepare_external_transactions(&block);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                Self::committed_heights_for_block(&block, &transactions_view)
+                Self::committed_heights_for_prepared_transactions(&prepared_txs, &transactions_view)
             };
-            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let now_ms = block.header().creation_time().as_millis();
-            let mut cached_ok = vec![false; txs_for_cache.len()];
             let cache_context = if cache_enabled {
                 Some(StatelessValidationContext::new(
                     expected_chain_id.clone(),
@@ -4776,16 +4827,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(context) = cache_context.clone() {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -4796,7 +4837,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
-                cache_enabled.then_some(cached_ok.as_slice()),
+                &prepared_txs,
                 false,
                 metrics,
             ) {
@@ -4811,10 +4852,10 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cached_ok[idx] {
-                        continue;
-                    }
+                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
+                    .into_iter()
+                    .zip(prepared_txs.iter())
+                {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4823,7 +4864,7 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
             // Release block writer before creating new one
@@ -4843,7 +4884,13 @@ pub(crate) mod valid {
                 state.block(block.header())
             };
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, &mut state_block, None, true);
+            Self::validate_and_record_transactions_with_prepared(
+                &mut block,
+                &mut state_block,
+                None,
+                true,
+                Some(&prepared_txs),
+            );
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -5281,13 +5328,45 @@ pub(crate) mod valid {
             (decisions.len() == tx_count).then_some(decisions)
         }
 
-        fn committed_heights_for_block(
-            block: &SignedBlock,
+        fn committed_heights_for_prepared_transactions(
+            prepared_txs: &[PreparedBlockTransaction],
             transactions: &impl TransactionsReadOnly,
         ) -> Vec<Option<NonZeroUsize>> {
-            block
-                .external_transactions()
-                .map(|tx| transactions.get(&tx.hash()))
+            prepared_txs
+                .iter()
+                .map(|prepared| transactions.get(&prepared.metadata.signed_hash))
+                .collect()
+        }
+
+        fn signed_transaction_from_entrypoint(
+            entrypoint: &TransactionEntrypoint,
+        ) -> Option<&SignedTransaction> {
+            match entrypoint {
+                TransactionEntrypoint::External(tx) => Some(tx),
+                TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => None,
+            }
+        }
+
+        fn collect_external_signed_transactions(block: &SignedBlock) -> Vec<&SignedTransaction> {
+            if let Some(entries) = block.external_entrypoints_slice() {
+                entries
+                    .iter()
+                    .filter_map(Self::signed_transaction_from_entrypoint)
+                    .collect()
+            } else {
+                block.transactions_vec().iter().collect()
+            }
+        }
+
+        fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
+            Self::collect_external_signed_transactions(block)
+                .into_iter()
+                .map(|tx| PreparedBlockTransaction {
+                    metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
+                })
                 .collect()
         }
 
@@ -5307,17 +5386,11 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
-            cached_ok: Option<&[bool]>,
-            skip_tx_signature_validation: bool,
-            metrics: MetricsRef<'_>,
+            prepared_txs: &[PreparedBlockTransaction],
+            trust_replay_tx_signatures: bool,
+            _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
-            #[cfg(not(feature = "telemetry"))]
-            let () = metrics;
             let _ = static_data.aggregate_lane;
-            #[cfg(feature = "telemetry")]
-            let metrics = metrics.expect("telemetry enabled");
-            #[cfg(all(feature = "telemetry", not(feature = "bls")))]
-            let _ = metrics;
 
             let max_clock_drift = static_data.max_clock_drift;
             let tx_params = static_data.tx_params;
@@ -5325,784 +5398,34 @@ pub(crate) mod valid {
             let pipeline_cfg = &static_data.pipeline_cfg;
             let crypto_cfg = &static_data.crypto_cfg;
             let block_creation_time = block.header().creation_time();
-            let txs: Vec<&SignedTransaction> = block.external_transactions().collect();
             debug_assert_eq!(
                 committed_heights.len(),
-                txs.len(),
+                prepared_txs.len(),
                 "committed-height snapshot must align with block transaction list",
             );
-            if let Some(cached_ok) = cached_ok {
-                debug_assert_eq!(
-                    cached_ok.len(),
-                    txs.len(),
-                    "stateless-cache snapshot must align with block transaction list",
-                );
+            if committed_heights.len() != prepared_txs.len() {
+                return Err(BlockValidationError::MerkleRootMismatch);
             }
-            let cached = |idx: usize| {
-                cached_ok
-                    .and_then(|snapshot| snapshot.get(idx))
-                    .copied()
-                    .unwrap_or(false)
-            };
-
-            // Deterministic pre-verification of transaction signatures by scheme, using
-            // runtime pipeline configuration caps. Successful pre-verification allows
-            // skipping per-transaction signature checks further below for those schemes.
-
-            // Ed25519 deterministic micro-batching with transcript-derived seed
-            let mut ed_preverified = false;
-            {
-                #[derive(Clone)]
-                struct EdItem {
-                    idx: usize,
-                    pk: [u8; 32],
-                    msg: [u8; 32],
-                    sig: [u8; 64],
-                }
-                let mut items: Vec<EdItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    if algo != iroha_crypto::Algorithm::Ed25519 {
-                        continue;
-                    }
-                    // message is the 32-byte hash of TransactionPayload
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    // signature bytes (64)
-                    let sig_bytes = tx.signature().payload().payload();
-                    if sig_bytes.len() != 64 || pk_bytes.len() != 32 {
-                        return Err(BlockValidationError::TransactionAccept(
-                            AcceptTransactionFail::SignatureVerification(
-                                crate::tx::SignatureVerificationFail::new(
-                                    tx.signature().clone(),
-                                    crate::tx::SignatureRejectionCode::MalformedSignature,
-                                    "bad signature or key length",
-                                ),
-                            ),
-                        ));
-                    }
-                    let mut pk = [0u8; 32];
-                    pk.copy_from_slice(pk_bytes);
-                    let mut sig = [0u8; 64];
-                    sig.copy_from_slice(sig_bytes);
-                    items.push(EdItem {
-                        idx: i,
-                        pk,
-                        msg,
-                        sig,
-                    });
-                }
-                let cap = if pipeline_cfg.signature_batch_max_ed25519 > 0 {
-                    pipeline_cfg.signature_batch_max_ed25519
-                } else {
-                    pipeline_cfg.signature_batch_max
-                };
-                if cap > 0 && !items.is_empty() {
-                    let derive_seed = |slice: &[&EdItem]| -> [u8; 32] {
-                        let mut tuples: Vec<Vec<u8>> = slice
-                            .iter()
-                            .map(|it| {
-                                let mut v = Vec::with_capacity(32 + 32 + 64);
-                                v.extend_from_slice(&it.pk);
-                                v.extend_from_slice(&it.msg);
-                                v.extend_from_slice(&it.sig);
-                                v
-                            })
-                            .collect();
-                        tuples.sort_unstable();
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(b"iroha:ecc_batch:v1:ed25519");
-                        for t in tuples.iter() {
-                            hasher.update(t);
-                        }
-                        let out = hasher.finalize();
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&out);
-                        seed
-                    };
-                    let verify_batch_slice = |slice: &[&EdItem]| -> bool {
-                        let seed = derive_seed(slice);
-                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
-                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
-                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                        iroha_crypto::ed25519_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                            .is_ok()
-                    };
-                    let mut start = 0;
-                    while start < items.len() {
-                        let end = usize::min(start + cap, items.len());
-                        let batch = &items[start..end];
-                        let refs: Vec<&EdItem> = batch.iter().collect();
-                        if !verify_batch_slice(&refs) {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&EdItem>> = VecDeque::new();
-                            q.push_back(refs.clone());
-                            let mut offending: Option<usize> = None;
-                            while let Some(slc) = q.pop_front() {
-                                if verify_batch_slice(&slc) {
-                                    continue;
-                                }
-                                if slc.len() == 1 {
-                                    offending = Some(slc[0].idx);
-                                    break;
-                                }
-                                let mid = slc.len() / 2;
-                                q.push_back(slc[..mid].to_vec());
-                                q.push_back(slc[mid..].to_vec());
-                            }
-                            if let Some(idx) = offending {
-                                if let Some(tx) = txs.get(idx) {
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                tx.signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "ed25519 batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            txs.first().expect("non-empty").signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                        }
-                        start = end;
-                    }
-                    ed_preverified = true;
-                }
+            let signed_txs = Self::collect_external_signed_transactions(block);
+            debug_assert_eq!(
+                signed_txs.len(),
+                prepared_txs.len(),
+                "prepared metadata must align with signed block transactions",
+            );
+            if signed_txs.len() != prepared_txs.len() {
+                return Err(BlockValidationError::MerkleRootMismatch);
             }
-
-            // secp256k1 deterministic micro-batching (current impl: per-sig verify in batch order)
-            let mut secp_preverified = false;
-            {
-                #[derive(Clone)]
-                struct SecpItem {
-                    idx: usize,
-                    pk: Vec<u8>,
-                    msg: [u8; 32],
-                    sig: [u8; 64],
-                }
-                let mut items: Vec<SecpItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    if algo != iroha_crypto::Algorithm::Secp256k1 {
-                        continue;
-                    }
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    let sig_bytes = tx.signature().payload().payload();
-                    if sig_bytes.len() != 64 {
-                        return Err(BlockValidationError::TransactionAccept(
-                            AcceptTransactionFail::SignatureVerification(
-                                crate::tx::SignatureVerificationFail::new(
-                                    tx.signature().clone(),
-                                    crate::tx::SignatureRejectionCode::MalformedSignature,
-                                    "bad secp256k1 signature length",
-                                ),
-                            ),
-                        ));
-                    }
-                    let mut sig = [0u8; 64];
-                    sig.copy_from_slice(sig_bytes);
-                    items.push(SecpItem {
-                        idx: i,
-                        pk: pk_bytes.to_vec(),
-                        msg,
-                        sig,
-                    });
-                }
-                let cap = pipeline_cfg.signature_batch_max_secp256k1;
-                if cap > 0 && !items.is_empty() {
-                    let derive_seed = |slice: &[&SecpItem]| -> [u8; 32] {
-                        let mut tuples: Vec<Vec<u8>> = slice
-                            .iter()
-                            .map(|it| {
-                                let mut v = Vec::with_capacity(it.pk.len() + 32 + 64);
-                                v.extend_from_slice(&it.pk);
-                                v.extend_from_slice(&it.msg);
-                                v.extend_from_slice(&it.sig);
-                                v
-                            })
-                            .collect();
-                        tuples.sort_unstable();
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(b"iroha:ecc_batch:v1:secp256k1");
-                        for t in tuples.iter() {
-                            hasher.update(t);
-                        }
-                        let out = hasher.finalize();
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&out);
-                        seed
-                    };
-                    let verify_batch_slice = |slice: &[&SecpItem]| -> bool {
-                        let seed = derive_seed(slice);
-                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
-                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
-                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                        iroha_crypto::secp256k1_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                            .is_ok()
-                    };
-                    let mut start = 0;
-                    while start < items.len() {
-                        let end = usize::min(start + cap, items.len());
-                        let batch = &items[start..end];
-                        let refs: Vec<&SecpItem> = batch.iter().collect();
-                        if !verify_batch_slice(&refs) {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&SecpItem>> = VecDeque::new();
-                            q.push_back(refs.clone());
-                            let mut offending: Option<usize> = None;
-                            while let Some(slc) = q.pop_front() {
-                                if verify_batch_slice(&slc) {
-                                    continue;
-                                }
-                                if slc.len() == 1 {
-                                    offending = Some(slc[0].idx);
-                                    break;
-                                }
-                                let mid = slc.len() / 2;
-                                q.push_back(slc[..mid].to_vec());
-                                q.push_back(slc[mid..].to_vec());
-                            }
-                            if let Some(idx) = offending {
-                                if let Some(tx) = txs.get(idx) {
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                tx.signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "secp256k1 batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            txs.first().expect("non-empty").signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                        }
-                        start = end;
-                    }
-                    secp_preverified = true;
-                }
-            }
-
-            // BLS deterministic grouping (feature-gated). Verify per‑signature for now.
-            #[cfg(feature = "bls")]
-            #[allow(unused_assignments)]
-            let mut bls_preverified = false;
-            #[cfg(all(feature = "bls", feature = "telemetry"))]
-            let (mut bls_agg_same_batches, mut bls_agg_multi_batches, bls_deterministic_batches) =
-                (0u64, 0u64, 0u64);
-            #[cfg(feature = "bls")]
-            {
-                #[derive(Clone)]
-                struct BlsItem {
-                    idx: usize,
-                    pk: iroha_crypto::PublicKey,
-                    pk_bytes: Vec<u8>,
-                    pop: Option<Vec<u8>>,
-                    msg: [u8; 32],
-                    sig: Vec<u8>,
-                    small: bool, // true => BlsSmall, false => BlsNormal
-                }
-                static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
-                    LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-                static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
-                    LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
-                let mut all_normal_have_pop = true;
-                let mut all_small_have_pop = true;
-                let mut items_normal: Vec<BlsItem> = Vec::new();
-                let mut items_small: Vec<BlsItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    let small = match algo {
-                        iroha_crypto::Algorithm::BlsNormal => false,
-                        iroha_crypto::Algorithm::BlsSmall => true,
-                        _ => continue,
-                    };
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    let sig_bytes = tx.signature().payload().payload().to_vec();
-                    let mut pop = None;
-                    if small {
-                        // Require PoP metadata for BLS-small keys to enable batching
-                        if let Some(pop_hex) =
-                            bls_small_pop_from_metadata(tx.metadata(), &BLS_POP_SMALL_KEY)
-                        {
-                            if iroha_crypto::bls_small_pop_verify(signatory, &pop_hex).is_err() {
-                                all_small_have_pop = false;
-                            } else {
-                                pop = Some(pop_hex);
-                            }
-                        } else {
-                            all_small_have_pop = false;
-                        }
-                    } else {
-                        // Require a PoP in transaction metadata to harden against rogue-key
-                        // aggregation. Missing/invalid PoP disables batching for normal BLS.
-                        if let Some(pop_hex) = bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY) {
-                            if iroha_crypto::bls_normal_pop_verify(signatory, &pop_hex).is_err() {
-                                all_normal_have_pop = false;
-                            } else {
-                                pop = Some(pop_hex);
-                            }
-                        } else {
-                            all_normal_have_pop = false;
-                        }
-                    }
-                    let item = BlsItem {
-                        idx: i,
-                        pk: signatory.clone(),
-                        pk_bytes: pk_bytes.to_vec(),
-                        pop,
-                        msg,
-                        sig: sig_bytes,
-                        small,
-                    };
-                    if small {
-                        items_small.push(item);
-                    } else {
-                        items_normal.push(item);
-                    }
-                }
-                #[cfg(feature = "telemetry")]
-                let aggregate_lane = static_data.aggregate_lane;
-                let cap = pipeline_cfg.signature_batch_max_bls;
-                #[allow(unused_mut)]
-                let mut verify_set = |set: &Vec<BlsItem>| -> Result<(), BlockValidationError> {
-                    if set.is_empty() {
-                        return Ok(());
-                    }
-                    let mut start = 0usize;
-                    while start < set.len() {
-                        let end = usize::min(start + cap.max(1), set.len());
-                        let batch = &set[start..end];
-                        let refs: Vec<&BlsItem> = batch.iter().collect();
-
-                        // Hybrid grouping: same-message groups (size > 1) use fast-aggregate;
-                        // singletons (pairwise-distinct messages) use multi-message aggregate.
-                        // Deterministic ordering via BTreeMap on message bytes.
-                        let mut groups: std::collections::BTreeMap<[u8; 32], Vec<&BlsItem>> =
-                            std::collections::BTreeMap::new();
-                        for it in &refs {
-                            groups.entry(it.msg).or_default().push(*it);
-                        }
-
-                        // Helper: verify a same-message slice; return true on success
-                        let verify_same = |slc: &[&BlsItem]| -> bool {
-                            debug_assert!(!slc.is_empty());
-                            let msg = slc[0].msg.as_slice();
-                            let sigs: Vec<&[u8]> = slc.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&iroha_crypto::PublicKey> =
-                                slc.iter().map(|it| &it.pk).collect();
-                            let mut pops = Vec::with_capacity(slc.len());
-                            for it in slc {
-                                let Some(pop) = it.pop.as_ref() else {
-                                    return false;
-                                };
-                                pops.push(pop.as_slice());
-                            }
-                            if slc[0].small {
-                                iroha_crypto::bls_small_verify_aggregate_same_message(
-                                    msg, &sigs, &pks, &pops,
-                                )
-                                .is_ok()
-                            } else {
-                                iroha_crypto::bls_normal_verify_aggregate_same_message(
-                                    msg, &sigs, &pks, &pops,
-                                )
-                                .is_ok()
-                            }
-                        };
-
-                        // Helper: bisection for same-message group
-                        let bisect_same = |slc: Vec<&BlsItem>| -> Option<usize> {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&BlsItem>> = VecDeque::new();
-                            q.push_back(slc);
-                            let mut offending: Option<usize> = None;
-                            while let Some(s) = q.pop_front() {
-                                if verify_same(&s) {
-                                    continue;
-                                }
-                                if s.len() == 1 {
-                                    offending = Some(s[0].idx);
-                                    break;
-                                }
-                                let mid = s.len() / 2;
-                                q.push_back(s[..mid].to_vec());
-                                q.push_back(s[mid..].to_vec());
-                            }
-                            offending
-                        };
-
-                        // Collect singletons for multi-message aggregate
-                        let mut singletons: Vec<&BlsItem> = Vec::new();
-                        let mut group_fail: Option<usize> = None;
-                        for (_k, slc) in groups.iter() {
-                            if slc.len() == 1 {
-                                singletons.push(slc[0]);
-                            } else {
-                                let ok = verify_same(slc);
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    bls_agg_same_batches = bls_agg_same_batches.saturating_add(1);
-                                    metrics.inc_pipeline_sig_bls_result(aggregate_lane, true, ok);
-                                }
-                                if !ok {
-                                    // Bisection within the same-message group. If every
-                                    // individual signature passes, the aggregate was not usable
-                                    // for this group (for example, duplicate signer keys); keep
-                                    // checking the remaining independent groups.
-                                    if let Some(idx) = bisect_same(slc.clone()) {
-                                        group_fail = Some(idx);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(idx) = group_fail {
-                            if let Some(tx) = txs.get(idx) {
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    // Record attempted aggregates even on failure
-                                    metrics.set_pipeline_sig_bls_counts(
-                                        aggregate_lane,
-                                        bls_agg_same_batches,
-                                        bls_agg_multi_batches,
-                                        bls_deterministic_batches,
-                                    );
-                                }
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            tx.signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "bls batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                            #[cfg(feature = "telemetry")]
-                            {
-                                // Record attempted aggregates even on failure
-                                metrics.set_pipeline_sig_bls_counts(
-                                    aggregate_lane,
-                                    bls_agg_same_batches,
-                                    bls_agg_multi_batches,
-                                    bls_deterministic_batches,
-                                );
-                            }
-                            return Err(BlockValidationError::TransactionAccept(
-                                AcceptTransactionFail::SignatureVerification(
-                                    crate::tx::SignatureVerificationFail::new(
-                                        txs.first().expect("non-empty").signature().clone(),
-                                        crate::tx::SignatureRejectionCode::InvalidSignature,
-                                        "batch verification failed",
-                                    ),
-                                ),
-                            ));
-                        }
-
-                        // Verify multi-message aggregate across singletons (pairwise distinct by construction)
-                        if !singletons.is_empty() {
-                            let msgs: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.pk_bytes.as_slice()).collect();
-                            let ok = if singletons[0].small {
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    bls_agg_multi_batches = bls_agg_multi_batches.saturating_add(1);
-                                }
-                                iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                    &msgs, &sigs, &pks,
-                                )
-                                .is_ok()
-                            } else {
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    bls_agg_multi_batches = bls_agg_multi_batches.saturating_add(1);
-                                }
-                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                    &msgs, &sigs, &pks,
-                                )
-                                .is_ok()
-                            };
-                            #[cfg(feature = "telemetry")]
-                            metrics.inc_pipeline_sig_bls_result(aggregate_lane, false, ok);
-                            if !ok {
-                                // Bisection over singleton set only
-                                use std::collections::VecDeque;
-                                let mut q: VecDeque<Vec<&BlsItem>> = VecDeque::new();
-                                q.push_back(singletons.clone());
-                                let mut offending: Option<usize> = None;
-                                while let Some(slc) = q.pop_front() {
-                                    let msgs: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.msg.as_slice()).collect();
-                                    let sigs: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.sig.as_slice()).collect();
-                                    let pks: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.pk_bytes.as_slice()).collect();
-                                    let ok = if slc[0].small {
-                                        iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                            &msgs, &sigs, &pks,
-                                        )
-                                        .is_ok()
-                                    } else {
-                                        iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                            &msgs, &sigs, &pks,
-                                        )
-                                        .is_ok()
-                                    };
-                                    if ok {
-                                        continue;
-                                    }
-                                    if slc.len() == 1 {
-                                        offending = Some(slc[0].idx);
-                                        break;
-                                    }
-                                    let mid = slc.len() / 2;
-                                    q.push_back(slc[..mid].to_vec());
-                                    q.push_back(slc[mid..].to_vec());
-                                }
-                                if let Some(idx) = offending {
-                                    if let Some(tx) = txs.get(idx) {
-                                        #[cfg(feature = "telemetry")]
-                                        {
-                                            // Record attempted aggregates even on failure
-                                            metrics.set_pipeline_sig_bls_counts(
-                                                aggregate_lane,
-                                                bls_agg_same_batches,
-                                                bls_agg_multi_batches,
-                                                bls_deterministic_batches,
-                                            );
-                                        }
-                                        return Err(BlockValidationError::TransactionAccept(
-                                            AcceptTransactionFail::SignatureVerification(
-                                                crate::tx::SignatureVerificationFail::new(
-                                                    tx.signature().clone(),
-                                                    crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                    "bls batch verification failed",
-                                                ),
-                                            ),
-                                        ));
-                                    }
-                                } else {
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        // Record attempted aggregates even on failure
-                                        metrics.set_pipeline_sig_bls_counts(
-                                            aggregate_lane,
-                                            bls_agg_same_batches,
-                                            bls_agg_multi_batches,
-                                            bls_deterministic_batches,
-                                        );
-                                    }
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                txs.first().expect("non-empty").signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            }
-                        }
-                        start = end;
-                    }
-                    Ok(())
-                };
-                let enable_normal_batch = cap > 0 && all_normal_have_pop;
-                let enable_small_batch = cap > 0 && all_small_have_pop;
-                if enable_normal_batch {
-                    verify_set(&items_normal)?;
-                }
-                if enable_small_batch {
-                    verify_set(&items_small)?;
-                }
-                bls_preverified = (enable_normal_batch && !items_normal.is_empty())
-                    || (enable_small_batch && !items_small.is_empty());
-                #[cfg(feature = "telemetry")]
-                metrics.set_pipeline_sig_bls_counts(
-                    aggregate_lane,
-                    bls_agg_same_batches,
-                    bls_agg_multi_batches,
-                    if bls_preverified {
-                        0
-                    } else {
-                        bls_deterministic_batches
-                    },
-                );
-            }
-
-            // PQC (e.g., ML‑DSA Dilithium) deterministic grouping.
-            let mut pqc_preverified = false;
-            {
-                #[derive(Clone)]
-                struct PqcItem {
-                    idx: usize,
-                    pk: Vec<u8>,
-                    msg: [u8; 32],
-                    sig: Vec<u8>,
-                }
-                let mut items: Vec<PqcItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    if algo != iroha_crypto::Algorithm::MlDsa {
-                        continue;
-                    }
-                    // Compute message hash
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    // signature bytes are algorithm-specific length; keep as Vec
-                    let sig_bytes = tx.signature().payload().payload().to_vec();
-                    items.push(PqcItem {
-                        idx: i,
-                        pk: pk_bytes.to_vec(),
-                        msg,
-                        sig: sig_bytes,
-                    });
-                }
-                let cap = pipeline_cfg.signature_batch_max_pqc;
-                if cap > 0 && !items.is_empty() {
-                    let derive_seed = |slice: &[&PqcItem]| -> [u8; 32] {
-                        let mut tuples: Vec<Vec<u8>> = slice
-                            .iter()
-                            .map(|it| {
-                                let mut v = Vec::with_capacity(it.pk.len() + 32 + it.sig.len());
-                                v.extend_from_slice(&it.pk);
-                                v.extend_from_slice(&it.msg);
-                                v.extend_from_slice(&it.sig);
-                                v
-                            })
-                            .collect();
-                        tuples.sort_unstable();
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(b"iroha:pqc_batch:v1:dilithium3");
-                        for t in tuples.iter() {
-                            hasher.update(t);
-                        }
-                        let out = hasher.finalize();
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&out);
-                        seed
-                    };
-                    let verify_batch_slice = |slice: &[&PqcItem]| -> bool {
-                        let seed = derive_seed(slice);
-                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
-                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
-                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                        iroha_crypto::pqc_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                            .is_ok()
-                    };
-                    let mut start = 0;
-                    while start < items.len() {
-                        let end = usize::min(start + cap, items.len());
-                        let batch = &items[start..end];
-                        let refs: Vec<&PqcItem> = batch.iter().collect();
-                        if !verify_batch_slice(&refs) {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&PqcItem>> = VecDeque::new();
-                            q.push_back(refs.clone());
-                            let mut offending: Option<usize> = None;
-                            while let Some(slc) = q.pop_front() {
-                                if verify_batch_slice(&slc) {
-                                    continue;
-                                }
-                                if slc.len() == 1 {
-                                    offending = Some(slc[0].idx);
-                                    break;
-                                }
-                                let mid = slc.len() / 2;
-                                q.push_back(slc[..mid].to_vec());
-                                q.push_back(slc[mid..].to_vec());
-                            }
-                            if let Some(idx) = offending {
-                                if let Some(tx) = txs.get(idx) {
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                tx.signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "pqc batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            txs.first().expect("non-empty").signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                        }
-                        start = end;
-                    }
-                    pqc_preverified = true;
-                }
-            }
-
             let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
                 std::collections::BTreeSet::new();
-            let mut entrypoints: Vec<HashOf<TransactionEntrypoint>> = Vec::with_capacity(txs.len());
+            let mut seen_sealed_commitments = std::collections::BTreeSet::new();
 
-            for (tx, committed_height) in txs.iter().zip(committed_heights.iter()) {
-                let tx_hash = (*tx).hash();
+            for ((tx, prepared), committed_height) in signed_txs
+                .iter()
+                .copied()
+                .zip(prepared_txs.iter())
+                .zip(committed_heights.iter())
+            {
+                let tx_hash = prepared.metadata.signed_hash;
                 // In case of soft-fork transaction is check if it was added at the same height as candidate block.
                 if committed_height
                     .as_ref()
@@ -6123,103 +5446,267 @@ pub(crate) mod valid {
                 if tx.creation_time() >= block_creation_time {
                     return Err(BlockValidationError::TransactionInTheFuture);
                 }
-
-                entrypoints.push(tx.hash_as_entrypoint());
+            }
+            let mut entrypoint_hashes = Vec::with_capacity(block.external_entrypoint_count());
+            let mut prepared_signed_idx = 0usize;
+            if let Some(external_entrypoints) = block.external_entrypoints_slice() {
+                for entrypoint in external_entrypoints {
+                    match entrypoint {
+                        TransactionEntrypoint::External(_) => {
+                            let prepared = prepared_txs
+                                .get(prepared_signed_idx)
+                                .ok_or(BlockValidationError::MerkleRootMismatch)?;
+                            entrypoint_hashes.push(prepared.metadata.entrypoint_hash);
+                            prepared_signed_idx = prepared_signed_idx.saturating_add(1);
+                        }
+                        TransactionEntrypoint::SealedReveal(_) => {
+                            let _prepared = prepared_txs
+                                .get(prepared_signed_idx)
+                                .ok_or(BlockValidationError::MerkleRootMismatch)?;
+                            entrypoint_hashes.push(entrypoint.hash());
+                            prepared_signed_idx = prepared_signed_idx.saturating_add(1);
+                        }
+                        TransactionEntrypoint::SealedCommitment(commitment) => {
+                            crate::tx::validate_sealed_commitment_stateless(
+                                commitment, chain_id, tx_params,
+                            )
+                            .map_err(BlockValidationError::TransactionAccept)?;
+                            if commitment.payload().reveal_after_height
+                                <= u64::try_from(expected_block_height).unwrap_or(u64::MAX)
+                            {
+                                return Err(BlockValidationError::TransactionAccept(
+                                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                                        reason: "sealed transaction reveal_after_height must be greater than commit height".into(),
+                                    }),
+                                ));
+                            }
+                            if !seen_sealed_commitments.insert(*commitment.commitment()) {
+                                return Err(BlockValidationError::DuplicateTransactions);
+                            }
+                            entrypoint_hashes.push(entrypoint.hash());
+                        }
+                        TransactionEntrypoint::PrivateKaigi(_) => {
+                            entrypoint_hashes.push(entrypoint.hash());
+                        }
+                        TransactionEntrypoint::Time(_) => {
+                            return Err(BlockValidationError::TransactionAccept(
+                                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                                    reason: "time entrypoints cannot be embedded as external block entrypoints".into(),
+                                }),
+                            ));
+                        }
+                    }
+                }
+                debug_assert_eq!(
+                    prepared_signed_idx,
+                    prepared_txs.len(),
+                    "signed entrypoint preparation must align with external entries",
+                );
+            } else {
+                entrypoint_hashes.extend(
+                    prepared_txs
+                        .iter()
+                        .map(|prepared| prepared.metadata.entrypoint_hash),
+                );
             }
 
             use rayon::prelude::*;
 
             let is_genesis_block = block.header().is_genesis();
-            let validate_tx =
-                |(idx, tx): (usize, &&SignedTransaction)| -> Option<BlockValidationError> {
-                    if cached(idx) {
-                        return None;
+            let mut ed25519_prechecked = vec![false; prepared_txs.len()];
+            let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
+            if !is_genesis_block && ed25519_batch_cap > 0 {
+                struct Ed25519BatchItem {
+                    idx: usize,
+                }
+
+                fn verify_ed25519_batch_slices<'a>(
+                    messages: &[&'a [u8]],
+                    signatures: &[&'a [u8]],
+                    public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+                    scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
+                ) -> Result<(), iroha_crypto::Error> {
+                    iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+                        messages,
+                        signatures,
+                        public_keys,
+                        [0; 32],
+                        scratch,
+                    )
+                }
+
+                let mut items = Vec::new();
+                let mut messages = Vec::new();
+                let mut signatures = Vec::new();
+                let mut public_keys = Vec::new();
+                let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
+                for (idx, (tx, prepared)) in signed_txs
+                    .iter()
+                    .copied()
+                    .zip(prepared_txs.iter())
+                    .enumerate()
+                {
+                    let signature = tx.signature().payload().payload();
+                    if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
+                        continue;
                     }
-                    if is_genesis_block {
-                        return AcceptedTransaction::validate_genesis_with_now(
+                    let Some(public_key) = prepared.metadata.single_ed25519_key else {
+                        continue;
+                    };
+                    items.push(Ed25519BatchItem { idx });
+                    messages.push(prepared.metadata.payload_hash.as_ref().as_slice());
+                    signatures.push(signature);
+                    public_keys.push(public_key);
+                }
+
+                let signature_error = |tx: &SignedTransaction, detail: String| {
+                    BlockValidationError::TransactionAccept(
+                        AcceptTransactionFail::SignatureVerification(
+                            SignatureVerificationFail::new(
+                                tx.signature().clone(),
+                                SignatureRejectionCode::InvalidSignature,
+                                detail,
+                            ),
+                        ),
+                    )
+                };
+
+                for range_start in (0..items.len()).step_by(ed25519_batch_cap) {
+                    let range_end = range_start
+                        .saturating_add(ed25519_batch_cap)
+                        .min(items.len());
+                    let messages = &messages[range_start..range_end];
+                    let signatures = &signatures[range_start..range_end];
+                    let public_keys = &public_keys[range_start..range_end];
+                    if let Err(err) =
+                        verify_ed25519_batch_slices(messages, signatures, public_keys, &mut scratch)
+                    {
+                        if let Some((relative_idx, detail)) =
+                            iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                                messages,
+                                signatures,
+                                public_keys,
+                                [0; 32],
+                                &mut scratch,
+                            )
+                        {
+                            let idx = items[range_start + relative_idx].idx;
+                            return Err(signature_error(signed_txs[idx], detail));
+                        }
+                        let idx = items.get(range_start).map_or(0, |item| item.idx);
+                        return Err(signature_error(signed_txs[idx], err.to_string()));
+                    }
+                    for item in &items[range_start..range_end] {
+                        ed25519_prechecked[item.idx] = true;
+                    }
+                }
+            }
+            let validate_tx = |(idx, (tx, prepared)): (
+                usize,
+                (&SignedTransaction, &PreparedBlockTransaction),
+            )|
+             -> Option<BlockValidationError> {
+                if is_genesis_block {
+                    return AcceptedTransaction::validate_genesis_with_now(
+                        tx,
+                        chain_id,
+                        max_clock_drift,
+                        genesis_account,
+                        crypto_cfg.as_ref(),
+                        block_creation_time,
+                    )
+                    .err()
+                    .map(BlockValidationError::TransactionAccept);
+                }
+
+                let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
+                let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
+                    if crate::tx::is_heartbeat_transaction(tx) {
+                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
-                            genesis_account,
+                            tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
+                            Some(prechecked_signature_result),
+                            &prepared.metadata,
                         )
-                        .err()
-                        .map(BlockValidationError::TransactionAccept);
-                    }
-
-                    let signature_override = if skip_tx_signature_validation {
-                        Some(Ok(()))
                     } else {
-                        match tx.authority().controller() {
-                            AccountController::Single(signatory) => {
-                                let algo = signatory.algorithm();
-                                let skip = (algo == iroha_crypto::Algorithm::Ed25519
-                                    && ed_preverified)
-                                    || (algo == iroha_crypto::Algorithm::Secp256k1
-                                        && secp_preverified)
-                                    || ({
-                                        #[cfg(feature = "bls")]
-                                        {
-                                            matches!(
-                                                algo,
-                                                iroha_crypto::Algorithm::BlsNormal
-                                                    | iroha_crypto::Algorithm::BlsSmall
-                                            ) && bls_preverified
-                                        }
-                                        #[cfg(not(feature = "bls"))]
-                                        {
-                                            false
-                                        }
-                                    })
-                                    || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified);
-                                skip.then_some(Ok(()))
-                            }
-                            AccountController::Multisig(_) => None,
-                        }
-                    };
-
-                    let stateless = if crate::tx::is_heartbeat_transaction(tx) {
-                        match signature_override {
-                        Some(override_result) => {
-                            AcceptedTransaction::validate_heartbeat_with_now_with_signature_result(
+                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            Some(prechecked_signature_result),
+                            &prepared.metadata,
+                        )
+                    }
+                } else if crate::tx::is_heartbeat_transaction(tx) {
+                    if ed25519_prechecked[idx] {
+                        AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                                 tx,
                                 chain_id,
                                 max_clock_drift,
                                 tx_params,
                                 crypto_cfg.as_ref(),
                                 block_creation_time,
-                                Some(override_result),
+                                &prepared.metadata,
                             )
-                        }
-                        None => AcceptedTransaction::validate_heartbeat_with_now(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                        ),
-                    }
                     } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result(
+                        AcceptedTransaction::validate_heartbeat_with_now_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            signature_override,
+                            &prepared.metadata,
                         )
-                    };
-                    stateless.err().map(BlockValidationError::TransactionAccept)
+                    }
+                } else if ed25519_prechecked[idx] {
+                    AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            &prepared.metadata,
+                        )
+                } else {
+                    AcceptedTransaction::validate_with_now_and_prepared_metadata(
+                        tx,
+                        chain_id,
+                        max_clock_drift,
+                        tx_params,
+                        crypto_cfg.as_ref(),
+                        block_creation_time,
+                        &prepared.metadata,
+                    )
                 };
+                stateless.err().map(BlockValidationError::TransactionAccept)
+            };
 
-            let use_parallel = pipeline_cfg.workers != 1 && txs.len() > 1;
+            let use_parallel = pipeline_cfg.workers != 1 && prepared_txs.len() > 1;
             let tx_errors: Vec<Option<BlockValidationError>> = if use_parallel {
-                txs.par_iter().enumerate().map(validate_tx).collect()
+                signed_txs
+                    .par_iter()
+                    .copied()
+                    .zip(prepared_txs.par_iter())
+                    .enumerate()
+                    .map(validate_tx)
+                    .collect()
             } else {
-                txs.iter().enumerate().map(validate_tx).collect()
+                signed_txs
+                    .iter()
+                    .copied()
+                    .zip(prepared_txs.iter())
+                    .enumerate()
+                    .map(validate_tx)
+                    .collect()
             };
             for maybe_err in tx_errors {
                 if let Some(err) = maybe_err {
@@ -6229,8 +5716,8 @@ pub(crate) mod valid {
 
             let mut merkle_tree: MerkleTree<TransactionEntrypoint> =
                 core::iter::empty::<HashOf<TransactionEntrypoint>>().collect();
-            for entry in entrypoints {
-                merkle_tree.add(entry);
+            for hash in entrypoint_hashes {
+                merkle_tree.add(hash);
             }
 
             let expected_merkle_root = merkle_tree.root();
@@ -6270,13 +5757,14 @@ pub(crate) mod valid {
                 false,
                 false,
             )?;
-            let committed_heights = Self::committed_heights_for_block(block, state.transactions());
-            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
+            let prepared_txs = Self::prepare_external_transactions(block);
+            let committed_heights = Self::committed_heights_for_prepared_transactions(
+                &prepared_txs,
+                state.transactions(),
+            );
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let now_ms = block.header().creation_time().as_millis();
-            let mut cached_ok = vec![false; txs_for_cache.len()];
             let cache_context = if cache_enabled {
                 Some(StatelessValidationContext::new(
                     chain_id.clone(),
@@ -6287,16 +5775,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(context) = cache_context.clone() {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
@@ -6307,7 +5785,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
-                cache_enabled.then_some(cached_ok.as_slice()),
+                &prepared_txs,
                 false,
                 metrics,
             )?;
@@ -6315,10 +5793,10 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cached_ok[idx] {
-                        continue;
-                    }
+                for (tx, prepared) in Self::collect_external_signed_transactions(block)
+                    .into_iter()
+                    .zip(prepared_txs.iter())
+                {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -6327,10 +5805,142 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
             Ok(())
+        }
+
+        fn validate_and_record_entrypoints_sequential(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            mut timings: Option<&mut ValidationTimings>,
+            entrypoints: Vec<TransactionEntrypoint>,
+        ) {
+            let to_ms = |duration: Duration| -> u64 {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            };
+            let start = timings.as_ref().map(|_| Instant::now());
+            let n = entrypoints.len();
+            #[allow(clippy::disallowed_types)]
+            let tx_hashes: std::collections::HashSet<_> = entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    HashOf::<SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::from(
+                        entrypoint.hash(),
+                    ))
+                })
+                .collect();
+            let height_u64 = block.header().height().get();
+            let height_usize = height_u64.try_into().expect("block height fits usize");
+            let block_height =
+                std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
+            state_block
+                .transactions
+                .insert_block(tx_hashes, block_height);
+
+            let mut execution_order: Vec<usize> = (0..n).collect();
+            let reveal_positions: Vec<usize> = execution_order
+                .iter()
+                .copied()
+                .filter(|idx| matches!(entrypoints[*idx], TransactionEntrypoint::SealedReveal(_)))
+                .collect();
+            if reveal_positions.len() > 1 {
+                let mut sorted_reveals = reveal_positions.clone();
+                sorted_reveals.sort_by_key(|idx| match &entrypoints[*idx] {
+                    TransactionEntrypoint::SealedReveal(reveal) => {
+                        crate::tx::sealed_reveal_execution_key(state_block, reveal)
+                    }
+                    _ => unreachable!("filtered to sealed reveals"),
+                });
+                for (slot, sorted_idx) in reveal_positions.into_iter().zip(sorted_reveals) {
+                    execution_order[slot] = sorted_idx;
+                }
+            }
+
+            let mut ivm_cache = IvmCache::new();
+            let mut hashes: Vec<Option<HashOf<TransactionEntrypoint>>> = vec![None; n];
+            let mut results: Vec<Option<TransactionResultInner>> = vec![None; n];
+            for idx in execution_order {
+                let entrypoint = entrypoints[idx].clone();
+                let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                    Cow::Owned(entrypoint),
+                );
+                let (hash, result) = state_block.validate_transaction_with_entrypoint_index(
+                    accepted,
+                    &mut ivm_cache,
+                    idx,
+                );
+                hashes[idx] = Some(hash);
+                results[idx] = Some(result);
+            }
+
+            let mut ordered_hashes = Vec::with_capacity(n);
+            let mut ordered_results = Vec::with_capacity(n);
+            for idx in 0..n {
+                ordered_hashes.push(hashes[idx].unwrap_or_else(|| entrypoints[idx].hash()));
+                ordered_results.push(results[idx].take().unwrap_or_else(|| {
+                    Err(TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::InternalError(format!(
+                            "missing transaction result for idx {idx}"
+                        )),
+                    ))
+                }));
+            }
+
+            let (time_trgs, mut time_hashes, mut time_results) =
+                state_block.execute_time_triggers(&block.header());
+            #[cfg(test)]
+            execute_soracloud_mailbox_runtime(state_block);
+            let pruned_sealed_commitments =
+                crate::tx::prune_expired_sealed_commitments(state_block);
+            if pruned_sealed_commitments > 0 {
+                iroha_logger::debug!(
+                    count = pruned_sealed_commitments,
+                    "pruned expired sealed transaction commitments"
+                );
+            }
+            let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
+            let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
+            for entry_hash in &ordered_hashes {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
+            }
+            for entry_hash in &time_hashes {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
+            }
+            ordered_hashes.append(&mut time_hashes);
+            ordered_results.append(&mut time_results);
+
+            let mut tx_set_hashes = ordered_hashes.clone();
+            tx_set_hashes.sort_unstable();
+            let tx_set_hash =
+                crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
+            state_block.set_fastpq_tx_set_hash(tx_set_hash);
+            state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
+
+            let fastpq_transcripts =
+                state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
+            let axt_envelopes = state_block.drain_axt_envelopes();
+            let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            block.set_transaction_results_with_transcripts(
+                time_trgs,
+                ordered_hashes.as_slice(),
+                ordered_results,
+                fastpq_transcripts,
+                axt_envelopes,
+                axt_policy_snapshot,
+            );
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
+                let elapsed = to_ms(start.elapsed());
+                timings.execution_tx_apply_ms = elapsed;
+                timings.execution_tx_apply_sequential_ms = elapsed;
+            }
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
@@ -6339,6 +5949,21 @@ pub(crate) mod valid {
         /// Must be called with a **block that is _assumed_ to be valid**.
         /// When `skip_stateless_checks` is true, signature/limit validation is skipped under the
         /// assumption that the static snapshot validation already passed.
+        fn validate_and_record_transactions(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            timings: Option<&mut ValidationTimings>,
+            skip_stateless_checks: bool,
+        ) {
+            Self::validate_and_record_transactions_with_prepared(
+                block,
+                state_block,
+                timings,
+                skip_stateless_checks,
+                None,
+            );
+        }
+
         #[allow(
             clippy::too_many_lines,
             clippy::explicit_iter_loop,
@@ -6347,11 +5972,12 @@ pub(crate) mod valid {
             clippy::option_as_ref_cloned,
             clippy::needless_option_as_deref
         )]
-        fn validate_and_record_transactions(
+        fn validate_and_record_transactions_with_prepared(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
             timings: Option<&mut ValidationTimings>,
             skip_stateless_checks: bool,
+            prepared_txs: Option<&[PreparedBlockTransaction]>,
         ) {
             use rayon::prelude::*;
 
@@ -6376,10 +6002,43 @@ pub(crate) mod valid {
             // Start a new witness window for this block (SBV‑AM prototype)
             crate::sumeragi::witness::start_block();
 
+            let sequential_entrypoints =
+                block.external_entrypoints_slice().and_then(|entrypoints| {
+                    entrypoints
+                        .iter()
+                        .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
+                        .then(|| entrypoints.to_vec())
+                });
+            if let Some(entrypoints) = sequential_entrypoints {
+                Self::validate_and_record_entrypoints_sequential(
+                    block,
+                    state_block,
+                    timings,
+                    entrypoints,
+                );
+                return;
+            }
+
             // Prepare scheduling: collect transactions, their access sets, and hashes
-            let txs: Vec<&SignedTransaction> = block.external_transactions().collect();
+            let txs = Self::collect_external_signed_transactions(block);
+            let local_prepared_txs;
+            let prepared_txs = match prepared_txs {
+                Some(prepared) if prepared.len() == txs.len() => prepared,
+                _ => {
+                    local_prepared_txs = Self::prepare_external_transactions(block);
+                    &local_prepared_txs
+                }
+            };
+            debug_assert_eq!(
+                prepared_txs.len(),
+                txs.len(),
+                "prepared metadata must align with external transactions"
+            );
             #[allow(clippy::disallowed_types)]
-            let tx_hashes: std::collections::HashSet<_> = txs.iter().map(|tx| tx.hash()).collect();
+            let tx_hashes: std::collections::HashSet<_> = prepared_txs
+                .iter()
+                .map(|prepared| prepared.metadata.signed_hash)
+                .collect();
             let height_u64 = block.header().height().get();
             let height_usize = height_u64.try_into().expect("block height fits usize");
             let block_height =
@@ -6471,8 +6130,8 @@ pub(crate) mod valid {
             let cache_cap = state_block.pipeline.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !is_genesis_block;
             let now_ms = block_creation_time.as_millis();
-            let max_clock_drift_ms = max_clock_drift.as_millis();
             let mut cached_ok = vec![false; txs.len()];
+            let max_clock_drift_ms = max_clock_drift.as_millis();
             let cache_context = if cache_enabled {
                 Some(crate::state::StatelessValidationContext::new(
                     chain_id.clone(),
@@ -6487,8 +6146,8 @@ pub(crate) mod valid {
                 let mut cache = state_block.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(cache_context.clone());
-                for (idx, tx) in txs.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
+                for (idx, prepared) in prepared_txs.iter().enumerate() {
+                    if cache.get_ok(&prepared.metadata.signed_hash, now_ms) {
                         cached_ok[idx] = true;
                     }
                 }
@@ -6563,7 +6222,7 @@ pub(crate) mod valid {
                 }
                 (routing_decisions, routing_errors)
             };
-            let mut signature_overrides: Vec<
+            let mut prechecked_signature_results: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
             let signature_result_for_tx = |tx: &SignedTransaction| {
@@ -6606,17 +6265,17 @@ pub(crate) mod valid {
                         }
                         let (_algo, pk_bytes) = signatory.to_bytes();
                         if pk_bytes.len() != 32 {
-                            signature_overrides[idx] =
+                            prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad signature or key length"));
                             continue;
                         }
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
-                            signature_overrides[idx] =
+                            prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad signature or key length"));
                             continue;
                         }
-                        let h = iroha_crypto::HashOf::new(tx.payload());
+                        let h = prepared_txs[idx].metadata.payload_hash;
                         let mut msg = [0u8; 32];
                         msg.copy_from_slice(h.as_ref());
                         let mut pk = [0u8; 32];
@@ -6672,11 +6331,11 @@ pub(crate) mod valid {
                             let refs: Vec<&EdItem> = batch.iter().collect();
                             if verify_batch_slice(&refs) {
                                 for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in batch {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6709,11 +6368,11 @@ pub(crate) mod valid {
                         let (_algo, pk_bytes) = signatory.to_bytes();
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
-                            signature_overrides[idx] =
+                            prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad secp256k1 signature length"));
                             continue;
                         }
-                        let h = iroha_crypto::HashOf::new(tx.payload());
+                        let h = prepared_txs[idx].metadata.payload_hash;
                         let mut msg = [0u8; 32];
                         msg.copy_from_slice(h.as_ref());
                         let mut sig = [0u8; 64];
@@ -6768,11 +6427,11 @@ pub(crate) mod valid {
                             let refs: Vec<&SecpItem> = batch.iter().collect();
                             if verify_batch_slice(&refs) {
                                 for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in batch {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6803,7 +6462,7 @@ pub(crate) mod valid {
                             continue;
                         }
                         let (_algo, pk_bytes) = signatory.to_bytes();
-                        let h = iroha_crypto::HashOf::new(tx.payload());
+                        let h = prepared_txs[idx].metadata.payload_hash;
                         let mut msg = [0u8; 32];
                         msg.copy_from_slice(h.as_ref());
                         let sig_bytes = tx.signature().payload().payload().to_vec();
@@ -6855,11 +6514,11 @@ pub(crate) mod valid {
                             let refs: Vec<&PqcItem> = batch.iter().collect();
                             if verify_batch_slice(&refs) {
                                 for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in batch {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6902,7 +6561,7 @@ pub(crate) mod valid {
                             iroha_crypto::Algorithm::BlsSmall => true,
                             _ => continue,
                         };
-                        let h = iroha_crypto::HashOf::new(tx.payload());
+                        let h = prepared_txs[idx].metadata.payload_hash;
                         let mut msg = [0u8; 32];
                         msg.copy_from_slice(h.as_ref());
                         let sig_bytes = tx.signature().payload().payload().to_vec();
@@ -6988,11 +6647,11 @@ pub(crate) mod valid {
                             };
                             if ok {
                                 for it in group {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in group {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -7017,11 +6676,11 @@ pub(crate) mod valid {
                             };
                             if ok {
                                 for it in singletons {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in singletons {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -7096,40 +6755,30 @@ pub(crate) mod valid {
                     if skip_stateless_checks {
                         return None;
                     }
-                    let signature_override = signature_overrides
+                    let prechecked_signature_result = prechecked_signature_results
                         .get(idx)
-                        .and_then(|override_result| override_result.as_ref().cloned());
+                        .and_then(|result| result.as_ref().cloned());
                     let stateless = if is_heartbeat {
-                        match signature_override {
-                            Some(override_result) => {
-                                AcceptedTransaction::validate_heartbeat_with_now_with_signature_result(
-                                    tx,
-                                    &chain_id,
-                                    max_clock_drift,
-                                    tx_params,
-                                    crypto_cfg.as_ref(),
-                                    block_creation_time,
-                                    Some(override_result),
-                                )
-                            }
-                            None => AcceptedTransaction::validate_heartbeat_with_now(
-                                tx,
-                                &chain_id,
-                                max_clock_drift,
-                                tx_params,
-                                crypto_cfg.as_ref(),
-                                block_creation_time,
-                            ),
-                        }
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result(
+                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             &chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            signature_override,
+                            prechecked_signature_result,
+                            &prepared_txs[idx].metadata,
+                        )
+                    } else {
+                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
+                            tx,
+                            &chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            prechecked_signature_result,
+                            &prepared_txs[idx].metadata,
                         )
                     };
                     match stateless {
@@ -7161,7 +6810,7 @@ pub(crate) mod valid {
                 cache.set_cap(cache_cap);
                 cache.ensure_context(cache_context);
                 for (idx, tx) in txs.iter().enumerate() {
-                    if cached_ok[idx] || stateless_rejections[idx].is_some() {
+                    if stateless_rejections[idx].is_some() {
                         continue;
                     }
                     let expires_at_ms = tx
@@ -7172,7 +6821,11 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(
+                        prepared_txs[idx].metadata.signed_hash,
+                        expires_at_ms,
+                        not_before_ms,
+                    );
                 }
             }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), stateless_start) {
@@ -7306,7 +6959,10 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), access_start) {
                 timings.execution_tx_access_ms = to_ms(start.elapsed());
             }
-            let call_hashes: Vec<_> = txs.iter().map(|tx| tx.hash_as_entrypoint()).collect();
+            let call_hashes: Vec<_> = prepared_txs
+                .iter()
+                .map(|prepared| prepared.metadata.entrypoint_hash)
+                .collect();
             if debug_trace_scheduler_inputs {
                 let input_hashes: Vec<_> = call_hashes.clone();
                 eprintln!("[scheduler-input] call_hashes={input_hashes:?}");
@@ -7531,11 +7187,11 @@ pub(crate) mod valid {
             // Store a compact Norito sidecar for diagnostics.
             #[allow(unused)]
             {
-                let txs_sidecar: Vec<PipelineTxSnapshot> = txs
+                let txs_sidecar: Vec<PipelineTxSnapshot> = prepared_txs
                     .iter()
                     .zip(access.iter())
-                    .map(|(tx, aset)| PipelineTxSnapshot {
-                        hash: tx.hash_as_entrypoint(),
+                    .map(|(prepared, aset)| PipelineTxSnapshot {
+                        hash: prepared.metadata.entrypoint_hash,
                         reads: aset.read_keys.iter().cloned().collect(),
                         writes: aset.write_keys.iter().cloned().collect(),
                     })
@@ -7764,12 +7420,14 @@ pub(crate) mod valid {
                         .and_modify(|count| *count = count.saturating_add(1))
                         .or_insert(1);
 
-                    let bytes = txs[idx].encode();
-                    summary.rbc_bytes_total =
-                        summary.rbc_bytes_total.saturating_add(bytes.len() as u64);
+                    summary.rbc_bytes_total = summary
+                        .rbc_bytes_total
+                        .saturating_add(prepared_txs[idx].metadata.encoded_len as u64);
 
                     let mut counted_settlement_tx = false;
-                    if let Some(record) = pending_settlements.remove(&txs[idx].hash()) {
+                    if let Some(record) =
+                        pending_settlements.remove(&prepared_txs[idx].metadata.signed_hash)
+                    {
                         let builder = lane_settlement_builders
                             .entry((decision.lane_id, decision.dataspace_id))
                             .or_default();
@@ -7812,7 +7470,9 @@ pub(crate) mod valid {
                         }
                         builder.receipts.push(record.into_lane_receipt());
                     }
-                    if let Some(record) = pending_nexus_fee_receipts.remove(&txs[idx].hash()) {
+                    if let Some(record) =
+                        pending_nexus_fee_receipts.remove(&prepared_txs[idx].metadata.signed_hash)
+                    {
                         let builder = lane_settlement_builders
                             .entry((decision.lane_id, decision.dataspace_id))
                             .or_default();
@@ -7934,8 +7594,8 @@ pub(crate) mod valid {
                     }
 
                     let mut committed_per_lane: BTreeMap<LaneId, u64> = BTreeMap::new();
-                    for tx in &txs {
-                        let hash = tx.hash();
+                    for (idx, tx) in txs.iter().enumerate() {
+                        let hash = prepared_txs[idx].metadata.signed_hash;
                         if let Some(routing) = routing_ledger::get(&hash) {
                             let teu = estimate_transaction_teu(tx);
                             committed_per_lane
@@ -8145,7 +7805,6 @@ pub(crate) mod valid {
                     commit_qc.as_ref(),
                 );
                 attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
-                attach_fastpq_proof_material_to_relays(&mut lane_relay_envelopes);
                 crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
             }
 
@@ -8308,13 +7967,13 @@ pub(crate) mod valid {
                                             ));
                                         }
                                         let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                        if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                        let byte_size = overlay.byte_size() as u64;
+                                        if max_bytes > 0 && byte_size > max_bytes {
                                             return Err((
                                                 idx,
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                        "overlay exceeds max bytes: {} > {max_bytes}",
-                                                        overlay.byte_size()
+                                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                                     )),
                                                 ),
                                             ));
@@ -8356,13 +8015,13 @@ pub(crate) mod valid {
                                         ));
                                     }
                                     let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                    if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                    let byte_size = overlay.byte_size() as u64;
+                                    if max_bytes > 0 && byte_size > max_bytes {
                                         return Err((
                                             idx,
                                             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                 iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                    "overlay exceeds max bytes: {} > {max_bytes}",
-                                                    overlay.byte_size()
+                                                    "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                                 )),
                                             ),
                                         ));
@@ -8396,9 +8055,10 @@ pub(crate) mod valid {
                                 )));
                             }
                             let max_bytes = state_block.pipeline.overlay_max_bytes;
-                            if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                            let byte_size = overlay.byte_size() as u64;
+                            if max_bytes > 0 && byte_size > max_bytes {
                                 return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {} > {max_bytes}", overlay.byte_size())),
+                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {byte_size} > {max_bytes}")),
                                 )));
                             }
                             Ok(PreparedEntry {
@@ -8888,7 +8548,7 @@ pub(crate) mod valid {
                                     summary.detached_fallback.saturating_add(1);
                             }
                             let tx = txs[idx];
-                            let hash = tx.hash_as_entrypoint();
+                            let hash = prepared_txs[idx].metadata.entrypoint_hash;
                             let overlay = match overlays[idx].as_ref() {
                                 Ok(ovl) => Arc::clone(ovl),
                                 Err(err) => {
@@ -8921,13 +8581,12 @@ pub(crate) mod valid {
                                 ));
                             }
                             let max_bytes = state_block_mut.pipeline.overlay_max_bytes;
-                            if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                            let byte_size = overlay.byte_size() as u64;
+                            if max_bytes > 0 && byte_size > max_bytes {
                                 record_amx_abort(state_block_mut, idx, "prepare");
                                 return Err(TransactionRejectionReason::Validation(
                                     iroha_data_model::ValidationFail::NotPermitted(format!(
-                                        "overlay exceeds max bytes: {} > {}",
-                                        overlay.byte_size(),
-                                        max_bytes
+                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                     )),
                                 ));
                             }
@@ -8941,7 +8600,7 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            state_tx.current_tx_hash = Some(tx.hash());
+                            state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
                             if missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -8955,6 +8614,11 @@ pub(crate) mod valid {
                                     ),
                                 ));
                             }
+                            let admission = validate_block_transaction_admission(
+                                &mut state_tx,
+                                tx,
+                                routing_decisions[idx],
+                            )?;
                             let executor = state_tx.world.executor.clone();
                             if let Err(err) = configure_executor_fuel_budget(
                                 &executor,
@@ -9011,6 +8675,10 @@ pub(crate) mod valid {
                                                 }
                                             }
                                             Ok(trigger_sequence) => {
+                                                commit_stateful_admission_sequence(
+                                                    &mut state_tx,
+                                                    &admission,
+                                                );
                                                 state_tx.apply();
                                                 Ok(trigger_sequence)
                                             }
@@ -9079,7 +8747,7 @@ pub(crate) mod valid {
                                 if missing_authority {
                                     record_amx_abort(state_block, p.idx, "commit");
                                     let tx = txs[p.idx];
-                                    let hash = tx.hash_as_entrypoint();
+                                    let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
                                     record_result(
                                         p.idx,
                                         Err(TransactionRejectionReason::AccountDoesNotExist(
@@ -9098,9 +8766,45 @@ pub(crate) mod valid {
                                     continue;
                                 }
                                 let tx = txs[p.idx];
-                                let hash = tx.hash_as_entrypoint();
+                                let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
+                                let admission_result = {
+                                    let mut state_tx = state_block.transaction();
+                                    state_tx.current_lane_id =
+                                        Some(routing_decisions[p.idx].lane_id);
+                                    state_tx.current_dataspace_id =
+                                        Some(routing_decisions[p.idx].dataspace_id);
+                                    state_tx.world.current_dataspace_id =
+                                        Some(routing_decisions[p.idx].dataspace_id);
+                                    state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                                    state_tx.current_tx_hash =
+                                        Some(prepared_txs[p.idx].metadata.signed_hash);
+                                    validate_block_transaction_admission(
+                                        &mut state_tx,
+                                        tx,
+                                        routing_decisions[p.idx],
+                                    )
+                                };
+                                let admission = match admission_result {
+                                    Ok(admission) => admission,
+                                    Err(reason) => {
+                                        record_amx_abort(state_block, p.idx, "commit");
+                                        record_result(p.idx, Err(reason));
+                                        if debug_trace_tx_eval {
+                                            let ts = tx.creation_time().as_millis();
+                                            eprintln!(
+                                                "[core-eval] reject(admission) hash={} ts={} auth={}",
+                                                hash, ts, p.authority,
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                };
                                 match delta.merge_into(state_block, &p.authority) {
                                     Ok(trigger_sequence) => {
+                                        commit_stateful_admission_sequence_to_block(
+                                            state_block,
+                                            &admission,
+                                        );
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
                                         let summary = lane_summaries.entry(lane_id).or_default();
@@ -9145,7 +8849,7 @@ pub(crate) mod valid {
                                     }
                                     other => {
                                         let tx = txs[p.idx];
-                                        let hash = tx.hash_as_entrypoint();
+                                        let hash = prepared_txs[p.idx].metadata.entrypoint_hash;
                                         record_result(p.idx, Err(other));
                                         if debug_trace_tx_eval {
                                             let ts = tx.creation_time().as_millis();
@@ -9197,7 +8901,7 @@ pub(crate) mod valid {
                             continue;
                         }
                         let tx = txs[idx];
-                        let hash = tx.hash_as_entrypoint();
+                        let hash = prepared_txs[idx].metadata.entrypoint_hash;
                         if let Some(reason) = stateless_rejections[idx].take() {
                             record_result(idx, Err(reason));
                             continue;
@@ -9232,14 +8936,14 @@ pub(crate) mod valid {
                             continue;
                         }
                         let max_bytes = state_block.pipeline.overlay_max_bytes;
-                        if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                        let byte_size = overlay.byte_size() as u64;
+                        if max_bytes > 0 && byte_size > max_bytes {
                             record_result(
                                 idx,
                                 Err(
                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                         iroha_data_model::ValidationFail::NotPermitted(format!(
-                                            "overlay exceeds max bytes: {} > {}",
-                                            overlay.byte_size(), max_bytes
+                                            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                         )),
                                     ),
                                 ),
@@ -9256,7 +8960,7 @@ pub(crate) mod valid {
                             state_tx.world.current_dataspace_id =
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            state_tx.current_tx_hash = Some(tx.hash());
+                            state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
                             let missing_authority = missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -9271,73 +8975,89 @@ pub(crate) mod valid {
                                     ),
                                 )
                             } else {
-                                let executor = state_tx.world.executor.clone();
-                                if let Err(err) = configure_executor_fuel_budget(
-                                    &executor,
+                                let admission = validate_block_transaction_admission(
                                     &mut state_tx,
-                                    tx.metadata(),
-                                ) {
-                                    Err(
-                                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                            err,
-                                        ),
-                                    )
+                                    tx,
+                                    routing_decisions[idx],
+                                );
+                                if let Err(reason) = admission {
+                                    Err(reason)
                                 } else {
-                                    match overlay.apply_with_chunk(
+                                    let admission =
+                                        admission.expect("admission result checked above");
+                                    let executor = state_tx.world.executor.clone();
+                                    if let Err(err) = configure_executor_fuel_budget(
+                                        &executor,
                                         &mut state_tx,
-                                        &authority,
-                                        chunk_size,
+                                        tx.metadata(),
                                     ) {
-                                        Err(e) => {
-                                            let rejection_reason =
-                                                TransactionRejectionReason::Validation(e);
-                                            drop(state_tx);
-                                            match charge_rejected_overlay_fees(
-                                                state_block,
-                                                tx,
-                                                &authority,
-                                                overlay.as_ref(),
-                                                routing_decisions[idx].lane_id,
-                                                routing_decisions[idx].dataspace_id,
-                                                &rejection_reason,
-                                            ) {
-                                                Ok(()) => Err(rejection_reason),
-                                                Err(err) => Err(err),
+                                        Err(
+                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                err,
+                                            ),
+                                        )
+                                    } else {
+                                        match overlay.apply_with_chunk(
+                                            &mut state_tx,
+                                            &authority,
+                                            chunk_size,
+                                        ) {
+                                            Err(e) => {
+                                                let rejection_reason =
+                                                    TransactionRejectionReason::Validation(e);
+                                                drop(state_tx);
+                                                match charge_rejected_overlay_fees(
+                                                    state_block,
+                                                    tx,
+                                                    &authority,
+                                                    overlay.as_ref(),
+                                                    routing_decisions[idx].lane_id,
+                                                    routing_decisions[idx].dataspace_id,
+                                                    &rejection_reason,
+                                                ) {
+                                                    Ok(()) => Err(rejection_reason),
+                                                    Err(err) => Err(err),
+                                                }
                                             }
-                                        }
-                                        Ok(()) => {
-                                            if let Err(err) = charge_fees_for_applied_overlay(
-                                                &mut state_tx,
-                                                &authority,
-                                                tx,
-                                                overlay.as_ref(),
-                                            ) {
-                                                Err(
+                                            Ok(()) => {
+                                                if let Err(err) = charge_fees_for_applied_overlay(
+                                                    &mut state_tx,
+                                                    &authority,
+                                                    tx,
+                                                    overlay.as_ref(),
+                                                ) {
+                                                    Err(
                                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                         err,
                                                     ),
                                                 )
-                                            } else {
-                                                match state_tx.execute_data_triggers_dfs(&authority)
-                                                {
-                                                    Err(err) => {
-                                                        drop(state_tx);
-                                                        match charge_rejected_overlay_fees(
-                                                            state_block,
-                                                            tx,
-                                                            &authority,
-                                                            overlay.as_ref(),
-                                                            routing_decisions[idx].lane_id,
-                                                            routing_decisions[idx].dataspace_id,
-                                                            &err,
-                                                        ) {
-                                                            Ok(()) => Err(err),
-                                                            Err(fee_err) => Err(fee_err),
+                                                } else {
+                                                    match state_tx
+                                                        .execute_data_triggers_dfs(&authority)
+                                                    {
+                                                        Err(err) => {
+                                                            drop(state_tx);
+                                                            match charge_rejected_overlay_fees(
+                                                                state_block,
+                                                                tx,
+                                                                &authority,
+                                                                overlay.as_ref(),
+                                                                routing_decisions[idx].lane_id,
+                                                                routing_decisions[idx].dataspace_id,
+                                                                &err,
+                                                            ) {
+                                                                Ok(()) => Err(err),
+                                                                Err(fee_err) => Err(fee_err),
+                                                            }
                                                         }
-                                                    }
-                                                    Ok(trigger_sequence) => {
-                                                        state_tx.apply();
-                                                        Ok(trigger_sequence)
+                                                        Ok(trigger_sequence) => {
+                                                            commit_stateful_admission_sequence(
+                                                                &mut state_tx,
+                                                                &admission,
+                                                            );
+                                                            state_tx.apply();
+                                                            Ok(trigger_sequence)
+                                                        }
                                                     }
                                                 }
                                             }
@@ -9382,7 +9102,7 @@ pub(crate) mod valid {
                 let seq_start = timings.as_ref().map(|_| Instant::now());
                 for &idx in &order {
                     let tx = txs[idx];
-                    let hash = tx.hash_as_entrypoint();
+                    let hash = prepared_txs[idx].metadata.entrypoint_hash;
                     if let Some(reason) = stateless_rejections[idx].take() {
                         record_result(idx, Err(reason));
                         continue;
@@ -9413,15 +9133,15 @@ pub(crate) mod valid {
                         continue;
                     }
                     let max_bytes = state_block.pipeline.overlay_max_bytes;
-                    if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                    let byte_size = overlay.byte_size() as u64;
+                    if max_bytes > 0 && byte_size > max_bytes {
                         record_amx_abort(state_block, idx, "prepare");
                         record_result(
                             idx,
                             Err(
                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                     iroha_data_model::ValidationFail::NotPermitted(format!(
-                                        "overlay exceeds max bytes: {} > {}",
-                                        overlay.byte_size(), max_bytes
+                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                     )),
                                 ),
                             ),
@@ -9437,7 +9157,7 @@ pub(crate) mod valid {
                         state_tx.world.current_dataspace_id =
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                        state_tx.current_tx_hash = Some(tx.hash());
+                        state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
                         let missing_authority = missing_authority_requires_rejection(
                             &state_tx,
                             tx,
@@ -9452,72 +9172,87 @@ pub(crate) mod valid {
                                 ),
                             )
                         } else {
-                            let executor = state_tx.world.executor.clone();
-                            if let Err(err) = configure_executor_fuel_budget(
-                                &executor,
+                            let admission = validate_block_transaction_admission(
                                 &mut state_tx,
-                                tx.metadata(),
-                            ) {
-                                Err(
-                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                        err,
-                                    ),
-                                )
+                                tx,
+                                routing_decisions[idx],
+                            );
+                            if let Err(reason) = admission {
+                                Err(reason)
                             } else {
-                                match overlay.apply_with_chunk(
+                                let admission = admission.expect("admission result checked above");
+                                let executor = state_tx.world.executor.clone();
+                                if let Err(err) = configure_executor_fuel_budget(
+                                    &executor,
                                     &mut state_tx,
-                                    &authority,
-                                    chunk_size,
+                                    tx.metadata(),
                                 ) {
-                                    Err(e) => {
-                                        let rejection_reason =
-                                            TransactionRejectionReason::Validation(e);
-                                        drop(state_tx);
-                                        match charge_rejected_overlay_fees(
-                                            state_block,
-                                            tx,
-                                            &authority,
-                                            overlay.as_ref(),
-                                            routing_decisions[idx].lane_id,
-                                            routing_decisions[idx].dataspace_id,
-                                            &rejection_reason,
-                                        ) {
-                                            Ok(()) => Err(rejection_reason),
-                                            Err(err) => Err(err),
+                                    Err(
+                                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                            err,
+                                        ),
+                                    )
+                                } else {
+                                    match overlay.apply_with_chunk(
+                                        &mut state_tx,
+                                        &authority,
+                                        chunk_size,
+                                    ) {
+                                        Err(e) => {
+                                            let rejection_reason =
+                                                TransactionRejectionReason::Validation(e);
+                                            drop(state_tx);
+                                            match charge_rejected_overlay_fees(
+                                                state_block,
+                                                tx,
+                                                &authority,
+                                                overlay.as_ref(),
+                                                routing_decisions[idx].lane_id,
+                                                routing_decisions[idx].dataspace_id,
+                                                &rejection_reason,
+                                            ) {
+                                                Ok(()) => Err(rejection_reason),
+                                                Err(err) => Err(err),
+                                            }
                                         }
-                                    }
-                                    Ok(()) => {
-                                        if let Err(err) = charge_fees_for_applied_overlay(
-                                            &mut state_tx,
-                                            &authority,
-                                            tx,
-                                            overlay.as_ref(),
-                                        ) {
-                                            Err(
+                                        Ok(()) => {
+                                            if let Err(err) = charge_fees_for_applied_overlay(
+                                                &mut state_tx,
+                                                &authority,
+                                                tx,
+                                                overlay.as_ref(),
+                                            ) {
+                                                Err(
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     err,
                                                 ),
                                             )
-                                        } else {
-                                            match state_tx.execute_data_triggers_dfs(&authority) {
-                                                Err(err) => {
-                                                    drop(state_tx);
-                                                    match charge_rejected_overlay_fees(
-                                                        state_block,
-                                                        tx,
-                                                        &authority,
-                                                        overlay.as_ref(),
-                                                        routing_decisions[idx].lane_id,
-                                                        routing_decisions[idx].dataspace_id,
-                                                        &err,
-                                                    ) {
-                                                        Ok(()) => Err(err),
-                                                        Err(fee_err) => Err(fee_err),
+                                            } else {
+                                                match state_tx.execute_data_triggers_dfs(&authority)
+                                                {
+                                                    Err(err) => {
+                                                        drop(state_tx);
+                                                        match charge_rejected_overlay_fees(
+                                                            state_block,
+                                                            tx,
+                                                            &authority,
+                                                            overlay.as_ref(),
+                                                            routing_decisions[idx].lane_id,
+                                                            routing_decisions[idx].dataspace_id,
+                                                            &err,
+                                                        ) {
+                                                            Ok(()) => Err(err),
+                                                            Err(fee_err) => Err(fee_err),
+                                                        }
                                                     }
-                                                }
-                                                Ok(trigger_sequence) => {
-                                                    state_tx.apply();
-                                                    Ok(trigger_sequence)
+                                                    Ok(trigger_sequence) => {
+                                                        commit_stateful_admission_sequence(
+                                                            &mut state_tx,
+                                                            &admission,
+                                                        );
+                                                        state_tx.apply();
+                                                        Ok(trigger_sequence)
+                                                    }
                                                 }
                                             }
                                         }
@@ -9750,8 +9485,18 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
                 timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
             }
+            #[cfg(test)]
             execute_soracloud_mailbox_runtime(state_block);
+            let pruned_sealed_commitments =
+                crate::tx::prune_expired_sealed_commitments(state_block);
+            if pruned_sealed_commitments > 0 {
+                iroha_logger::debug!(
+                    count = pruned_sealed_commitments,
+                    "pruned expired sealed transaction commitments"
+                );
+            }
             let finalize_start = timings.as_ref().map(|_| Instant::now());
+            let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
             for (idx, entry_hash) in call_hashes.iter().enumerate() {
                 fastpq_entry_dataspaces.insert(
@@ -9775,7 +9520,8 @@ pub(crate) mod valid {
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
 
-            let fastpq_transcripts = state_block.drain_transfer_transcripts();
+            let fastpq_transcripts =
+                state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
             block.set_transaction_results_with_transcripts(
@@ -10176,6 +9922,7 @@ pub(crate) mod valid {
                 types::{BlobDigest, StorageTicketId},
             },
             isi::{Log, error::Mismatch},
+            metadata::Metadata,
             nexus::LaneId,
             parameter::Parameters,
             prelude::{Account, Domain, PeerId},
@@ -11422,9 +11169,13 @@ pub(crate) mod valid {
                 )
                 .expect("static state-dependent validation should succeed")
             };
+            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+                ValidBlock::committed_heights_for_prepared_transactions(
+                    &prepared_txs,
+                    &transactions_view,
+                )
             };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
@@ -11436,7 +11187,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
-                None,
+                &prepared_txs,
                 false,
                 metrics,
             )
@@ -11500,9 +11251,13 @@ pub(crate) mod valid {
                 )
                 .expect("static state-dependent validation should succeed")
             };
+            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+                ValidBlock::committed_heights_for_prepared_transactions(
+                    &prepared_txs,
+                    &transactions_view,
+                )
             };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
@@ -11515,7 +11270,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
-                None,
+                &prepared_txs,
                 false,
                 metrics,
             )
@@ -11570,7 +11325,7 @@ pub(crate) mod valid {
 
             let err = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
+                match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
                     &state.chain_id,
@@ -11580,8 +11335,10 @@ pub(crate) mod valid {
                     &time_source,
                     false,
                     false,
-                )
-                .expect_err("live block without execution context must be rejected")
+                ) {
+                    Ok(_) => panic!("live block without execution context must be rejected"),
+                    Err(err) => err,
+                }
             };
             assert!(matches!(
                 err,
@@ -11638,7 +11395,7 @@ pub(crate) mod valid {
 
             let err = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
+                match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
                     &state.chain_id,
@@ -11648,8 +11405,12 @@ pub(crate) mod valid {
                     &time_source,
                     false,
                     false,
-                )
-                .expect_err("live block with mismatched execution context must be rejected")
+                ) {
+                    Ok(_) => {
+                        panic!("live block with mismatched execution context must be rejected")
+                    }
+                    Err(err) => err,
+                }
             };
             assert!(matches!(
                 err,
@@ -12795,7 +12556,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = ValidBlock::validate_keep_voting_block(
@@ -12814,10 +12574,146 @@ pub(crate) mod valid {
                 "validation should succeed and warm stateless cache"
             );
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation should populate stateless cache",
+            );
+        }
+
+        #[test]
+        fn block_validation_rejects_invalid_signature_despite_warmed_stateless_cache() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::new(), Arc::clone(&kura), query);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("cache-signature-test");
+            let (other_authority, _) = gen_account_in("cache-signature-test");
+            let valid_tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+            .sign(signer.private_key());
+
+            let valid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(valid_tx.clone()));
+            let (_valid_block_handle, valid_block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let valid_block =
+                BlockBuilder::new_with_time_source(vec![valid_accepted], valid_block_time_source)
+                    .chain(0, state.view().latest_block().as_deref())
+                    .sign(&leader_private)
+                    .unpack(|_| {});
+            let valid_signed_block: SignedBlock = valid_block.into();
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            ValidBlock::validate_keep_voting_block(
+                valid_signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {})
+            .expect("valid block should warm stateless cache");
+
+            let invalid_tx = valid_tx.with_authority(other_authority);
+            let invalid_hash = invalid_tx.hash();
+            let invalid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx));
+            let (_invalid_block_handle, invalid_block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(20));
+            let invalid_block = BlockBuilder::new_with_time_source(
+                vec![invalid_accepted],
+                invalid_block_time_source,
+            )
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(&leader_private)
+            .unpack(|_| {});
+            let invalid_signed_block: SignedBlock = invalid_block.into();
+
+            {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.insert_ok(invalid_hash.clone(), None, 0);
+                assert!(
+                    cache.contains_key(&invalid_hash),
+                    "test setup should present the invalid transaction as cache-warmed",
+                );
+            }
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let result = ValidBlock::validate_keep_voting_block(
+                invalid_signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+            let Err(err) = result else {
+                panic!("invalid transaction signature must reject the block");
+            };
+
+            assert!(matches!(
+                *err.1,
+                BlockValidationError::TransactionAccept(
+                    AcceptTransactionFail::SignatureVerification(_)
+                )
+            ));
+        }
+
+        #[test]
+        fn transaction_signature_validation_has_no_bypass_terms() {
+            let needles = [
+                ["signature", "_", "override"].concat(),
+                ["signature", "_", "overrides"].concat(),
+                ["skip", "_tx", "_signature", "_validation"].concat(),
+            ];
+            let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+            let mut pending = vec![src.clone()];
+            let mut hits = Vec::new();
+
+            while let Some(path) = pending.pop() {
+                let metadata = std::fs::metadata(&path).expect("source path metadata");
+                if metadata.is_dir() {
+                    for entry in std::fs::read_dir(&path).expect("source directory readable") {
+                        pending.push(entry.expect("source directory entry").path());
+                    }
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                    continue;
+                }
+
+                let source = std::fs::read_to_string(&path).expect("Rust source readable");
+                for needle in &needles {
+                    if source.contains(needle) {
+                        let relative = path.strip_prefix(&src).unwrap_or(&path);
+                        hits.push(format!("{} contains {needle}", relative.display()));
+                    }
+                }
+            }
+
+            assert!(
+                hits.is_empty(),
+                "forbidden source terms:\n{}",
+                hits.join("\n")
             );
         }
 
@@ -12857,7 +12753,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
@@ -12879,9 +12774,9 @@ pub(crate) mod valid {
             );
             assert!(events.is_empty(), "no rejection events expected");
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation with events should populate stateless cache",
             );
         }
@@ -12922,7 +12817,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut state_block = state.block(signed_block.header());
             let result = ValidBlock::validate(
@@ -12937,9 +12831,9 @@ pub(crate) mod valid {
             assert!(result.is_ok(), "validation should warm stateless cache");
             drop(state_block);
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation should populate stateless cache",
             );
         }
@@ -12980,7 +12874,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut state_block = state.block(signed_block.header());
             let events = std::cell::RefCell::new(Vec::new());
@@ -13001,9 +12894,9 @@ pub(crate) mod valid {
             assert!(events.borrow().is_empty(), "no rejection events expected");
             drop(state_block);
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation with events should populate stateless cache",
             );
         }
@@ -13416,6 +13309,103 @@ mod commit {
             }
         }
 
+        fn proof_blob_for(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+        ) -> ProofBlob {
+            proof_blob_for_with_amount(dsid, manifest_root, proof_seed, expiry_slot, None, None)
+        }
+
+        fn proof_blob_for_with_amount(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+            committed_amount: Option<u128>,
+            amount_commitment: Option<[u8; 32]>,
+        ) -> ProofBlob {
+            let source_tx_commitment = test_digest(b"axt-block-test:source-tx", &[proof_seed]);
+            let claim_digest = test_digest(b"axt-block-test:claim", &[proof_seed]);
+            let witness_commitment = test_digest(b"axt-block-test:witness", &[proof_seed]);
+            let policy_commitment = test_digest(b"axt-block-test:policy", &[&manifest_root[..]]);
+            let binding = iroha_data_model::nexus::AxtFastpqBinding {
+                parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+                source_dsid: dsid.as_u64(),
+                source_dataspace: format!("test-dataspace-{}", dsid.as_u64()),
+                source_receipt_id: format!(
+                    "receipt-{}",
+                    hex::encode(source_tx_commitment.as_ref())
+                ),
+                source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+                claim_type: "authorization".to_owned(),
+                claim_digest: hex::encode(claim_digest.as_ref()),
+                witness_commitment: hex::encode(witness_commitment.as_ref()),
+                policy_commitment: hex::encode(policy_commitment.as_ref()),
+                verified_effect_type: "test_effect".to_owned(),
+                corridor: "test-corridor".to_owned(),
+                verifier_id: "fastpq".to_owned(),
+                verifier_version: "v1".to_owned(),
+                target_dsids: vec![dsid.as_u64()],
+                effect_binding: None,
+            };
+
+            let mut dsid_bytes = [0_u8; 16];
+            dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+            let mut batch = fastpq_prover::TransitionBatch::new(
+                fastpq_prover::AXT_DEFAULT_PARAMETER,
+                fastpq_prover::PublicInputs {
+                    dsid: dsid_bytes,
+                    slot: expiry_slot,
+                    old_root: test_digest(b"axt-block-test:old-root", &[proof_seed]).into(),
+                    new_root: manifest_root,
+                    perm_root: test_digest(b"axt-block-test:perm-root", &[proof_seed]).into(),
+                    tx_set_hash: test_digest(b"axt-block-test:tx-set", &[proof_seed]).into(),
+                },
+            );
+            batch.push(fastpq_prover::StateTransition::new(
+                b"axt/block/proof".to_vec(),
+                proof_seed.to_vec(),
+                manifest_root.to_vec(),
+                fastpq_prover::OperationKind::MetaSet,
+            ));
+            batch.sort();
+            batch.metadata.insert(
+                "entry_hash".to_owned(),
+                source_tx_commitment.as_ref().to_vec(),
+            );
+            fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT test batch");
+            let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+                .expect("FASTPQ prover")
+                .prove(&batch)
+                .expect("FASTPQ proof");
+            let fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof)
+                .expect("AXT FASTPQ payload");
+            let envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root,
+                da_commitment: None,
+                proof: fastpq_payload,
+                fastpq_binding: Some(binding),
+                committed_amount,
+                amount_commitment,
+            };
+            ProofBlob {
+                payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+                expiry_slot: Some(expiry_slot),
+            }
+        }
+
+        fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+            let mut payload = Vec::new();
+            payload.extend_from_slice(domain);
+            for part in parts {
+                payload.extend_from_slice(part);
+            }
+            iroha_crypto::Hash::new(payload)
+        }
+
         fn build_block_with_envelopes(
             envelope: AxtEnvelopeRecord,
             snapshot: AxtPolicySnapshot,
@@ -13518,10 +13508,12 @@ mod commit {
                         amount: "5".to_owned(),
                     },
                 },
-                proof: Some(ProofBlob {
-                    payload: policy.manifest_root.to_vec(),
-                    expiry_slot: Some(50),
-                }),
+                proof: Some(proof_blob_for(
+                    dsid,
+                    policy.manifest_root,
+                    b"handle-clock-skew",
+                    50,
+                )),
                 amount: 5,
                 amount_commitment: None,
             };
@@ -13584,10 +13576,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"duplicate-handle", 12),
                 }],
                 handles: vec![handle.clone(), handle],
                 commit_height: Some(1),
@@ -13642,17 +13631,11 @@ mod commit {
                 proofs: vec![
                     AxtProofFragment {
                         dsid: dsid_a,
-                        proof: ProofBlob {
-                            payload: policy_a.manifest_root.to_vec(),
-                            expiry_slot: Some(25),
-                        },
+                        proof: proof_blob_for(dsid_a, policy_a.manifest_root, b"cross-lane-a", 25),
                     },
                     AxtProofFragment {
                         dsid: dsid_b,
-                        proof: ProofBlob {
-                            payload: policy_b.manifest_root.to_vec(),
-                            expiry_slot: Some(25),
-                        },
+                        proof: proof_blob_for(dsid_b, policy_b.manifest_root, b"cross-lane-b", 25),
                     },
                 ],
                 handles: vec![
@@ -13709,10 +13692,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"amount-mismatch", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13765,10 +13745,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"missing-touch", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13815,10 +13792,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"handle-without-touch", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13871,10 +13845,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"touch-prefix", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13924,10 +13895,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"descriptor-binding", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13974,17 +13942,11 @@ mod commit {
             let proofs = vec![
                 AxtProofFragment {
                     dsid: dsid_a,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid_a, policy.manifest_root, b"cross-dsid-a", 12),
                 },
                 AxtProofFragment {
                     dsid: dsid_b,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid_b, policy.manifest_root, b"cross-dsid-b", 12),
                 },
             ];
 
@@ -14042,10 +14004,7 @@ mod commit {
 
             let proof = AxtProofFragment {
                 dsid,
-                proof: ProofBlob {
-                    payload: policy.manifest_root.to_vec(),
-                    expiry_slot: Some(15),
-                },
+                proof: proof_blob_for(dsid, policy.manifest_root, b"overspend-subnonce", 15),
             };
 
             let envelope = AxtEnvelopeRecord {
@@ -14105,6 +14064,50 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_rejects_raw_manifest_root_proof() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(21);
+            let lane = LaneId::new(8);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x44; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 2,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: Vec::new(),
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Proof, "not an AXT proof envelope");
+        }
+
+        #[test]
         fn axt_validation_rejects_expired_proof() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -14133,10 +14136,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(4),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"expired-proof", 4),
                 }],
                 handles: Vec::new(),
                 commit_height: Some(1),
@@ -14181,10 +14181,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(0),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"zero-proof-expiry", 0),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -14220,10 +14217,12 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.proof = Some(ProofBlob {
-                payload: policy.manifest_root.to_vec(),
-                expiry_slot: Some(8),
-            });
+            handle.proof = Some(proof_blob_for(
+                dsid,
+                policy.manifest_root,
+                b"proof-before-handle",
+                8,
+            ));
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -14263,6 +14262,15 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 8, policy.manifest_root);
+            let mismatched_envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root: [0x99; 32],
+                da_commitment: None,
+                proof: vec![0xAA],
+                fastpq_binding: None,
+                committed_amount: None,
+                amount_commitment: None,
+            };
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -14271,7 +14279,8 @@ mod commit {
                 proofs: vec![AxtProofFragment {
                     dsid,
                     proof: ProofBlob {
-                        payload: [0x99; 32].to_vec(),
+                        payload: norito::to_bytes(&mismatched_envelope)
+                            .expect("encode mismatched envelope"),
                         expiry_slot: Some(12),
                     },
                 }],
@@ -14375,10 +14384,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"budget-block", 10),
                 }],
                 handles: vec![handle_one, handle_two],
                 commit_height: Some(1),
@@ -14420,10 +14426,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"handle-era", 10),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -14469,10 +14472,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"zero-handle-expiry", 10),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -14607,10 +14607,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(8),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"zero-root-handle", 8),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -14657,10 +14654,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(9),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"snapshot-fallback", 9),
                 }],
                 handles: vec![handle],
                 commit_height: Some(2),
@@ -14711,10 +14705,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid: dsid_b,
-                    proof: ProofBlob {
-                        payload: policy_b.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid_b, policy_b.manifest_root, b"policy-slot-dsid", 10),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -14760,10 +14751,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: manifest_root.to_vec(),
-                        expiry_slot: Some(15),
-                    },
+                    proof: proof_blob_for(dsid, manifest_root, b"missing-policy-snapshot", 15),
                 }],
                 handles: vec![handle],
                 commit_height: Some(3),
@@ -14878,18 +14866,16 @@ mod commit {
                 }],
             };
             let binding = binding_for_descriptor(&descriptor);
-            let proof_envelope = AxtProofEnvelope {
+            let proof = proof_blob_for_with_amount(
                 dsid,
-                manifest_root: policy.manifest_root,
-                da_commitment: None,
-                proof: vec![0xAB],
-                fastpq_binding: None,
-                committed_amount: Some(5),
-                amount_commitment: None,
-            };
-            let proof_payload = norito::to_bytes(&proof_envelope).expect("encode proof envelope");
+                policy.manifest_root,
+                b"hidden-amount",
+                9,
+                Some(5),
+                None,
+            );
             let expected_commitment =
-                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof_payload.as_slice()));
+                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof.payload.as_slice()));
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
             handle.intent.op.amount = "hidden".to_owned();
@@ -14907,13 +14893,7 @@ mod commit {
                         write: Vec::new(),
                     },
                 }],
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: proof_payload,
-                        expiry_slot: Some(9),
-                    },
-                }],
+                proofs: vec![AxtProofFragment { dsid, proof }],
                 handles: vec![handle],
                 commit_height: Some(1),
             };
@@ -14949,16 +14929,14 @@ mod commit {
                 }],
             };
             let binding = binding_for_descriptor(&descriptor);
-            let proof_envelope = AxtProofEnvelope {
+            let proof = proof_blob_for_with_amount(
                 dsid,
-                manifest_root: policy.manifest_root,
-                da_commitment: None,
-                proof: vec![0xCD],
-                fastpq_binding: None,
-                committed_amount: Some(5),
-                amount_commitment: None,
-            };
-            let proof_payload = norito::to_bytes(&proof_envelope).expect("encode proof envelope");
+                policy.manifest_root,
+                b"hidden-amount-mismatch",
+                9,
+                Some(5),
+                None,
+            );
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
             handle.intent.op.amount = "hidden".to_owned();
@@ -14976,13 +14954,7 @@ mod commit {
                         write: Vec::new(),
                     },
                 }],
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: proof_payload,
-                        expiry_slot: Some(9),
-                    },
-                }],
+                proofs: vec![AxtProofFragment { dsid, proof }],
                 handles: vec![handle],
                 commit_height: Some(1),
             };
@@ -15677,9 +15649,15 @@ mod tests {
     use core::time::Duration;
     use std::{borrow::Cow, num::NonZeroU64};
 
-    use iroha_data_model::{errors::AmxStage, prelude::*};
+    use iroha_data_model::{
+        errors::AmxStage,
+        prelude::*,
+        transaction::signed::{
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+        },
+    };
     use iroha_genesis::GENESIS_DOMAIN_ID;
-    #[cfg(feature = "bls")]
     use iroha_primitives::json::Json;
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
@@ -15753,25 +15731,6 @@ mod tests {
         kura.store_block(committed.clone())
             .expect("store committed block");
         committed.as_ref().hash()
-    }
-
-    #[test]
-    #[cfg(feature = "bls")]
-    fn bls_pop_metadata_extracts_hex_string() {
-        let mut metadata = Metadata::default();
-        let key: iroha_data_model::name::Name = "bls_pop".parse().expect("valid name");
-        metadata.insert(key.clone(), Json::new("A1B2"));
-        let out = bls_pop_from_metadata(&metadata, &key).expect("pop should parse");
-        assert_eq!(out, hex::decode("A1B2").unwrap());
-    }
-
-    #[test]
-    #[cfg(feature = "bls")]
-    fn bls_pop_metadata_rejects_non_string() {
-        let mut metadata = Metadata::default();
-        let key: iroha_data_model::name::Name = "bls_pop".parse().expect("valid name");
-        metadata.insert(key.clone(), Json::new(123u64));
-        assert!(bls_pop_from_metadata(&metadata, &key).is_none());
     }
 
     #[test]
@@ -16083,9 +16042,12 @@ mod tests {
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
             core::iter::once((dataspace_id, manifest_root)).collect();
         attach_manifest_roots_to_relays(&mut envelopes, &manifest_roots);
-        attach_fastpq_proof_material_to_relays(&mut envelopes);
 
         assert_eq!(envelopes.len(), 1);
+        envelopes[0].fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
+            proof_digest: Hash::new(b"test-fastpq-proof"),
+            verified_at_height: envelopes[0].block_height,
+        });
         assert_eq!(envelopes[0].manifest_root, Some(manifest_root));
         assert!(envelopes[0].fastpq_proof.is_some());
         envelopes[0]
@@ -16158,6 +16120,352 @@ mod tests {
         let vb2 = ValidBlock::validate_unchecked(new_block2.into(), &mut sb2).unpack(|_| {});
         let cb2 = vb2.commit_unchecked().unpack(|_| {});
         let _ = sb2.apply_without_execution(&cb2, Vec::new());
+    }
+
+    fn state_with_transaction_policy(
+        chain_id: &ChainId,
+        authority: &AccountId,
+        require_height_ttl: bool,
+        require_sequence: bool,
+    ) -> State {
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let domain = Domain::new(domain_id).build(authority);
+        let account = Account::new(authority.clone()).build(authority);
+        let mut world = World::with([domain], [account], []);
+        let mut params = iroha_data_model::parameter::system::Parameters::default();
+        params.transaction = params
+            .transaction
+            .with_ingress_enforcement(require_height_ttl, require_sequence);
+        world.parameters = mv::cell::Cell::new(params);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        State::new_with_chain(world, kura, query_handle, chain_id.clone())
+    }
+
+    fn previous_block_at_height(height: u64) -> SignedBlock {
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+        });
+        latest_valid.into()
+    }
+
+    fn validation_error_message(block: &SignedBlock) -> String {
+        block
+            .errors()
+            .next()
+            .map(|(_, err)| format!("{err:?}"))
+            .expect("block must contain a transaction error")
+    }
+
+    fn sealed_set_key_entrypoints(
+        chain_id: &ChainId,
+        authority: &AccountId,
+        keypair: &KeyPair,
+        reveal_after_height: u64,
+        reveal_deadline_height: u64,
+        metadata_key: Name,
+    ) -> (TransactionEntrypoint, TransactionEntrypoint) {
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::ZERO);
+        let signed = builder
+            .with_instructions([SetKeyValue::account(
+                authority.clone(),
+                metadata_key,
+                Json::new("revealed"),
+            )])
+            .sign(keypair.private_key());
+        let salt = [0x5A; 32];
+        let commitment =
+            compute_sealed_transaction_commitment(chain_id, &signed, salt, reveal_deadline_height);
+        let payload = SealedTransactionCommitmentPayload::new(
+            chain_id.clone(),
+            authority.clone(),
+            commitment,
+            reveal_after_height,
+            reveal_deadline_height,
+            None,
+        );
+        let signed_commitment =
+            SignedSealedTransactionCommitment::sign(payload, keypair.private_key());
+        let reveal = SealedTransactionReveal::new(commitment, signed, salt);
+
+        (
+            TransactionEntrypoint::SealedCommitment(signed_commitment),
+            TransactionEntrypoint::SealedReveal(reveal),
+        )
+    }
+
+    #[test]
+    fn block_validation_external_only_records_entrypoint_hash_without_fallback() {
+        let chain_id = ChainId::from("external-only-borrowed-validation");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "external-only".to_owned())])
+            .sign(keypair.private_key());
+        let entrypoint_hash = TransactionEntrypoint::External(signed.clone()).hash();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.hash(), entrypoint_hash);
+        assert!(
+            results[0].2.0.is_ok(),
+            "external-only transaction must execute successfully: {:?}",
+            results[0].2
+        );
+    }
+
+    #[test]
+    fn block_validation_non_external_entrypoint_uses_sequential_fallback() {
+        let chain_id = ChainId::from("non-external-sequential-fallback");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let metadata_key = Name::from_str("sequential_fallback_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.hash(), commitment_entrypoint_hash);
+        assert!(
+            results[0].2.0.is_ok(),
+            "non-external entrypoint fallback must preserve execution: {:?}",
+            results[0].2
+        );
+    }
+
+    #[test]
+    fn block_pipeline_executes_sealed_reveal_and_records_entrypoint_hash() {
+        let chain_id = ChainId::from("sealed-block-pipeline");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let metadata_key = Name::from_str("sealed_reveal_executed").expect("metadata key");
+        let (commitment_entrypoint, reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key.clone());
+        let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let reveal_entrypoint_hash = reveal_entrypoint.hash();
+
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let (_commit_clock, commit_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let commitment_block =
+            BlockBuilder::new_with_time_source(vec![accepted_commitment], commit_time_source)
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut commitment_state_block = state.block(commitment_block.header);
+        let initial_smart_contract_state_len =
+            commitment_state_block.world.smart_contract_state.len();
+        let valid_commitment_block = commitment_block
+            .validate_and_record_transactions(&mut commitment_state_block)
+            .unpack(|_| {});
+
+        let commitment_result = valid_commitment_block
+            .as_ref()
+            .entrypoint_results()
+            .next()
+            .expect("commitment result");
+        assert_eq!(commitment_result.1.hash(), commitment_entrypoint_hash);
+        assert!(
+            commitment_result.2.0.is_ok(),
+            "sealed commitment must execute successfully: {:?}",
+            commitment_result.2
+        );
+        assert_eq!(
+            commitment_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len + 1,
+            "commitment block should leave one pending sealed commitment"
+        );
+        commitment_state_block.commit().expect("commitment commit");
+        let commitment_signed_block: SignedBlock = valid_commitment_block.into();
+
+        let accepted_reveal =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal_entrypoint));
+        let (_reveal_clock, reveal_time_source) = TimeSource::new_mock(Duration::from_millis(2));
+        let reveal_block =
+            BlockBuilder::new_with_time_source(vec![accepted_reveal], reveal_time_source)
+                .chain(0, Some(&commitment_signed_block))
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut reveal_state_block = state.block(reveal_block.header);
+        let valid_reveal_block = reveal_block
+            .validate_and_record_transactions(&mut reveal_state_block)
+            .unpack(|_| {});
+
+        let reveal_result = valid_reveal_block
+            .as_ref()
+            .entrypoint_results()
+            .next()
+            .expect("reveal result");
+        assert_eq!(reveal_result.1.hash(), reveal_entrypoint_hash);
+        assert!(
+            reveal_result.2.0.is_ok(),
+            "sealed reveal must execute the inner transaction: {:?}",
+            reveal_result.2
+        );
+        assert_eq!(
+            reveal_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len,
+            "successful reveal should consume the pending commitment"
+        );
+        let metadata_value = reveal_state_block
+            .world
+            .map_account(&authority, |account| {
+                account.value().metadata().get(&metadata_key).cloned()
+            })
+            .expect("authority account exists");
+        assert_eq!(metadata_value, Some(Json::new("revealed")));
+    }
+
+    #[test]
+    fn prune_expired_sealed_commitments_removes_pending_state_after_deadline() {
+        let chain_id = ChainId::from("sealed-prune-pipeline");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let metadata_key = Name::from_str("sealed_prune_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 2, metadata_key);
+
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let (_commit_clock, commit_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let commitment_block =
+            BlockBuilder::new_with_time_source(vec![accepted_commitment], commit_time_source)
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut commitment_state_block = state.block(commitment_block.header);
+        let initial_smart_contract_state_len =
+            commitment_state_block.world.smart_contract_state.len();
+        let valid_commitment_block = commitment_block
+            .validate_and_record_transactions(&mut commitment_state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_commitment_block
+                .as_ref()
+                .entrypoint_results()
+                .all(|(_, _, result)| result.0.is_ok()),
+            "commitment block should not reject the sealed commitment"
+        );
+        assert_eq!(
+            commitment_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len + 1
+        );
+        commitment_state_block.commit().expect("commitment commit");
+
+        let prune_header = BlockHeader::new(nonzero!(3_u64), None, None, None, 3, 0);
+        let mut prune_state_block = state.block(prune_header);
+        assert_eq!(
+            prune_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len + 1,
+            "pending commitment should still be visible before pruning"
+        );
+
+        let pruned = crate::tx::prune_expired_sealed_commitments(&mut prune_state_block);
+
+        assert_eq!(pruned, 1);
+        assert_eq!(
+            prune_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len,
+            "expired sealed commitment should be removed after its deadline"
+        );
+    }
+
+    #[test]
+    fn block_pipeline_rejects_expired_height_ttl() {
+        let chain_id = ChainId::from("block-height-ttl-check");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, true, false);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("expires_at_height").expect("metadata key"),
+            Json::from(2_u64),
+        );
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::ZERO);
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "expired".to_owned())])
+            .with_metadata(metadata)
+            .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let previous = previous_block_at_height(1);
+        let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
+            .chain(0, Some(&previous))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        let error = validation_error_message(valid_block.as_ref());
+        assert!(error.contains("expired"), "unexpected rejection: {error}");
+    }
+
+    #[test]
+    fn block_pipeline_rejects_non_increasing_tx_sequence() {
+        let chain_id = ChainId::from("block-sequence-check");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, true);
+        {
+            let mut world = state.world.block();
+            world.tx_sequences.insert(authority.clone(), 5);
+            world.commit();
+        }
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("tx_sequence").expect("metadata key"),
+            Json::from(5_u64),
+        );
+
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::ZERO);
+        let tx = builder
+            .with_instructions([Log::new(Level::INFO, "sequence".to_owned())])
+            .with_metadata(metadata)
+            .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let previous = previous_block_at_height(1);
+        let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
+            .chain(0, Some(&previous))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        let error = validation_error_message(valid_block.as_ref());
+        assert!(error.contains("sequence"), "unexpected rejection: {error}");
     }
 
     #[tokio::test]

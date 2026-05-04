@@ -3,7 +3,7 @@
 Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
 - Offline V2 note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/v2/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
@@ -202,6 +202,37 @@ headers.forEach { key, value in
     request.setValue(value, forHTTPHeaderField: key)
 }
 ```
+
+### Sora VPN native lease flow
+
+`ToriiClient` exposes the quote-first Sora VPN flow used by native XOR lease
+escrow. Request a signed quote, submit the returned `OpenVpnLeaseEscrow`
+transaction with the wallet, then create the VPN session with the committed
+payment transaction hash and the same metering public key:
+
+```swift
+let auth = ToriiCanonicalRequestAuth(
+    accountId: "<account_i105>",
+    privateKey: Data(repeating: 7, count: 32)
+)
+let quote = try await torii.createVpnQuote(
+    ToriiVpnQuoteCreateRequest(meteringPublicKeyHex: meteringPublicKeyHex),
+    canonicalAuth: auth
+)
+// Submit quote.txInstructions as a signed transaction, then pass its hash:
+let session = try await torii.createVpnSession(
+    ToriiVpnSessionCreateRequest(
+        quoteId: quote.quoteId,
+        paymentTransactionHash: paymentHash,
+        meteringPublicKeyHex: meteringPublicKeyHex
+    ),
+    canonicalAuth: auth
+)
+```
+
+Relay operators submit cumulative receipt/voucher evidence with
+`submitVpnReceipt`; the response carries a `SettleVpnLease` instruction so the
+operator receives only earned XOR and the customer gets the refundable balance.
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 

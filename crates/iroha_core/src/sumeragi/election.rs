@@ -16,9 +16,8 @@ use iroha_data_model::{
     nexus::staking::{PublicLaneStakeShare, PublicLaneValidatorRecord},
     peer::PeerId,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, NumericSpec};
 use norito::json::Value as JsonValue;
-use rust_decimal::Decimal;
 
 /// Stake/context snapshot for a validator candidate.
 #[derive(Debug, Clone)]
@@ -74,10 +73,7 @@ fn candidate_satisfies_constraints(
 }
 
 fn numeric_at_least(value: &Numeric, threshold: u64) -> bool {
-    let Some(dec) = numeric_to_decimal(value) else {
-        return false;
-    };
-    dec >= Decimal::from(threshold)
+    value >= &Numeric::from(threshold)
 }
 
 fn has_undersized_nomination(
@@ -85,12 +81,12 @@ fn has_undersized_nomination(
     shares: &[PublicLaneStakeShare],
     params: &ValidatorElectionParameters,
 ) -> bool {
-    let min_bond = Decimal::from(params.min_nomination_bond);
+    let min_bond = Numeric::from(params.min_nomination_bond);
     shares.iter().any(|share| {
         if &share.staker == stake_account {
             return false;
         }
-        numeric_to_decimal(&share.bonded).is_some_and(|bonded| bonded < min_bond)
+        share.bonded < min_bond
     })
 }
 
@@ -99,24 +95,18 @@ fn exceeds_nominator_concentration(
     shares: &[PublicLaneStakeShare],
     params: &ValidatorElectionParameters,
 ) -> bool {
-    let Some(total) = numeric_to_decimal(&record.total_stake) else {
-        return true;
-    };
-    if total.is_zero() {
+    let total = record.total_stake.clone();
+    if total <= Numeric::from(0_u64) {
         return true;
     }
 
-    let mut max_nom_share = Decimal::ZERO;
+    let mut max_nom_share = Numeric::from(0_u64);
     for share in shares {
         if share.staker == record.stake_account {
             continue;
         }
-        if let Some(bonded) = numeric_to_decimal(&share.bonded) {
-            if bonded > max_nom_share {
-                max_nom_share = bonded;
-            }
-        } else {
-            return true;
+        if share.bonded > max_nom_share {
+            max_nom_share = share.bonded.clone();
         }
     }
 
@@ -124,14 +114,18 @@ fn exceeds_nominator_concentration(
         return false;
     }
 
-    let pct = (max_nom_share * Decimal::from(100u8)) / total;
-    pct > Decimal::from(params.max_nominator_concentration_pct)
-}
-
-fn numeric_to_decimal(n: &Numeric) -> Option<Decimal> {
-    let mantissa = n.try_mantissa_i128()?;
-    let mantissa_i64 = i64::try_from(mantissa).ok()?;
-    Some(Decimal::new(mantissa_i64, n.scale()))
+    let Some(left) =
+        max_nom_share.checked_mul(Numeric::from(100_u64), NumericSpec::unconstrained())
+    else {
+        return true;
+    };
+    let Some(right) = total.checked_mul(
+        Numeric::from(u64::from(params.max_nominator_concentration_pct)),
+        NumericSpec::unconstrained(),
+    ) else {
+        return true;
+    };
+    left > right
 }
 
 /// Elect an ordered validator set for the supplied epoch.
@@ -496,6 +490,48 @@ mod tests {
             filtered.is_empty(),
             "single nominator exceeding 50% should be rejected"
         );
+    }
+
+    #[test]
+    fn candidates_with_large_numeric_stake_keep_full_precision() {
+        let pk = parse_public_key(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+        );
+        let account = AccountId::of(pk.clone());
+        let peer = PeerId::from(pk);
+        let nominator = AccountId::of(parse_public_key(
+            "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B",
+        ));
+        let large_stake = Numeric::new(i128::from(u64::MAX) + 100, 0);
+        assert!(numeric_at_least(&large_stake, u64::MAX));
+
+        let mut record = sample_record(&peer, 1, 1, &account);
+        record.total_stake = large_stake.clone();
+        record.self_stake = large_stake;
+        let profiles = vec![CandidateProfile {
+            peer_id: peer.clone(),
+            record: Some(record),
+            stake_shares: vec![PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: account.clone(),
+                staker: nominator,
+                bonded: Numeric::new(i128::from(u64::MAX), 0),
+                pending_unbonds: BTreeMap::default(),
+                metadata: Metadata::default(),
+            }],
+        }];
+        let params = ValidatorElectionParameters {
+            max_validators: 1,
+            min_self_bond: u64::MAX,
+            min_nomination_bond: 1,
+            max_nominator_concentration_pct: 100,
+            seat_band_pct: 5,
+            max_entity_correlation_pct: 25,
+            finality_margin_blocks: 8,
+        };
+
+        let filtered = filter_candidates_with_constraints(profiles, &params);
+        assert_eq!(filtered.len(), 1);
     }
 
     #[test]

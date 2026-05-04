@@ -7,7 +7,6 @@ use std::sync::Once;
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
-    env,
     ffi::c_void,
     iter::FusedIterator,
     mem,
@@ -37,6 +36,11 @@ use tracing::{debug, warn};
 
 use crate::{
     backend::GpuBackend,
+    bn254_poseidon::Bn254PoseidonBatchSlice,
+    bn254_poseidon_params::{
+        BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
+        bn254_poseidon_width3_params,
+    },
     gpu::GpuError,
     metal_config::{self, DeviceHints},
     overrides,
@@ -55,6 +59,7 @@ const LDE_KERNEL: &str = "fastpq_lde_columns";
 const POST_TILE_KERNEL: &str = "fastpq_fft_post_tiling";
 const BN254_FFT_KERNEL: &str = "bn254_fft_columns";
 const BN254_LDE_KERNEL: &str = "bn254_lde_columns";
+const BN254_POSEIDON_HASH_KERNEL: &str = "bn254_poseidon_hash_words";
 const GOLDILOCKS_GENERATOR: u64 = 7;
 const MIN_FFT_COLUMNS_PER_BATCH: u32 = 1;
 const MAX_FFT_COLUMNS_PER_BATCH: u32 = 64;
@@ -81,7 +86,6 @@ const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
-const BN254_LIMBS: usize = 4;
 const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
@@ -95,10 +99,11 @@ fn debug_env_bool(name: &str) -> Option<bool> {
     overrides::guard_env_override(|| overrides::debug_env_bool(name))
 }
 
-// BN254 Metal pipelines are bundled to keep the host in sync with the metallib;
-// dispatchers stage twiddles/cosets and run a smoke test via `bn254_status()`
-// to ensure the kernels are reachable before enabling GPU paths.
+// BN254 Metal pipelines are bundled to keep the host in sync with the metallib.
+// Transcript hashing uses a narrow context so it does not have to compile the
+// full prover pipeline set before validating word-batch acceleration.
 static METAL_CONTEXT: OnceLock<MetalResult<MetalPipelines>> = OnceLock::new();
+static BN254_POSEIDON_CONTEXT: OnceLock<MetalResult<Bn254PoseidonMetalPipelines>> = OnceLock::new();
 static FFT_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static LDE_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static LDE_TILE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
@@ -126,18 +131,14 @@ static MAX_IN_FLIGHT_ENV_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
 static THREADGROUP_ENV_OVERRIDE: OnceLock<Option<u64>> = OnceLock::new();
 static DISPATCH_TRACE_ENV: OnceLock<bool> = OnceLock::new();
 
-/// Placeholder BN254 Metal entrypoint until kernels are implemented.
-///
-/// Returns `GpuError::Unsupported` when Metal is unavailable; otherwise loads
-/// the BN254 FFT/LDE pipelines and runs a minimal smoke test to prove the
-/// kernels are reachable.
+/// Return `GpuError::Unsupported` when Metal is unavailable; otherwise load
+/// the BN254 Poseidon word-batch pipeline used by FASTPQ transcript hashing.
 pub(crate) fn bn254_status() -> MetalResult<()> {
     if Device::system_default().is_none() {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     }
-    let ctx = metal_context()?;
-    let _ = (&ctx.bn254_fft, &ctx.bn254_lde);
-    bn254_smoke_test()?;
+    let ctx = bn254_poseidon_context()?;
+    let _ = &ctx.bn254_poseidon_hash;
     Ok(())
 }
 
@@ -1618,6 +1619,15 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
                 back to device memory so hosts can read column hashes without rerunning the \
                 absorb loop on the CPU.",
     },
+    MetalKernelDescriptor {
+        entry_point: "bn254_poseidon_hash_words",
+        kind: KernelKind::Poseidon,
+        threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
+        tile_stage_cap: None,
+        notes: "Hashes flattened BN254 Poseidon word batches for FASTPQ transcript digests. \
+                Inputs and parameters are staged in canonical limbs, converted to Montgomery \
+                form inside the kernel, and outputs are canonical BN254 field bytes.",
+    },
 ];
 
 /// Returns metadata describing every exported Metal kernel.
@@ -2006,6 +2016,22 @@ struct PoseidonFusedArgs {
     parent_offset: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Bn254PoseidonArgs {
+    batch_count: u32,
+    states_per_lane: u32,
+    round_count: u32,
+    _reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Bn254PoseidonMetalSlice {
+    offset: u32,
+    len: u32,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct QueuePolicy {
     fanout: usize,
@@ -2138,13 +2164,27 @@ struct MetalPipelines {
     post_tile: ComputePipelineState,
     bn254_fft: ComputePipelineState,
     bn254_lde: ComputePipelineState,
+    bn254_poseidon_hash: ComputePipelineState,
     twiddle_cache: Mutex<TwiddleCache>,
     bn254_fft_twiddles: Mutex<HashMap<u32, Buffer>>,
     bn254_lde_twiddles: Mutex<HashMap<(u32, u32), Buffer>>,
 }
 
+struct Bn254PoseidonMetalPipelines {
+    device: Device,
+    queues: QueuePool,
+    bn254_poseidon_hash: ComputePipelineState,
+}
+
 fn metal_context() -> MetalResult<&'static MetalPipelines> {
     match METAL_CONTEXT.get_or_init(build_metal_context) {
+        Ok(context) => Ok(context),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+fn bn254_poseidon_context() -> MetalResult<&'static Bn254PoseidonMetalPipelines> {
+    match BN254_POSEIDON_CONTEXT.get_or_init(build_bn254_poseidon_context) {
         Ok(context) => Ok(context),
         Err(err) => Err(err.clone()),
     }
@@ -2319,10 +2359,7 @@ fn load_pipeline(
         })
 }
 
-fn build_metal_context() -> MetalResult<MetalPipelines> {
-    let Some(device) = Device::system_default() else {
-        return Err(GpuError::Unsupported(GpuBackend::Metal));
-    };
+fn register_metal_device_hints(device: &Device) {
     let location = device.location();
     let is_discrete = !device.is_low_power()
         || device.is_headless()
@@ -2344,16 +2381,49 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         ),
         working_set,
     ));
+}
+
+fn load_metal_library(device: &Device) -> MetalResult<Library> {
     let library_path =
         resolve_metal_library_path().ok_or_else(|| GpuError::Unsupported(GpuBackend::Metal))?;
 
-    let library =
-        device
-            .new_library_with_file(&library_path)
-            .map_err(|err| GpuError::Execution {
-                backend: GpuBackend::Metal,
-                message: format!("failed to load Metal library: {err}"),
-            })?;
+    device
+        .new_library_with_file(&library_path)
+        .map_err(|err| GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: format!("failed to load Metal library: {err}"),
+        })
+}
+
+fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
+    let Some(device) = Device::system_default() else {
+        return Err(GpuError::Unsupported(GpuBackend::Metal));
+    };
+    register_metal_device_hints(&device);
+    let library = load_metal_library(&device)?;
+    let bn254_poseidon_hash = load_pipeline(&device, &library, BN254_POSEIDON_HASH_KERNEL)?;
+    let queue_policy = resolve_queue_policy(&device);
+    let queues = QueuePool::new(&device, queue_policy);
+    let manifest_sha = poseidon_manifest().sha256_hex();
+    debug!(
+        target: "fastpq::metal",
+        manifest_sha = manifest_sha,
+        "loaded BN254 Poseidon word-batch Metal pipeline"
+    );
+
+    Ok(Bn254PoseidonMetalPipelines {
+        device,
+        queues,
+        bn254_poseidon_hash,
+    })
+}
+
+fn build_metal_context() -> MetalResult<MetalPipelines> {
+    let Some(device) = Device::system_default() else {
+        return Err(GpuError::Unsupported(GpuBackend::Metal));
+    };
+    register_metal_device_hints(&device);
+    let library = load_metal_library(&device)?;
 
     let poseidon_permute = load_pipeline(&device, &library, POSEIDON_PERMUTE_KERNEL)?;
     let poseidon_hash = load_pipeline(&device, &library, POSEIDON_HASH_KERNEL)?;
@@ -2365,6 +2435,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     // but remain gated behind parity checks before use.
     let bn254_fft = load_pipeline(&device, &library, BN254_FFT_KERNEL)?;
     let bn254_lde = load_pipeline(&device, &library, BN254_LDE_KERNEL)?;
+    let bn254_poseidon_hash = load_pipeline(&device, &library, BN254_POSEIDON_HASH_KERNEL)?;
     let queue_policy = resolve_queue_policy(&device);
     let queues = QueuePool::new(&device, queue_policy);
     let manifest_sha = poseidon_manifest().sha256_hex();
@@ -2402,6 +2473,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         post_tile,
         bn254_fft,
         bn254_lde,
+        bn254_poseidon_hash,
         twiddle_cache: Mutex::new(TwiddleCache::new()),
         bn254_fft_twiddles: Mutex::new(bn254_fft_twiddles),
         bn254_lde_twiddles: Mutex::new(bn254_lde_twiddles),
@@ -2409,13 +2481,19 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
 }
 
 fn resolve_metal_library_path() -> Option<String> {
-    debug_env_var("FASTPQ_METAL_LIB").and_then(|path| {
-        if !path.is_empty() && Path::new(&path).exists() {
-            Some(path)
-        } else {
-            None
-        }
-    })
+    debug_env_var("FASTPQ_METAL_LIB")
+        .and_then(|path| {
+            if !path.is_empty() && Path::new(&path).exists() {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            option_env!("FASTPQ_METAL_LIB")
+                .filter(|path| !path.is_empty() && Path::new(path).exists())
+                .map(str::to_owned)
+        })
 }
 
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {
@@ -3355,6 +3433,186 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     Ok(result)
 }
 
+pub fn bn254_poseidon_hash_words(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> MetalResult<Vec<[u8; 32]>> {
+    if slices.is_empty() {
+        return Ok(Vec::new());
+    }
+    bn254_poseidon_hash_words_async(words, slices)?.wait()
+}
+
+/// Pending BN254 Poseidon word-batch dispatch.
+///
+/// The guard owns the staged Metal buffers until [`wait`](Self::wait), allowing
+/// callers to overlap command completion with independent host work.
+pub(crate) struct PendingBn254PoseidonWords {
+    _word_chunk: PooledBuffer,
+    _word_buffer: Buffer,
+    _slice_chunk: Vec<Bn254PoseidonMetalSlice>,
+    _slice_buffer: Buffer,
+    _round_constants: PooledBuffer,
+    _round_buffer: Buffer,
+    _mds: PooledBuffer,
+    _mds_buffer: Buffer,
+    output: PooledBuffer,
+    _output_buffer: Buffer,
+    ticket: Option<DispatchTicket>,
+    completed: bool,
+}
+
+impl PendingBn254PoseidonWords {
+    /// Wait for the dispatch and collect canonical BN254 digest bytes.
+    pub(crate) fn wait(mut self) -> MetalResult<Vec<[u8; 32]>> {
+        self.finish()?;
+        Ok(self
+            .output
+            .as_slice()
+            .chunks_exact(BN254_LIMBS)
+            .map(bn254_limbs_to_bytes)
+            .collect())
+    }
+
+    fn finish(&mut self) -> MetalResult<()> {
+        if self.completed {
+            return Ok(());
+        }
+        let ticket = self
+            .ticket
+            .take()
+            .expect("pending BN254 Poseidon dispatch missing ticket");
+        let result = wait_for_ticket(ticket);
+        self.completed = true;
+        result
+    }
+}
+
+impl Drop for PendingBn254PoseidonWords {
+    fn drop(&mut self) {
+        if self.completed || self.ticket.is_none() {
+            return;
+        }
+        if let Err(error) = self.finish() {
+            warn!(
+                target: "fastpq::metal",
+                %error,
+                "pending BN254 Poseidon word dispatch dropped without awaiting completion"
+            );
+        }
+    }
+}
+
+pub(crate) fn bn254_poseidon_hash_words_async(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> MetalResult<PendingBn254PoseidonWords> {
+    if slices.is_empty() {
+        return Err(GpuError::InvalidInput(
+            "BN254 Poseidon async dispatch requires at least one input",
+        ));
+    }
+
+    let context = bn254_poseidon_context()?;
+    let batch_count = u32::try_from(slices.len())
+        .map_err(|_| GpuError::InvalidInput("BN254 Poseidon batch exceeds u32::MAX inputs"))?;
+    let mut metal_slices = Vec::with_capacity(slices.len());
+    for slice in slices {
+        let end = slice
+            .offset()
+            .checked_add(slice.len())
+            .ok_or(GpuError::InvalidInput(
+                "BN254 Poseidon slice range overflows",
+            ))?;
+        if end > words.len() {
+            return Err(GpuError::InvalidInput(
+                "BN254 Poseidon slice exceeds flattened word buffer",
+            ));
+        }
+        metal_slices.push(Bn254PoseidonMetalSlice {
+            offset: u32::try_from(slice.offset()).map_err(|_| {
+                GpuError::InvalidInput("BN254 Poseidon word offset exceeds u32::MAX")
+            })?,
+            len: u32::try_from(slice.len()).map_err(|_| {
+                GpuError::InvalidInput("BN254 Poseidon word length exceeds u32::MAX")
+            })?,
+        });
+    }
+
+    let params = bn254_poseidon_width3_params();
+    let staged_words = if words.is_empty() { &[0u64][..] } else { words };
+    let mut word_chunk = PooledBuffer::from_slice(staged_words);
+    let word_buffer = shared_buffer(&context.device, word_chunk.as_mut_slice());
+    let mut slice_chunk = metal_slices;
+    let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+    let mut round_constants = PooledBuffer::from_slice(&params.round_constants);
+    let round_buffer = shared_buffer(&context.device, round_constants.as_mut_slice());
+    let mut mds = PooledBuffer::from_slice(&params.mds);
+    let mds_buffer = shared_buffer(&context.device, mds.as_mut_slice());
+    let output_len = slices
+        .len()
+        .checked_mul(BN254_LIMBS)
+        .ok_or(GpuError::InvalidInput(
+            "BN254 Poseidon output length overflows",
+        ))?;
+    let mut output = PooledBuffer::zeroed(output_len);
+    let output_buffer = shared_buffer(&context.device, output.as_mut_slice());
+
+    let limits = pipeline_limits(&context.bn254_poseidon_hash);
+    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let (threadgroups, threadgroup, logical_threads, states_per_lane) =
+        poseidon_dispatch_geometry(batch_count, tuning, &limits);
+    let args = Bn254PoseidonArgs {
+        batch_count,
+        states_per_lane,
+        round_count: params.round_count,
+        _reserved: 0,
+    };
+    let profile = KernelProfileParams {
+        kind: KernelKind::Poseidon,
+        bytes: bn254_poseidon_hash_bytes(words.len(), slices.len(), params),
+        elements: u64::from(batch_count)
+            .saturating_mul(u64::try_from(BN254_POSEIDON_WIDTH).unwrap_or(u64::MAX)),
+        columns: batch_count,
+    };
+    let (queue, queue_index) = context.queues.select(batch_count, 0);
+    let ticket = submit_compute_with_geometry(
+        queue,
+        queue_index,
+        &context.bn254_poseidon_hash,
+        Some((threadgroups, threadgroup, logical_threads)),
+        logical_threads,
+        Some(profile),
+        false,
+        |encoder: &ComputeCommandEncoderRef| {
+            encoder.set_buffer(0, Some(&word_buffer), 0);
+            encoder.set_buffer(1, Some(&slice_buffer), 0);
+            encoder.set_buffer(2, Some(&output_buffer), 0);
+            encoder.set_buffer(3, Some(&round_buffer), 0);
+            encoder.set_buffer(4, Some(&mds_buffer), 0);
+            encoder.set_bytes(
+                5,
+                mem::size_of::<Bn254PoseidonArgs>() as u64,
+                ptr::from_ref(&args).cast(),
+            );
+        },
+    )?;
+    Ok(PendingBn254PoseidonWords {
+        _word_chunk: word_chunk,
+        _word_buffer: word_buffer,
+        _slice_chunk: slice_chunk,
+        _slice_buffer: slice_buffer,
+        _round_constants: round_constants,
+        _round_buffer: round_buffer,
+        _mds: mds,
+        _mds_buffer: mds_buffer,
+        output,
+        _output_buffer: output_buffer,
+        ticket: Some(ticket),
+        completed: false,
+    })
+}
+
 pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
     if batch.is_empty() {
         return Ok(Vec::new());
@@ -3404,7 +3662,7 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
         columns: column_count,
     };
     let (queue, queue_index) = context.queues.select(column_count, 0);
-    let mut ticket = submit_compute_with_geometry(
+    let ticket = submit_compute_with_geometry(
         queue,
         queue_index,
         &context.poseidon_trace_fused,
@@ -3597,6 +3855,39 @@ fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(states)))
 }
 
+fn bn254_poseidon_hash_bytes(
+    word_count: usize,
+    slice_count: usize,
+    params: &Bn254PoseidonWidth3Params,
+) -> u64 {
+    let element_bytes = u128::from(u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX));
+    let input = u128::try_from(word_count)
+        .unwrap_or(u128::MAX)
+        .saturating_mul(element_bytes);
+    let output = u128::try_from(slice_count.saturating_mul(BN254_LIMBS))
+        .unwrap_or(u128::MAX)
+        .saturating_mul(element_bytes);
+    let descriptors = u128::try_from(slice_count)
+        .unwrap_or(u128::MAX)
+        .saturating_mul(u128::from(
+            u64::try_from(mem::size_of::<Bn254PoseidonMetalSlice>()).unwrap_or(u64::MAX),
+        ));
+    let constants = u128::try_from(
+        params
+            .round_constants
+            .len()
+            .saturating_add(params.mds.len()),
+    )
+    .unwrap_or(u128::MAX)
+    .saturating_mul(element_bytes);
+    clamp_u128_to_u64(
+        input
+            .saturating_add(output)
+            .saturating_add(descriptors)
+            .saturating_add(constants),
+    )
+}
+
 fn clamp_u128_to_u64(value: u128) -> u64 {
     if value > u128::from(u64::MAX) {
         u64::MAX
@@ -3609,6 +3900,7 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
     let trace_label = ticket.trace_label.clone();
     let timing_start = ticket.timing_start;
     let wait_start = Instant::now();
+    let mut polls = 0usize;
     let status = loop {
         let status = ticket.command.status();
         if matches!(
@@ -3628,7 +3920,14 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
                 message: format!("command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"),
             });
         }
-        thread::sleep(Duration::from_millis(1));
+        polls = polls.saturating_add(1);
+        if polls <= 64 {
+            thread::yield_now();
+        } else if polls <= 256 {
+            thread::sleep(Duration::from_micros(50));
+        } else {
+            thread::sleep(Duration::from_millis(1));
+        }
     };
     let duration = timing_start.map(|start| start.elapsed());
     if let Some(label) = trace_label {

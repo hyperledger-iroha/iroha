@@ -38,7 +38,7 @@ use crate::{
     Error, Result, StateTransition, TransitionBatch,
     backend::{self, ExecutionMode, PoseidonExecutionMode},
     fft::{GpuLdeDispatch, Planner},
-    gadgets::transfer::{self, ProofFlavor, TransferRowKey},
+    gadgets::transfer::{self, TransferRowKey},
     pack_bytes,
     poseidon::{self, PoseidonSponge},
 };
@@ -468,23 +468,30 @@ fn populate_merkle_columns(
     row: &mut RowData,
     key: &[u8],
     balance_before: u64,
-    flavor: ProofFlavor,
+    balance_after: u64,
     proof: &transfer::TransferMerkleProof,
 ) {
-    let mut current = transfer::synthetic_leaf_hash(key, balance_before, flavor);
+    let mut current_before = transfer::leaf_hash(key, balance_before);
+    let mut current_after = transfer::leaf_hash(key, balance_after);
     for level in 0..SMT_HEIGHT {
         let bit = proof.bit(level);
         row.path_bits[level] = bit;
-        let sibling_hash = proof.sibling(level);
+        let sibling_hash = Hash::prehashed(proof.sibling(level));
         row.siblings[level] = hash_to_field(&sibling_hash);
-        row.node_in[level] = hash_to_field(&current);
-        let (left, right) = if bit == 0 {
-            (sibling_hash, current)
+        row.node_in[level] = hash_to_field(&current_before);
+        row.node_out[level] = hash_to_field(&current_after);
+        let (before_left, before_right) = if bit == 0 {
+            (current_before, sibling_hash)
         } else {
-            (current, sibling_hash)
+            (sibling_hash, current_before)
         };
-        current = transfer::synthetic_internal_hash(&left, &right);
-        row.node_out[level] = hash_to_field(&current);
+        current_before = transfer::internal_hash(&before_left, &before_right);
+        let (after_left, after_right) = if bit == 0 {
+            (current_after, sibling_hash)
+        } else {
+            (sibling_hash, current_after)
+        };
+        current_after = transfer::internal_hash(&after_left, &after_right);
     }
 }
 
@@ -504,8 +511,11 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let mut canonical = batch.clone();
     canonical.sort();
 
-    let transfer_witnesses =
-        extract_transfer_witnesses(&canonical.metadata, &canonical.transitions)?;
+    let transfer_witnesses = extract_transfer_witnesses(
+        &canonical.metadata,
+        &canonical.transitions,
+        &canonical.public_inputs,
+    )?;
     let transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
 
     let metadata_hash = metadata_hash(&canonical.metadata)?;
@@ -630,26 +640,18 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         };
 
         if matches!(transition.operation, crate::OperationKind::Transfer) {
-            let proof_role = if delta_signed.is_negative() {
-                ProofFlavor::Sender
-            } else {
-                ProofFlavor::Receiver
-            };
             let proof = transfer_proof_index
                 .get(&TransferRowKey::from_transition(transition))
                 .cloned()
-                .unwrap_or_else(|| {
-                    transfer::synthesize_row_proof(
-                        transition.key.as_slice(),
-                        pre_value_u64,
-                        proof_role,
-                    )
+                .ok_or_else(|| Error::TransferInvariant {
+                    details: "transfer row is missing its canonical SMT proof witness".into(),
                 });
+            let proof = proof?;
             populate_merkle_columns(
                 &mut row,
                 transition.key.as_slice(),
                 pre_value_u64,
-                proof_role,
+                decode_u64_le(&transition.post_value)?,
                 &proof,
             );
         }
@@ -866,6 +868,7 @@ fn metadata_hash(metadata: &BTreeMap<String, Vec<u8>>) -> Result<u64> {
 fn extract_transfer_witnesses(
     metadata: &BTreeMap<String, Vec<u8>>,
     transitions: &[StateTransition],
+    public_inputs: &crate::PublicInputs,
 ) -> Result<Vec<transfer::TransferGadgetInput>> {
     let has_transfer = transitions
         .iter()
@@ -884,7 +887,11 @@ fn extract_transfer_witnesses(
         });
     }
     transfer::verify_transcripts(transitions, &transcripts)?;
-    transfer::transcripts_to_witnesses(&transcripts)
+    transfer::transcripts_to_witnesses(
+        &transcripts,
+        &public_inputs.old_root,
+        &public_inputs.new_root,
+    )
 }
 
 pub(crate) fn permission_hash(role_id: &[u8], permission_id: &[u8], epoch: u64) -> Result<u64> {
@@ -2024,7 +2031,15 @@ mod tests {
 
     fn sample_batch() -> TransitionBatch {
         let transcript = sample_transfer_transcript();
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let mut batch = TransitionBatch::new(
+            "fastpq-lane-balanced",
+            PublicInputs {
+                old_root,
+                new_root,
+                ..PublicInputs::default()
+            },
+        );
         for transition in sample_transitions(&transcript) {
             batch.push(transition);
         }
@@ -2502,8 +2517,9 @@ mod tests {
     fn transfer_witnesses_extracted_from_metadata() {
         let (batch, transcript) = batch_with_transfer_metadata();
         let trace = build_trace(&batch).expect("trace");
-        let expected =
-            transfer::transcripts_to_witnesses(&[transcript]).expect("witness extraction");
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let expected = transfer::transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect("witness extraction");
         assert_eq!(trace.transfer_witnesses, expected);
         let proof_index = transfer::index_row_proofs(&expected);
         let mut canonical = batch.clone();
@@ -2527,7 +2543,10 @@ mod tests {
                 .find(|column| column.name == "sibling_0")
                 .expect("sibling_0 column present")
                 .values[row];
-            assert_eq!(sibling_value, hash_to_field(&proof.sibling(0)));
+            assert_eq!(
+                sibling_value,
+                hash_to_field(&Hash::prehashed(proof.sibling(0)))
+            );
         }
     }
 
@@ -2546,7 +2565,15 @@ mod tests {
     #[test]
     fn build_trace_rejects_missing_transfer_transcripts() {
         let transcript = sample_transfer_transcript();
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let mut batch = TransitionBatch::new(
+            "fastpq-lane-balanced",
+            PublicInputs {
+                old_root,
+                new_root,
+                ..PublicInputs::default()
+            },
+        );
         for transition in sample_transitions(&transcript) {
             batch.push(transition);
         }
@@ -2574,8 +2601,12 @@ mod tests {
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
-        let expected =
-            transfer::transcripts_to_witnesses(&[transcript]).expect("witness extraction");
+        let expected = transfer::transcripts_to_witnesses(
+            &[transcript],
+            &batch.public_inputs.old_root,
+            &batch.public_inputs.new_root,
+        )
+        .expect("witness extraction");
         assert_eq!(data.transfer_plan().witnesses(), expected.as_slice());
     }
 
@@ -2593,7 +2624,15 @@ mod tests {
 
     fn batch_with_transfer_metadata() -> (TransitionBatch, TransferTranscript) {
         let transcript = sample_transfer_transcript();
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let mut batch = TransitionBatch::new(
+            "fastpq-lane-balanced",
+            PublicInputs {
+                old_root,
+                new_root,
+                ..PublicInputs::default()
+            },
+        );
         for transition in sample_transitions(&transcript) {
             batch.push(transition);
         }
@@ -2605,7 +2644,7 @@ mod tests {
     }
 
     fn sample_transfer_transcript() -> TransferTranscript {
-        let delta = TransferDeltaTranscript {
+        let mut delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: AssetDefinitionId::new(
@@ -2617,9 +2656,10 @@ mod tests {
             from_balance_after: Numeric::from(158u32),
             to_balance_before: Numeric::from(1u32),
             to_balance_after: Numeric::from(43u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
+        attach_delta_witnesses(&mut delta);
         let batch_hash = Hash::prehashed([0x22; 32]);
         let digest = transfer::compute_poseidon_digest(&delta, &batch_hash);
         TransferTranscript {
@@ -2628,6 +2668,38 @@ mod tests {
             authority_digest: Hash::new(b"authority"),
             poseidon_preimage_digest: Some(digest),
         }
+    }
+
+    fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
+        let scale = delta.normalized_scale();
+        let sender_key =
+            format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
+        let receiver_key =
+            format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes();
+        let (from, to) = transfer::build_transfer_smt_witness_pair(
+            &sender_key,
+            numeric_to_u64(&delta.from_balance_before, scale),
+            numeric_to_u64(&delta.from_balance_after, scale),
+            &receiver_key,
+            numeric_to_u64(&delta.to_balance_before, scale),
+            numeric_to_u64(&delta.to_balance_after, scale),
+        )
+        .expect("transfer witness");
+        delta.from_smt_witness = from;
+        delta.to_smt_witness = to;
+    }
+
+    fn transcript_roots(transcript: &TransferTranscript) -> ([u8; 32], [u8; 32]) {
+        let delta = transcript.deltas.first().expect("sample has delta");
+        (
+            delta.from_smt_witness.root_before,
+            delta.to_smt_witness.root_after,
+        )
+    }
+
+    fn numeric_to_u64(value: &Numeric, target_scale: u32) -> u64 {
+        iroha_data_model::fastpq::normalized_numeric_to_u64(value, target_scale)
+            .expect("numeric fits")
     }
 
     fn sample_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {

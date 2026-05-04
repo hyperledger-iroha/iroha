@@ -1,11 +1,12 @@
-//! Stage 4 transcript replay regression fixtures.
+//! V1 transcript regression fixtures.
 
 #[cfg(feature = "fastpq-gpu")]
 use std::{env, fs, path::Path};
 
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_prover::{
-    OperationKind, Proof, Prover, PublicInputs, StateTransition, TransitionBatch, verify,
+    OperationKind, Proof, Prover, PublicInputs, StateTransition, TransitionBatch,
+    gadgets::transfer::attach_transfer_smt_witnesses, verify,
 };
 #[cfg(feature = "fastpq-gpu")]
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -68,6 +69,11 @@ fn preview_fixture_batch(rows: usize) -> TransitionBatch {
             }
         }
     }
+    let (old_root, new_root) = if transcripts.is_empty() {
+        ([0u8; 32], [0u8; 32])
+    } else {
+        attach_transfer_smt_witnesses(&mut transcripts).expect("attach transfer SMT witnesses")
+    };
     if !transcripts.is_empty() {
         batch.metadata.insert(
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
@@ -76,6 +82,8 @@ fn preview_fixture_batch(rows: usize) -> TransitionBatch {
     }
     batch.sort();
     annotate_batch(&mut batch);
+    batch.public_inputs.old_root = old_root;
+    batch.public_inputs.new_root = new_root;
     batch
 }
 
@@ -108,6 +116,8 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
     let from_post = from_pre.saturating_sub(amount);
     let to_pre = 500_000u64 + index as u64;
     let to_post = to_pre.saturating_add(amount);
+    let sender_key = format!("asset/{asset_definition}/{from_account}").into_bytes();
+    let receiver_key = format!("asset/{asset_definition}/{to_account}").into_bytes();
     let delta = TransferDeltaTranscript {
         from_account: from_account.clone(),
         to_account: to_account.clone(),
@@ -117,11 +127,11 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         from_balance_after: Numeric::from(from_post),
         to_balance_before: Numeric::from(to_pre),
         to_balance_after: Numeric::from(to_post),
-        from_merkle_proof: None,
-        to_merkle_proof: None,
+        from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };
     let mut payload = Vec::with_capacity(32);
-    payload.extend_from_slice(b"fastpq-stage4");
+    payload.extend_from_slice(b"fastpq-v1-preview");
     payload.extend_from_slice(&(index as u64).to_le_bytes());
     let batch_hash = Hash::new(payload);
     let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
@@ -132,13 +142,13 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         poseidon_preimage_digest: Some(digest),
     };
     let sender = StateTransition::new(
-        format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
+        sender_key,
         from_pre.to_le_bytes().to_vec(),
         from_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,
     );
     let receiver = StateTransition::new(
-        format!("asset/{}/{}", asset_definition, to_account).into_bytes(),
+        receiver_key,
         to_pre.to_le_bytes().to_vec(),
         to_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,
@@ -148,7 +158,7 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 
 #[cfg(feature = "fastpq-gpu")]
 #[test]
-fn stage4_preview_fixture_replays_transcript() {
+fn v1_preview_fixture_verifies_transcript() {
     let batch = preview_fixture_batch(64);
     let path = fixture_path();
 

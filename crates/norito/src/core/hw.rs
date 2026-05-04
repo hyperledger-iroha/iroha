@@ -54,11 +54,9 @@ pub fn detect() -> &'static HwCaps {
             caps.pmull = std::arch::is_aarch64_feature_detected!("pmull");
             caps.crc32 = std::arch::is_aarch64_feature_detected!("crc");
         }
-        // Optional GPU compression backend availability
-        #[cfg(feature = "gpu-compression")]
-        {
-            caps.gpu_zstd = super::gpu_zstd::available();
-        }
+        // GPU compression is intentionally not probed here. Loading CUDA/Metal
+        // helpers may touch dynamic loader paths or drivers, so availability is
+        // discovered lazily by `has_gpu_compression` or the compression path.
         caps
     })
 }
@@ -90,7 +88,7 @@ pub fn has_gpu_compression() -> bool {
         if !gpu_policy_allowed() {
             return false;
         }
-        detect().gpu_zstd
+        super::gpu_zstd::available()
     }
     #[cfg(not(feature = "gpu-compression"))]
     {

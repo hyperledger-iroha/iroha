@@ -3,42 +3,31 @@
 
 package org.hyperledger.iroha.sdk.norito
 
-import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.Locale
 
-private const val OFFSET_BASIS = -0x340D631B7BDDDCDBL // 0xCBF29CE484222325L
-private const val FNV_PRIME = 0x100000001B3L
+private val TYPE_NAME_SCHEMA_HASH_DOMAIN = "norito:v1:type-name\u0000".toByteArray(Charsets.UTF_8)
+private val STRUCTURAL_SCHEMA_HASH_DOMAIN = "norito:v1:structural-schema\u0000".toByteArray(Charsets.UTF_8)
 
-/** Computes FNV-1a 64-bit schema hashes matching the Rust implementation. */
+/** Computes domain-separated SHA-256 schema hashes matching the Rust implementation. */
 object SchemaHash {
 
     @JvmStatic
     fun hash16(canonicalPath: String): ByteArray {
-        val input = canonicalPath.toByteArray(Charsets.UTF_8)
-        var hash = OFFSET_BASIS
-        for (b in input) {
-            hash = hash xor (b.toLong() and 0xFFL)
-            hash = (hash * FNV_PRIME) and -1L // mask to 64 bits
-        }
-        val buffer = ByteBuffer.allocate(16)
-        buffer.putLong(java.lang.Long.reverseBytes(hash))
-        buffer.putLong(java.lang.Long.reverseBytes(hash))
-        return buffer.array()
+        return hash16(TYPE_NAME_SCHEMA_HASH_DOMAIN, canonicalPath.toByteArray(Charsets.UTF_8))
     }
 
     @JvmStatic
     fun hash16FromStructural(schema: Any): ByteArray {
         val canonical = encodeCanonicalJson(schema)
-        val input = canonical.toByteArray(Charsets.UTF_8)
-        var hash = OFFSET_BASIS
-        for (b in input) {
-            hash = hash xor (b.toLong() and 0xFFL)
-            hash = (hash * FNV_PRIME) and -1L
-        }
-        val buffer = ByteBuffer.allocate(16)
-        buffer.putLong(java.lang.Long.reverseBytes(hash))
-        buffer.putLong(java.lang.Long.reverseBytes(hash))
-        return buffer.array()
+        return hash16(STRUCTURAL_SCHEMA_HASH_DOMAIN, canonical.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun hash16(domain: ByteArray, input: ByteArray): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(domain)
+        digest.update(input)
+        return digest.digest().copyOfRange(0, 16)
     }
 
     private fun encodeCanonicalJson(value: Any?): String {

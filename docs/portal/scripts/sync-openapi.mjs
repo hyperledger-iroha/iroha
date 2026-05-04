@@ -203,7 +203,7 @@ async function prepareManifestTemplate(manifestPath, specBytes, {requireSigned =
     const manifest = JSON.parse(text);
     const recorded = manifest?.artifact?.sha256_hex;
     if (typeof recorded !== 'string') {
-      const message = `manifest ${manifestPath} is missing artifact.sha256_hex; rerun 'cargo xtask openapi --sign <key>' to refresh the signed manifest.`;
+      const message = `manifest ${manifestPath} is missing artifact.sha256_hex; rerun 'cargo xtask openapi --sign <key>' or 'cargo xtask openapi --signature-envelope <path>' to refresh the signed manifest.`;
       if (requireSigned) {
         throw new Error(message);
       }
@@ -214,7 +214,7 @@ async function prepareManifestTemplate(manifestPath, specBytes, {requireSigned =
     if (!equalsIgnoreCase(recorded, computed)) {
       const message =
         `manifest ${manifestPath} sha256 (${recorded}) does not match the freshly generated spec (${computed}); ` +
-        "re-run `cargo xtask openapi --sign <key>` and re-run sync-openapi to propagate signed manifests.";
+        "re-run `cargo xtask openapi --sign <key>` or `cargo xtask openapi --signature-envelope <path>` and re-run sync-openapi to propagate signed manifests.";
       if (requireSigned) {
         throw new Error(message);
       }
@@ -223,14 +223,14 @@ async function prepareManifestTemplate(manifestPath, specBytes, {requireSigned =
     }
     if (requireSigned && !hasSignature(manifest?.artifact?.signature)) {
       throw new Error(
-        `manifest ${manifestPath} is missing signature fields; sign the spec with \`cargo xtask openapi --sign <key>\` before publishing.`,
+        `manifest ${manifestPath} is missing signature fields; sign the spec with \`cargo xtask openapi --sign <key>\` or attach an operator signature with \`cargo xtask openapi --signature-envelope <path>\` before publishing.`,
       );
     }
     return manifest;
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       const message =
-        `manifest ${manifestPath} not found; generate a signed manifest with \`cargo xtask openapi --sign <key>\` before syncing.`;
+        `manifest ${manifestPath} not found; generate a signed manifest with \`cargo xtask openapi --sign <key>\` or \`cargo xtask openapi --signature-envelope <path>\` before syncing.`;
       if (requireSigned) {
         throw new Error(message);
       }
@@ -294,12 +294,17 @@ async function loadVersionMetadata(label, specPath, manifestPath, outputDirPath)
     return null;
   }
   const stats = await statOptional(specPath);
-  const manifestDetails = await loadManifestDetails(manifestPath, outputDirPath);
+  const specSha = computeSha256Hex(specBuffer);
+  const manifestDetails = await loadManifestDetails(manifestPath, outputDirPath, {
+    specPath,
+    specSha,
+    specBytes: specBuffer.length,
+  });
   return {
     label,
     path: toPosix(relative(outputDirPath, specPath)),
     bytes: specBuffer.length,
-    sha256: computeSha256Hex(specBuffer),
+    sha256: specSha,
     blake3: manifestDetails.blake3,
     updatedAt: stats?.mtime?.toISOString?.() ?? null,
     signed: manifestDetails.signed,
@@ -332,10 +337,14 @@ async function statOptional(path) {
   }
 }
 
-async function loadManifestDetails(manifestPath, outputDirPath) {
+async function loadManifestDetails(manifestPath, outputDirPath, specContext = null) {
   try {
     const text = await readFile(manifestPath, 'utf8');
     const manifest = JSON.parse(text);
+    const artifact = manifest?.artifact;
+    if (specContext && !manifestMatchesSpec(artifact, specContext, outputDirPath)) {
+      return unsignedManifestDetails();
+    }
     const signature = manifest?.artifact?.signature;
     return {
       signed: Boolean(signature),
@@ -347,25 +356,34 @@ async function loadManifestDetails(manifestPath, outputDirPath) {
     };
   } catch (error) {
     if (error && error.code === 'ENOENT') {
-      return {
-        signed: false,
-        signatureAlgorithm: null,
-        signatureHex: null,
-        signaturePublicKeyHex: null,
-        path: null,
-        blake3: null,
-      };
+      return unsignedManifestDetails();
     }
     console.warn(`failed to load manifest ${manifestPath}: ${error?.message ?? error}`);
-    return {
-      signed: false,
-      signatureAlgorithm: null,
-      signatureHex: null,
-      signaturePublicKeyHex: null,
-      path: null,
-      blake3: null,
-    };
+    return unsignedManifestDetails();
   }
+}
+
+function manifestMatchesSpec(artifact, specContext, outputDirPath) {
+  if (!artifact || typeof artifact !== 'object') {
+    return false;
+  }
+  const expectedPath = toPosix(relative(outputDirPath, specContext.specPath));
+  return (
+    artifact.path === expectedPath &&
+    artifact.bytes === specContext.specBytes &&
+    equalsIgnoreCase(artifact.sha256_hex, specContext.specSha)
+  );
+}
+
+function unsignedManifestDetails() {
+  return {
+    signed: false,
+    signatureAlgorithm: null,
+    signatureHex: null,
+    signaturePublicKeyHex: null,
+    path: null,
+    blake3: null,
+  };
 }
 
 async function runCli() {

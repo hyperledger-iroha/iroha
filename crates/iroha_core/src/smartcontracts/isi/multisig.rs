@@ -586,36 +586,36 @@ fn rekey_account_id(
 
     let nft_ids: Vec<_> = state_transaction
         .world
-        .nfts
-        .iter()
-        .filter(|(_, value)| value.owned_by == *old_account)
-        .map(|(id, _)| id.clone())
+        .nfts_in_account_iter(old_account)
+        .map(|nft| nft.id().clone())
         .collect();
     for nft_id in nft_ids {
         if let Some(value) = state_transaction.world.nfts.get_mut(&nft_id) {
             value.owned_by = new_account.clone();
         }
+        state_transaction
+            .world
+            .replace_nft_owner_index(&nft_id, old_account, new_account);
     }
 
     let domain_ids: Vec<_> = state_transaction
         .world
-        .domains
-        .iter()
-        .filter(|(_, domain)| domain.owned_by == *old_account)
-        .map(|(id, _)| id.clone())
+        .domains_owned_by_iter(old_account)
+        .map(|domain| domain.id.clone())
         .collect();
     for domain_id in domain_ids {
         if let Some(domain) = state_transaction.world.domains.get_mut(&domain_id) {
             domain.owned_by = new_account.clone();
         }
+        state_transaction
+            .world
+            .replace_domain_owner_index(&domain_id, old_account, new_account);
     }
 
     let asset_def_ids: Vec<_> = state_transaction
         .world
-        .asset_definitions
-        .iter()
-        .filter(|(_, definition)| definition.owned_by == *old_account)
-        .map(|(id, _)| id.clone())
+        .asset_definitions_owned_by_iter(old_account)
+        .map(|definition| definition.id.clone())
         .collect();
     for asset_def_id in asset_def_ids {
         if let Some(definition) = state_transaction
@@ -625,6 +625,9 @@ fn rekey_account_id(
         {
             definition.owned_by = new_account.clone();
         }
+        state_transaction
+            .world
+            .replace_asset_definition_owner_index(&asset_def_id, old_account, new_account);
     }
 
     let provider_ids: Vec<_> = state_transaction

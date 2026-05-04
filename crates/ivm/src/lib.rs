@@ -40,6 +40,7 @@ mod dev_env;
 pub mod ec;
 pub mod encoding;
 mod error;
+mod execution_proof;
 pub mod field;
 pub mod field_dispatch;
 pub mod gas;
@@ -137,6 +138,7 @@ pub use crate::{
         Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
         VmSourceLocation, VmTrapKind,
     },
+    execution_proof::{EXECUTION_PROOF_VERSION_V1, ExecutionProof},
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
@@ -306,7 +308,8 @@ pub struct BackendRuntimeStatus {
     pub configured: bool,
     /// Whether the backend is currently available after applying policy and hardware checks.
     pub available: bool,
-    /// Whether parity/golden-vector self-tests passed for the backend.
+    /// Whether the backend is usable after policy, hardware detection, and
+    /// parity/golden-vector self-tests.
     pub parity_ok: bool,
 }
 
@@ -372,12 +375,11 @@ pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
     #[cfg(feature = "cuda")]
     {
         let available = crate::cuda::cuda_available();
-        let parity_ok = !crate::cuda::cuda_disabled();
         status.cuda = BackendRuntimeStatus {
             supported: true,
             configured: cfg.enable_cuda,
             available,
-            parity_ok,
+            parity_ok: available,
         };
     }
     #[cfg(not(feature = "cuda"))]
@@ -432,10 +434,26 @@ pub fn acceleration_runtime_errors() -> AccelerationErrorStatus {
         }
     };
 
+    let cuda_error = {
+        let explicit = crate::cuda::cuda_last_error_message();
+        if explicit.is_some() {
+            explicit
+        } else if cfg!(feature = "cuda") {
+            let status = acceleration_runtime_status();
+            if status.cuda.configured && !status.cuda.available {
+                Some("cuda unavailable at runtime".to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
     AccelerationErrorStatus {
         simd: simd_error,
         metal: crate::vector::metal_last_error_message(),
-        cuda: crate::cuda::cuda_last_error_message(),
+        cuda: cuda_error,
     }
 }
 
@@ -611,6 +629,23 @@ mod tests {
         #[cfg(not(feature = "cuda"))]
         {
             assert!(errors.cuda.is_none());
+        }
+    }
+
+    #[test]
+    fn cuda_status_never_reports_parity_without_availability() {
+        let status = acceleration_runtime_status();
+        if !status.cuda.available {
+            assert!(
+                !status.cuda.parity_ok,
+                "CUDA parity status must not be true when the backend is unavailable"
+            );
+        }
+        if status.cuda.configured && status.cuda.supported && !status.cuda.available {
+            assert!(
+                acceleration_runtime_errors().cuda.is_some(),
+                "configured CUDA should report a runtime reason when unavailable"
+            );
         }
     }
 

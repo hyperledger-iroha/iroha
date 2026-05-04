@@ -43,8 +43,15 @@ struct TransferDeltaTranscript {
     from_balance_after: Numeric,
     to_balance_before: Numeric,
     to_balance_after: Numeric,
-    from_merkle_proof: Option<Vec<u8>>,
-    to_merkle_proof: Option<Vec<u8>>,
+    from_smt_witness: TransferSmtWitness,
+    to_smt_witness: TransferSmtWitness,
+}
+
+struct TransferSmtWitness {
+    root_before: [u8; 32],
+    root_after: [u8; 32],
+    path_bits: Vec<u8>,
+    siblings: Vec<[u8; 32]>,
 }
 ```
 
@@ -53,16 +60,18 @@ struct TransferDeltaTranscript {
 - `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding before passing them through the shared Poseidon2 helper. This digest is present for single-delta transcripts and omitted for multi-delta batches.
 
 All fields are serialized via Norito so existing determinism guarantees hold.
-Both `from_path` and `to_path` are emitted as Norito blobs using the
-`TransferMerkleProofV1` schema: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
-Future versions can extend the schema while the prover enforces the version tag
-before decoding. `TransitionBatch` metadata embeds the Norito-encoded transcript
-vector under the `transfer_transcripts` key so the prover can decode the witness
-without performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
-`perm_root`, `tx_set_hash`) are carried in `FastpqTransitionBatch.public_inputs`,
-leaving metadata for entry hash/transcript count bookkeeping. Until host plumbing
-lands, the prover synthetically derives proofs from the key/balance pairs so rows
-always include a deterministic SMT path even when the transcript omits the optional fields.
+Sender and receiver witnesses are required structured SMT paths, not optional
+proof blobs. Each delta chains `from_smt_witness.root_before` to
+`from_smt_witness.root_after`, then `to_smt_witness.root_before` to
+`to_smt_witness.root_after`; the transcript sequence must start at
+`public_inputs.old_root` and finish at `public_inputs.new_root`.
+`TransitionBatch` metadata embeds the Norito-encoded transcript vector under the
+`transfer_transcripts` key so the prover can decode the witness without
+performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
+`perm_root`, `tx_set_hash`) are carried in
+`FastpqTransitionBatch.public_inputs`, leaving metadata for entry hash/transcript
+count bookkeeping. Missing, malformed, unpaired, or root-mismatched SMT
+witnesses are rejected before proof construction.
 
 ## Gadget Layout
 
@@ -93,7 +102,7 @@ always include a deterministic SMT path even when the transcript omits the optio
 | `ivm::syscalls` | Add `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) so programs can bracket multiple `transfer_v1` syscalls without emitting intermediate ISIs, plus `transfer_v1_batch_apply` (`0x2B`) for pre-encoded batches. |
 | `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the Stage 6 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
-| `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest) and surfaces structured witnesses (including placeholder paired SMT blobs) for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing the `transfer_transcripts` payload, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). The row-count regression harness now ships via `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), covering scenarios up to 65 536 padded rows, while the paired SMT wiring remains behind the TF-3 batch-helper milestone (placeholders keep the trace layout stable until that swap lands). |
+| `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), requires real paired SMT witness material, checks chained roots from `public_inputs.old_root` to `public_inputs.new_root`, and surfaces validated witnesses for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing `transfer_transcripts`, rejects malformed witness paths, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). Row-count regression evidence now comes from execution-captured V1 batches; standalone synthetic row generation has been removed. |
 | Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, int)` shape; single transfers keep the existing builder. |
 
 Example Kotodama usage:
@@ -106,25 +115,19 @@ fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
 
 `TransferAssetBatch` executes the same permission and arithmetic checks as individual `Transfer::asset_numeric` calls, but records all deltas inside a single `TransferTranscript`. Multi-delta transcripts elide the poseidon digest until per-delta commitments land in a follow-up. The Kotodama builder now emits the begin/end syscalls automatically, so contracts can deploy batched transfers without hand-encoding Norito payloads.
 
-## Row-count Regression Harness
+## Row-count Regression Evidence
 
-`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) synthesizes FASTPQ transition batches with configurable selector counts and reports the resulting `row_usage` summary (`total_rows`, per-selector counts, ratio) alongside the padded length/log₂. Capture benchmarks for the 65 536-row ceiling with:
-
-```bash
-cargo run -p fastpq_prover --bin fastpq_row_bench -- \
-  --transfer-rows 65536 \
-  --mint-rows 256 \
-  --burn-rows 128 \
-  --pretty \
-  --output fastpq_row_usage_max.json
-```
-
-The emitted JSON mirrors the FASTPQ batch artifacts that `iroha_cli audit witness` now emits by default (pass `--no-fastpq-batches` to suppress them), so `scripts/fastpq/check_row_usage.py` and the CI gate can diff the synthetic runs against prior snapshots when validating planner changes.
+Row-count regression inputs are V1 batches captured from execution with real
+transfer SMT witness material. The old standalone synthetic row generator has
+been removed because it could not prove the transfer witness chain. The emitted
+JSON from `iroha_cli audit witness` contains the same `row_usage` summary
+(`total_rows`, per-selector counts, ratio) and can be checked with
+`scripts/fastpq/check_row_usage.py` and CI snapshot tooling.
 
 # Rollout Plan
 
 1. **TF-1 (Transcript plumbing)**: ✅ `StateTransaction::record_transfer_transcripts` now emits Norito transcripts for every `TransferAsset`/batch, `sumeragi::witness::record_fastpq_transcript` stores them inside the global witness, and `StateBlock::capture_exec_witness` builds `fastpq_batches` with explicit `public_inputs` for operators and the prover lane (use `--no-fastpq-batches` if you need a slimmer output).【crates/iroha_core/src/state.rs:8801】【crates/iroha_core/src/sumeragi/witness.rs:280】【crates/iroha_core/src/fastpq/mod.rs:157】【crates/iroha_cli/src/audit.rs:185】
-2. **TF-2 (Gadget implementation)**: ✅ `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), synthesises paired SMT proofs when hosts omit them, exposes structured witnesses via `TransferGadgetPlan`, and `trace::build_trace` threads those witnesses into `Trace::transfer_witnesses` while populating SMT columns from the proofs. `fastpq_row_bench` captures the 65 536-row regression harness so planners track row usage without replaying Norito payloads.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
+2. **TF-2 (Gadget implementation)**: ✅ `gadgets::transfer` validates multi-delta transcripts (balance arithmetic + Poseidon digest), requires paired SMT witnesses from execution capture, exposes structured witnesses via `TransferGadgetPlan`, and `trace::build_trace` threads those witnesses into `Trace::transfer_witnesses` while populating SMT columns from verified paths. Row-usage checks now consume captured V1 batch artifacts instead of synthetic row samples.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】
 3. **TF-3 (Batch helper)**: Enable the batch syscall + Kotodama builder, including host-level sequential application and gadget loop.
 4. **TF-4 (Telemetry & docs)**: Update `fastpq_plan.md`, `fastpq_migration_guide.md`, and dashboard schemas to surface allocation of transfer rows vs other gadgets.
 

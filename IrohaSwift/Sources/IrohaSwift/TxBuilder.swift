@@ -955,13 +955,13 @@ public final class IrohaSDK: @unchecked Sendable {
     ) throws -> SigningKey {
         switch defaultSigningAlgorithm {
         case .ed25519:
-            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+            if let derived = NoritoNativeBridge.shared.keypairFromSeed(
                 algorithm: .ed25519,
                 seed: seed
-            ) else {
-                throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+            ) {
+                return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
             }
-            return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
+            return try SigningKey.ed25519(privateKey: seed, metadata: metadata)
         default:
             guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
                 algorithm: defaultSigningAlgorithm,

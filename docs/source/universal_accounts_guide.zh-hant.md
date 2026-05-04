@@ -111,7 +111,7 @@ UAID 現在是第二個身分圖層的錨點：- 全域 `IdentifierPolicyId` (`<
 目前 Torii 路由：|路線 |目的|
 |--------|---------|
 | `GET /v1/ram-lfe/program-policies` |列出活動和非活動 RAM-LFE 程式策略及其公共執行元數據，包括可選 BFV `input_encryption` 參數和程式設計後端 `ram_fhe_profile`。 |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` |只接受 `{ input_hex }` 或 `{ encrypted_input }` 之一，並傳回所選程式的無狀態 `RamLfeExecutionReceipt` 和 `{ output_hex, output_hash, receipt_hash }`。目前的 Torii 運作時為已編程的 BFV 後端發出收據。 |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` |只接受 `{ input_hex }` 或 `{ encrypted_input }` 之一，並傳回所選程式的無狀態 `RamLfeExecutionReceipt` 和 `{ output_hash, receipt_hash }`。Torii 不會傳回 RAM-LFE 明文輸出。目前的 Torii 運作時為已編程的 BFV 後端發出收據。 |
 | `POST /v1/ram-lfe/receipts/verify` |根據已發布的鏈上程序策略無狀態地驗證 `RamLfeExecutionReceipt`，並可選擇檢查呼叫者提供的 `output_hex` 是否與收據 `output_hash` 相符。 |
 | `GET /v1/identifier-policies` |列出活動和非活動隱藏功能策略命名空間及其公共元數據，包括可選的 BFV `input_encryption` 參數、加密客戶端輸入所需的 `normalization` 模式以及編程 BFV 策略的 `ram_fhe_profile`。 |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` |剛好接受 `{ input }` 或 `{ encrypted_input }` 之一。明文 `input` 是伺服器端規範化的； BFV `encrypted_input` 必須已根據已發佈的策略模式進行標準化。然後，端點派生 `opaque:` 句柄並傳回 `ClaimIdentifier` 可以在鏈上提交的簽章收據，包括原始 `signature_payload_hex` 和解析後的 `signature_payload`。 || `POST /v1/identifiers/resolve` |剛好接受 `{ input }` 或 `{ encrypted_input }` 之一。明文 `input` 是伺服器端規範化的； BFV `encrypted_input` 必須已根據已發佈的策略模式進行標準化。當存在有效聲明時，端點將標識符解析為 `{ opaque_id, receipt_hash, uaid, account_id, signature }`，並且也將規範簽署的有效負載傳回為 `{ signature_payload_hex, signature_payload }`。 |
@@ -227,8 +227,9 @@ Torii的進程內執行運行時配置在
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```始終以小寫形式儲存文字，並在雜湊之前標準化空格。
 CLI 幫助程序，例如 `iroha app space-directory manifest scaffold` 和 Android
 `UaidLiteral` 解析器應用相同的修剪規則，因此治理審查可以

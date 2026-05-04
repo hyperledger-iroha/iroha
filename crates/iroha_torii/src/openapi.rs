@@ -6,6 +6,8 @@
 
 use norito::json::{Map, Value};
 
+pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
+
 fn license_section() -> Value {
     let mut license = Map::new();
     license.insert("name".into(), Value::String("Apache-2.0".to_owned()));
@@ -1227,6 +1229,15 @@ fn transaction_paths() -> Map {
             "#/components/schemas/JsonValue",
         )),
     );
+    paths.insert(
+        "/transaction/entrypoint".to_owned(),
+        Value::Object(binary_post_operation(
+            "Transactions",
+            "Submit a versioned transaction entrypoint.",
+            "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+            "#/components/schemas/JsonValue",
+        )),
+    );
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
@@ -1503,11 +1514,22 @@ fn vpn_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/vpn/quotes".to_owned(),
+        Value::Object(json_post_operation(
+            "VPN",
+            "Create a VPN quote.",
+            "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/vpn/sessions".to_owned(),
         Value::Object(json_post_operation(
             "VPN",
             "Create a VPN session.",
-            "Create a signed Sora VPN session for the active wallet account.",
+            "Create a signed Sora VPN session from a quote and committed native `OpenVpnLeaseEscrow` XOR payment transaction.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -1542,13 +1564,31 @@ fn vpn_paths() -> Map {
     );
     paths.insert(
         "/v1/vpn/receipts".to_owned(),
-        Value::Object(json_get_operation(
-            "VPN",
-            "List VPN receipts.",
-            "List canonical Sora VPN receipts for the active wallet account.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let get_op = json_get_operation(
+                "VPN",
+                "List VPN receipts.",
+                "List canonical Sora VPN receipts for the active wallet account.",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            );
+            let post_op = json_post_operation(
+                "VPN",
+                "Submit a VPN receipt.",
+                "Settle an active VPN lease from relay and client usage evidence. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            );
+            let mut methods = Map::new();
+            if let Some(get_value) = get_op.get("get") {
+                methods.insert("get".to_owned(), get_value.clone());
+            }
+            if let Some(post_value) = post_op.get("post") {
+                methods.insert("post".to_owned(), post_value.clone());
+            }
+            methods
+        }),
     );
     paths
 }
@@ -2804,8 +2844,8 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Onboard an account.",
-            "Register or onboard an account; when the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
-            "#/components/schemas/JsonValue",
+            "Register or onboard an account with an explicit canonical UAID. The request must provide `uaid` plus either `account_id` or `public_key_hex`; raw identity metadata is rejected, and optional identity evidence must be submitted only as `identity_commitment_hex`. When the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
+            "#/components/schemas/AccountOnboardingRequest",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4805,8 +4845,8 @@ fn sumeragi_paths() -> Map {
         Value::Object(json_post_operation(
             "Sumeragi",
             "Submit VRF commit.",
-            "Submit VRF commit payload.",
-            "#/components/schemas/JsonValue",
+            "Submit an authenticated VRF commit payload.",
+            "#/components/schemas/SumeragiVrfCommitRequest",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4816,8 +4856,8 @@ fn sumeragi_paths() -> Map {
         Value::Object(json_post_operation(
             "Sumeragi",
             "Submit VRF reveal.",
-            "Submit VRF reveal payload.",
-            "#/components/schemas/JsonValue",
+            "Submit an authenticated VRF reveal payload.",
+            "#/components/schemas/SumeragiVrfRevealRequest",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -6109,7 +6149,97 @@ fn paths_section() -> Map {
     paths.extend(nexus_paths());
     paths.extend(sumeragi_paths());
     paths.extend(repo_paths());
+    annotate_tool_effects(&mut paths);
     paths
+}
+
+fn annotate_tool_effects(paths: &mut Map) {
+    for (path, path_item) in paths {
+        let Some(path_map) = path_item.as_object_mut() else {
+            continue;
+        };
+        for method in ["get", "post", "put", "patch", "delete", "head", "options"] {
+            let Some(operation) = path_map.get_mut(method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let effect = operation_effect(method, path);
+            operation.insert(
+                TOOL_EFFECT_EXTENSION.into(),
+                Value::String(effect.to_owned()),
+            );
+        }
+    }
+}
+
+fn operation_effect(method: &str, path: &str) -> &'static str {
+    if is_operator_operation(method, path) {
+        return "operator";
+    }
+    if is_read_operation(method, path) {
+        return "read";
+    }
+    "write"
+}
+
+fn is_operator_operation(method: &str, path: &str) -> bool {
+    if method == "get" {
+        return false;
+    }
+    path.starts_with("/v1/operator/")
+        || matches!(
+            path,
+            "/configuration"
+                | "/v1/internal/torii/proxy"
+                | "/v1/nexus/lane-lifecycle"
+                | "/v1/sumeragi/evidence"
+                | "/v1/sumeragi/vrf/commit"
+                | "/v1/sumeragi/vrf/reveal"
+                | "/v1/sumeragi/rbc/sample"
+                | "/v1/gov/protected-namespaces"
+        )
+}
+
+fn is_read_operation(method: &str, path: &str) -> bool {
+    matches!(method, "get" | "head" | "options")
+        || (method == "post"
+            && matches!(
+                path,
+                "/query"
+                    | "/v1/accounts/query"
+                    | "/v1/aliases/by_account"
+                    | "/v1/aliases/resolve"
+                    | "/v1/aliases/resolve_index"
+                    | "/v1/assets/aliases/resolve"
+                    | "/v1/assets/definitions/query"
+                    | "/v1/assets/holders/query"
+                    | "/v1/assets/query"
+                    | "/v1/contracts/aliases/resolve"
+                    | "/v1/contracts/view"
+                    | "/v1/contracts/view/batch"
+                    | "/v1/controls/asset-transfer/get"
+                    | "/v1/da/commitments"
+                    | "/v1/da/commitments/prove"
+                    | "/v1/da/commitments/verify"
+                    | "/v1/da/pin_intents"
+                    | "/v1/da/pin_intents/prove"
+                    | "/v1/da/pin_intents/verify"
+                    | "/v1/domains/query"
+                    | "/v1/multisig/approvals/get"
+                    | "/v1/multisig/approvals/get_for_authority"
+                    | "/v1/multisig/approvals/list"
+                    | "/v1/multisig/approvals/list_for_authority"
+                    | "/v1/multisig/proposals/get"
+                    | "/v1/multisig/proposals/list"
+                    | "/v1/multisig/spec"
+                    | "/v1/nfts/query"
+                    | "/v1/proofs/query"
+                    | "/v1/rwas/query"
+                    | "/v1/transactions/status"
+                    | "/v1/zk/roots"
+                    | "/v1/zk/verify"
+                    | "/v1/zk/verify-batch"
+                    | "/v1/zk/vote/tally"
+            ))
 }
 
 fn alias_voprf_evaluate_operation() -> Map {
@@ -7357,6 +7487,101 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "AccountOnboardingRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "uaid"],
+            "additionalProperties": false,
+            "oneOf": [
+                { "required": ["account_id"] },
+                { "required": ["public_key_hex"] }
+            ],
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Account alias literal such as `alice@universal` or `merchant@domain.dataspace`."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical I105 account id to register. Mutually exclusive with generated `public_key_hex` onboarding material."
+                },
+                "public_key_hex": {
+                    "type": "string",
+                    "description": "Raw 32-byte Ed25519 public key bytes as 64 hex characters; Torii derives the canonical account id from this key."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "Explicit UAID literal (`uaid:<hex>` or raw 64-hex digest with the canonical low bit set)."
+                },
+                "identity_commitment_hex": {
+                    "type": "string",
+                    "description": "Optional 64-hex digest commitment to off-chain identity evidence. Raw identity metadata is not accepted."
+                },
+                "permissions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional permission literals requested from the onboarding allowlist."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiVrfCommitRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["epoch", "signer", "commitment_hex", "bls_sig_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Sumeragi VRF epoch number."
+                },
+                "signer": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "description": "Validator index in the active topology for the epoch height."
+                },
+                "commitment_hex": {
+                    "type": "string",
+                    "description": "32-byte VRF reveal commitment encoded as hex."
+                },
+                "bls_sig_hex": {
+                    "type": "string",
+                    "description": "BLS signature over the Sumeragi VRF commit preimage, encoded as non-empty hex."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiVrfRevealRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["epoch", "signer", "reveal_hex", "bls_sig_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Sumeragi VRF epoch number."
+                },
+                "signer": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "description": "Validator index in the active topology for the epoch height."
+                },
+                "reveal_hex": {
+                    "type": "string",
+                    "description": "32-byte VRF reveal value encoded as hex."
+                },
+                "bls_sig_hex": {
+                    "type": "string",
+                    "description": "BLS signature over the Sumeragi VRF reveal preimage, encoded as non-empty hex."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "AccountReadResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -7940,7 +8165,6 @@ fn openapi_schemas() -> Map {
                 "program_id",
                 "opaque_hash",
                 "receipt_hash",
-                "output_hex",
                 "output_hash",
                 "associated_data_hash",
                 "executed_at_ms",
@@ -7961,10 +8185,6 @@ fn openapi_schemas() -> Map {
                 "receipt_hash": {
                     "type": "string",
                     "description": "Deterministic receipt hash returned by the RAM-LFE backend."
-                },
-                "output_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded plaintext output bytes."
                 },
                 "output_hash": {
                     "type": "string",
@@ -10321,14 +10541,36 @@ mod tests {
         assert!(paths.contains_key("/v1/repo/agreements"));
         assert!(paths.contains_key("/v1/repo/agreements/query"));
         assert!(paths.contains_key("/transaction"));
+        assert!(paths.contains_key("/transaction/entrypoint"));
         assert!(paths.contains_key("/query"));
         assert!(paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
         assert!(paths.contains_key("/v1/vpn/profile"));
+        assert!(paths.contains_key("/v1/vpn/quotes"));
+        let vpn_quotes_post_description = paths
+            .get("/v1/vpn/quotes")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|post| post.get("description"))
+            .and_then(Value::as_str)
+            .expect("vpn quote create description");
+        assert!(vpn_quotes_post_description.contains("metering_public_key_hex"));
+        assert!(vpn_quotes_post_description.contains("OpenVpnLeaseEscrow"));
         assert!(paths.contains_key("/v1/vpn/sessions"));
         assert!(paths.contains_key("/v1/vpn/sessions/{session_id}"));
         assert!(paths.contains_key("/v1/vpn/receipts"));
+        let vpn_receipts_post_description = paths
+            .get("/v1/vpn/receipts")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|post| post.get("description"))
+            .and_then(Value::as_str)
+            .expect("vpn receipt submit description");
+        assert!(vpn_receipts_post_description.contains("tx_instructions"));
+        assert!(vpn_receipts_post_description.contains("SettleVpnLease"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
         assert!(paths.contains_key("/v1/multisig/propose"));
@@ -10374,6 +10616,110 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
+    }
+
+    #[test]
+    fn generated_operations_declare_tool_effects() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        for (path, path_item) in paths {
+            let path_map = path_item.as_object().expect("path item object");
+            for method in ["get", "post", "put", "patch", "delete", "head", "options"] {
+                let Some(operation) = path_map.get(method).and_then(Value::as_object) else {
+                    continue;
+                };
+                let effect = operation
+                    .get(TOOL_EFFECT_EXTENSION)
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| {
+                        panic!("{method} {path} must declare {TOOL_EFFECT_EXTENSION}")
+                    });
+                assert!(
+                    matches!(effect, "read" | "write" | "operator"),
+                    "{method} {path} declared invalid effect {effect}"
+                );
+            }
+        }
+
+        let query = paths
+            .get("/query")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("query post operation");
+        assert_eq!(
+            query.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+            Some("read")
+        );
+
+        let protected_namespaces = paths
+            .get("/v1/gov/protected-namespaces")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("protected namespaces post operation");
+        assert_eq!(
+            protected_namespaces
+                .get(TOOL_EFFECT_EXTENSION)
+                .and_then(Value::as_str),
+            Some("operator")
+        );
+    }
+
+    #[test]
+    fn generated_spec_documents_vrf_signature_payloads() {
+        fn post_request_schema_ref<'a>(doc: &'a Value, path: &str) -> Option<&'a str> {
+            doc.get("paths")?
+                .as_object()?
+                .get(path)?
+                .as_object()?
+                .get("post")?
+                .as_object()?
+                .get("requestBody")?
+                .as_object()?
+                .get("content")?
+                .as_object()?
+                .get("application/json")?
+                .as_object()?
+                .get("schema")?
+                .as_object()?
+                .get("$ref")?
+                .as_str()
+        }
+
+        let doc = generate_spec();
+        assert_eq!(
+            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/commit"),
+            Some("#/components/schemas/SumeragiVrfCommitRequest")
+        );
+        assert_eq!(
+            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/reveal"),
+            Some("#/components/schemas/SumeragiVrfRevealRequest")
+        );
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        for schema_name in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
+            let required = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("required"))
+                .and_then(Value::as_array)
+                .expect("VRF request required fields");
+            assert!(
+                required
+                    .iter()
+                    .any(|field| field.as_str() == Some("bls_sig_hex")),
+                "{schema_name} should require bls_sig_hex"
+            );
+        }
     }
 
     #[test]
@@ -10440,6 +10786,7 @@ mod tests {
             .get("properties")
             .and_then(Value::as_object)
             .expect("RamLfeExecuteResponse properties");
+        assert!(!properties.contains_key("output_hex"));
         assert_eq!(
             properties
                 .get("receipt")

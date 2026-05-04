@@ -4,20 +4,19 @@ use super::*;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiCommitPipelineStatus, SumeragiConsensusCapsStatus,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
         SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
         SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus,
-        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-        SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
-        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
-        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-        SumeragiWorkerQueueTotals,
+        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
+        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRoundGapStatus,
+        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
+        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+        SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+        SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     nexus::{DataSpaceId, LaneId},
 };
@@ -1149,7 +1148,8 @@ fn decode_and_validate_evidence(
     let topology_peers = state.commit_topology_snapshot();
     let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
     let world = state.world_view();
-    let height = subject_height.unwrap_or_else(|| u64::try_from(state.committed_height()).unwrap_or(0));
+    let height =
+        subject_height.unwrap_or_else(|| u64::try_from(state.committed_height()).unwrap_or(0));
     let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
         &world,
         state.chain_id_ref(),
@@ -1962,8 +1962,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry(
             "last_roster_unavailable_timestamp_ms",
-            snap.view_change_causes
-                .last_roster_unavailable_timestamp_ms,
+            snap.view_change_causes.last_roster_unavailable_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -2281,8 +2280,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     ]);
     let commit_pipeline = json_object(vec![
         json_entry("last_total_ms", snap.commit_pipeline.last_total_ms),
-        json_entry("last_validation_ms", snap.commit_pipeline.last_validation_ms),
-        json_entry("last_qc_rebuild_ms", snap.commit_pipeline.last_qc_rebuild_ms),
+        json_entry(
+            "last_validation_ms",
+            snap.commit_pipeline.last_validation_ms,
+        ),
+        json_entry(
+            "last_qc_rebuild_ms",
+            snap.commit_pipeline.last_qc_rebuild_ms,
+        ),
         json_entry("last_gate_ms", snap.commit_pipeline.last_gate_ms),
         json_entry("last_finalize_ms", snap.commit_pipeline.last_finalize_ms),
         json_entry(
@@ -2470,8 +2475,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry(
             "last_roster_unavailable_timestamp_ms",
-            snap.view_change_causes
-                .last_roster_unavailable_timestamp_ms,
+            snap.view_change_causes.last_roster_unavailable_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -3213,7 +3217,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "qc_deferred_missing_payload_total",
             snap.qc_deferred_missing_payload_total,
         ),
-        json_entry("qc_deferred_resolved_total", snap.qc_deferred_resolved_total),
+        json_entry(
+            "qc_deferred_resolved_total",
+            snap.qc_deferred_resolved_total,
+        ),
         json_entry("qc_deferred_expired_total", snap.qc_deferred_expired_total),
         json_entry(
             "consensus_missing_qc_reacquire_attempt_total",
@@ -3688,9 +3695,7 @@ mod status_tests {
             last_amount: Some(Numeric::from(42_u32)),
             last_asset_id: Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned()),
             last_payer: Some(sumeragi::status::NexusFeePayer::Sponsor),
-            last_payer_id: Some(
-                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
-            ),
+            last_payer_id: Some("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned()),
             last_error: Some("denied".to_owned()),
         };
         let lane_id = LaneId::new(7);
@@ -4062,7 +4067,9 @@ mod status_tests {
             "fallback telemetry field removed after fail-closed-only no-roster cutover"
         );
         assert!(
-            payload.get("consensus_no_roster_fallback_allowed_total").is_none(),
+            payload
+                .get("consensus_no_roster_fallback_allowed_total")
+                .is_none(),
             "fallback alias field removed after fail-closed-only no-roster cutover"
         );
         assert_eq!(
@@ -4402,7 +4409,9 @@ mod status_tests {
             Some(5)
         );
         assert_eq!(
-            commit_pipeline.get("ema_finalize_ms").and_then(Value::as_u64),
+            commit_pipeline
+                .get("ema_finalize_ms")
+                .and_then(Value::as_u64),
             Some(16)
         );
         let round_gap = payload
@@ -4495,10 +4504,8 @@ pub async fn handle_v1_sumeragi_status(
                     witness_ms: timeouts.witness_ms,
                 }
             }),
-            npos_repair_coverage: snap
-                .npos_repair_coverage
-                .as_ref()
-                .map(|coverage| SumeragiNposRepairCoverageStatus {
+            npos_repair_coverage: snap.npos_repair_coverage.as_ref().map(|coverage| {
+                SumeragiNposRepairCoverageStatus {
                     last_repair_height: coverage.last_repair_height,
                     last_repair_view: coverage.last_repair_view,
                     reason: coverage.reason.clone(),
@@ -4506,7 +4513,8 @@ pub async fn handle_v1_sumeragi_status(
                     required_stake_quorum_bps: coverage.required_stake_quorum_bps,
                     selected_stake_coverage_bps: coverage.selected_stake_coverage_bps,
                     reached_stake_quorum_coverage: coverage.reached_stake_quorum_coverage,
-                }),
+                }
+            }),
             effective_collectors_k: snap.effective_collectors_k,
             effective_redundant_send_r: snap.effective_redundant_send_r,
             leader_index: snap.leader_index,
@@ -5506,12 +5514,14 @@ struct VrfCommitRequestDto {
     pub epoch: u64,
     pub signer: u32,
     pub commitment_hex: String,
+    pub bls_sig_hex: String,
 }
 
 struct VrfRevealRequestDto {
     pub epoch: u64,
     pub signer: u32,
     pub reveal_hex: String,
+    pub bls_sig_hex: String,
 }
 
 pub fn handle_post_sumeragi_vrf_commit(
@@ -5519,10 +5529,12 @@ pub fn handle_post_sumeragi_vrf_commit(
     request: VrfCommitRequestDto,
 ) -> Result<axum::response::Response, Error> {
     let commitment = parse_hex32(&request.commitment_hex, "commitment_hex")?;
+    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
     let commit = iroha_data_model::block::consensus::VrfCommit {
         epoch: request.epoch,
         commitment,
         signer: request.signer,
+        bls_sig,
     };
     sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit));
     Ok(StatusCode::ACCEPTED.into_response())
@@ -5533,10 +5545,12 @@ pub fn handle_post_sumeragi_vrf_reveal(
     request: VrfRevealRequestDto,
 ) -> Result<axum::response::Response, Error> {
     let reveal = parse_hex32(&request.reveal_hex, "reveal_hex")?;
+    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
     let msg = iroha_data_model::block::consensus::VrfReveal {
         epoch: request.epoch,
         reveal,
         signer: request.signer,
+        bls_sig,
     };
     sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg));
     Ok(StatusCode::ACCEPTED.into_response())

@@ -650,19 +650,68 @@ impl Execute for RepoMarginCallIsi {
 
 /// Repo-related query implementations.
 pub mod query {
+    use std::collections::BTreeSet;
+
     use eyre::Result;
     use iroha_data_model::{
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
+            json::PredicateJson,
             repo::prelude::FindRepoAgreements,
         },
-        repo::RepoAgreement,
+        repo::{RepoAgreement, RepoAgreementId},
     };
     use iroha_telemetry::metrics;
+    use norito::json::Value;
 
     use super::*;
     use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+
+    enum RepoAgreementIdPath {
+        One(RepoAgreementId),
+        Set(Vec<RepoAgreementId>),
+    }
+
+    fn repo_agreement_id_field(field: &str) -> bool {
+        field == "id"
+    }
+
+    fn repo_agreement_id_from_value(value: &Value) -> Option<RepoAgreementId> {
+        value
+            .as_str()
+            .and_then(|raw| raw.parse::<RepoAgreementId>().ok())
+    }
+
+    fn repo_agreement_predicate_id_path(predicate: &PredicateJson) -> Option<RepoAgreementIdPath> {
+        if !predicate.exists.is_empty() {
+            return None;
+        }
+
+        if predicate.r#in.is_empty() && predicate.equals.len() == 1 {
+            let cond = &predicate.equals[0];
+            if repo_agreement_id_field(&cond.field) {
+                return repo_agreement_id_from_value(&cond.value).map(RepoAgreementIdPath::One);
+            }
+        }
+
+        if predicate.equals.is_empty() && predicate.r#in.len() == 1 {
+            let cond = &predicate.r#in[0];
+            if !repo_agreement_id_field(&cond.field) {
+                return None;
+            }
+            let ids = cond
+                .values
+                .iter()
+                .map(repo_agreement_id_from_value)
+                .collect::<Option<BTreeSet<_>>>()?
+                .into_iter()
+                .collect::<Vec<_>>();
+            return Some(RepoAgreementIdPath::Set(ids));
+        }
+
+        None
+    }
 
     impl ValidQuery for FindRepoAgreements {
         #[metrics(+"find_repo_agreements")]
@@ -671,12 +720,34 @@ pub mod query {
             filter: CompoundPredicate<RepoAgreement>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = RepoAgreement>, Error> {
-            Ok(state_ro
-                .world()
-                .repo_agreements()
-                .iter()
-                .filter(move |(_, agreement)| filter.applies(agreement))
-                .map(|(_, agreement)| agreement.clone()))
+            let world = state_ro.world();
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            if let Some(path) = predicate_json
+                .as_ref()
+                .and_then(repo_agreement_predicate_id_path)
+            {
+                let ids = match path {
+                    RepoAgreementIdPath::One(id) => vec![id],
+                    RepoAgreementIdPath::Set(ids) => ids,
+                };
+                let iter: Box<dyn Iterator<Item = RepoAgreement> + '_> = Box::new(
+                    ids.into_iter()
+                        .filter_map(move |id| world.repo_agreements().get(&id).cloned()),
+                );
+                return Ok(iter);
+            }
+
+            let iter: Box<dyn Iterator<Item = RepoAgreement> + '_> = Box::new(
+                world
+                    .repo_agreements()
+                    .iter()
+                    .filter_map(move |(_, agreement)| {
+                        filter.applies(agreement).then(|| agreement.clone())
+                    }),
+            );
+            Ok(iter)
         }
     }
 }
@@ -697,7 +768,8 @@ mod tests {
             AccountEvent, DataEvent, DomainEvent, RepoAccountEvent, RepoAccountRole,
         },
         isi::{InstructionBox, repo::RepoInstructionBox},
-        repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+        query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements},
+        repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -705,7 +777,10 @@ mod tests {
     use norito::json::{Map, Number, Value};
 
     use super::*;
-    use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
+    use crate::{
+        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ValidQuery,
+        state::State,
+    };
 
     fn setup_state() -> (State, RepoAgreementId, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -1020,6 +1095,42 @@ mod tests {
 
         let view = state.view();
         assert!(view.world.repo_agreements().get(&agreement_id).is_some());
+    }
+
+    #[test]
+    fn find_repo_agreements_uses_id_predicate_lookup() {
+        let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("repo execution");
+        stx.apply();
+        block.commit().expect("commit succeeds");
+
+        let view = state.view();
+        let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
+            predicate.equals("id", agreement_id.to_string())
+        });
+        let found = FindRepoAgreements
+            .execute(predicate, &view)
+            .expect("query repo agreements")
+            .map(|agreement| agreement.id)
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![agreement_id.clone()]);
+
+        let missing: RepoAgreementId = "missing_repo".parse().unwrap();
+        let predicate = CompoundPredicate::<RepoAgreement>::build(|predicate| {
+            predicate.in_values("id", [agreement_id.to_string(), missing.to_string()])
+        });
+        let found = FindRepoAgreements
+            .execute(predicate, &view)
+            .expect("query repo agreements by id set")
+            .map(|agreement| agreement.id)
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![agreement_id]);
     }
 
     #[test]

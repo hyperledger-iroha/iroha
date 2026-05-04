@@ -111,7 +111,7 @@ UAID нь одоо хоёр дахь таних давхаргын зангуу 
 Одоогийн Torii маршрутууд:| Маршрут | Зорилго |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | Идэвхтэй болон идэвхгүй RAM-LFE програмын бодлогууд болон тэдгээрийн нийтийн гүйцэтгэлийн мета өгөгдлүүд, үүнд нэмэлт BFV `input_encryption` параметрүүд болон программчлагдсан `ram_fhe_profile` багтана. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авч, сонгогдсон програмын хувьд харьяалалгүй `RamLfeExecutionReceipt` дээр нэмэх нь `{ output_hex, output_hash, receipt_hash }`-г буцаана. Одоогийн Torii ажиллах хугацаа нь программчлагдсан BFV backend-ийн төлбөрийн баримтыг гаргадаг. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авч, сонгогдсон програмын хувьд харьяалалгүй `RamLfeExecutionReceipt` дээр нэмэх нь `{ output_hash, receipt_hash }`-г буцаана. Torii нь RAM-LFE-ийн ил текст гаралтыг буцаадаггүй. Одоогийн Torii ажиллах хугацаа нь программчлагдсан BFV backend-ийн төлбөрийн баримтыг гаргадаг. |
 | `POST /v1/ram-lfe/receipts/verify` | Иргэншилгүй `RamLfeExecutionReceipt`-г нийтэлсэн гинжин хэлхээний програмын бодлогын эсрэг баталгаажуулж, дуудлага хийгчийн нийлүүлсэн `output_hex` нь `output_hash` баримттай таарч байгаа эсэхийг шалгадаг. |
 | `GET /v1/identifier-policies` | Идэвхтэй болон идэвхгүй далд функцийн бодлогын нэрсийн орон зай, тэдгээрийн олон нийтийн мета өгөгдлүүд, үүнд нэмэлт BFV `input_encryption` параметрүүд, шифрлэгдсэн үйлчлүүлэгчийн оролтод шаардлагатай `normalization` горим, програмчлагдсан BFV бодлогод зориулсан `ram_fhe_profile` зэрэг багтана. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авна. Энгийн текст `input` сервер талдаа хэвийн; BFV `encrypted_input` нь хэвлэгдсэн бодлогын горимын дагуу аль хэдийн хэвийн болсон байх ёстой. Дараа нь төгсгөлийн цэг нь `opaque:` бариулыг гаргаж, `ClaimIdentifier` нь гинжин хэлхээнд илгээх боломжтой гарын үсэгтэй баримтыг буцаана, үүнд түүхий `signature_payload_hex` болон задлан шинжлэгдсэн `signature_payload` орно. || `POST /v1/identifiers/resolve` | `{ input }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авна. Энгийн текст `input` сервер талын хэвийн; BFV `encrypted_input` нь хэвлэгдсэн бодлогын горимын дагуу аль хэдийн хэвийн болсон байх ёстой. Төгсгөлийн цэг нь идэвхтэй нэхэмжлэл байгаа үед танигчийг `{ opaque_id, receipt_hash, uaid, account_id, signature }` болгон шийдэж, мөн `{ signature_payload_hex, signature_payload }` гэж каноник гарын үсэгтэй ачааллыг буцаана. |
@@ -227,8 +227,9 @@ UAID авах гурван дэмжигдсэн арга байдаг:
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```Хэшгэхийн өмнө үсгийг жижиг үсгээр бичиж, хоосон зайг хэвийн болго.
 `iroha app space-directory manifest scaffold` болон Android зэрэг CLI туслахууд
 `UaidLiteral` задлагч ижил шүргэх дүрмийг ашигладаг тул засаглалын тойм

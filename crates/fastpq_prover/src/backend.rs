@@ -722,8 +722,13 @@ mod observer_tests {
 
 #[cfg(target_os = "macos")]
 fn metal_available() -> bool {
-    if metal_library_path().is_some() {
-        return true;
+    if metal_library_path().is_none() {
+        #[cfg(feature = "fastpq-gpu")]
+        tracing::warn!(
+            target: "fastpq::planner",
+            "Metal device detected path requires a compiled fastpq.metallib; GPU backend disabled"
+        );
+        return false;
     }
     if metal_device_visible_via_api() {
         return true;
@@ -870,6 +875,11 @@ fn metal_library_path() -> Option<String> {
                 None
             }
         })
+    })
+    .or_else(|| {
+        option_env!("FASTPQ_METAL_LIB")
+            .filter(|path| !path.is_empty() && Path::new(path).exists())
+            .map(str::to_owned)
     })
 }
 
@@ -1217,6 +1227,7 @@ pub fn air_composition_values(
     column_names: &[String],
     columns: &[Vec<u64>],
     alphas: &[u64],
+    next_step: usize,
 ) -> Result<Vec<u64>> {
     if columns.is_empty() {
         return Ok(Vec::new());
@@ -1225,10 +1236,16 @@ pub fn air_composition_values(
     if !columns.iter().all(|column| column.len() == row_count) {
         return Err(Error::AirOpeningMismatch { index: 0 });
     }
+    if row_count != 0 && next_step == 0 {
+        return Err(Error::QueryIndexOutOfRange {
+            index: 0,
+            len: row_count,
+        });
+    }
     (0..row_count)
         .map(|index| {
             let current = air_row_at(columns, index)?;
-            let next = air_row_at(columns, (index + 1) % row_count)?;
+            let next = air_row_at(columns, (index + next_step) % row_count)?;
             air_composition_value_for_rows(column_names, &current, &next, alphas)
         })
         .collect()
@@ -1259,15 +1276,22 @@ pub fn open_air_constraint_openings(
     composition_values: &[u64],
     composition_leaves: &[u64],
     query_indices: &[usize],
+    next_step: usize,
 ) -> Result<Vec<AirConstraintOpening>> {
     if columns.is_empty() {
         return Ok(Vec::new());
     }
     let row_count = columns[0].len();
+    if next_step == 0 {
+        return Err(Error::QueryIndexOutOfRange {
+            index: 0,
+            len: row_count,
+        });
+    }
     let row_paths = merkle_paths_for_leaf_indices(air_trace_leaves, query_indices)?;
     let next_indices: Vec<usize> = query_indices
         .iter()
-        .map(|index| (index + 1) % row_count)
+        .map(|index| (index + next_step) % row_count)
         .collect();
     let next_paths = merkle_paths_for_leaf_indices(air_trace_leaves, &next_indices)?;
     let composition_paths = merkle_paths_for_leaf_indices(composition_leaves, query_indices)?;
@@ -2030,7 +2054,11 @@ impl Backend for StarkBackend {
             let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
             alphas.push(transcript.challenge_field(&tag));
         }
-        let air_composition_values = air_composition_values(&column_names, lde_columns, &alphas)?;
+        let next_step = usize::try_from(self.config.params.fri.blowup_factor)
+            .expect("FRI blowup factor fits usize")
+            .max(1);
+        let air_composition_values =
+            air_composition_values(&column_names, lde_columns, &alphas, next_step)?;
         let air_composition_leaves = hash_air_composition_leaves(&air_composition_values)?;
         let air_composition_root = merkle_root(&air_composition_leaves);
         transcript.append_message(
@@ -2069,6 +2097,7 @@ impl Backend for StarkBackend {
             &air_composition_values,
             &air_composition_leaves,
             &query_indices,
+            next_step,
         )?;
         let fri_query_openings = open_fri_query_chains(
             &fri_layer_values,

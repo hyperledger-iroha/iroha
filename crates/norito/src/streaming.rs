@@ -3172,6 +3172,7 @@ pub mod codec {
 
     /// Mapping from raw bundle contexts to a pruned/remapped domain.
     #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BundleContextRemap {
         mapping: BTreeMap<BundleContextId, BundleContextId>,
         escape_context: BundleContextId,
@@ -3280,6 +3281,48 @@ pub mod codec {
         checksum: Hash,
         max_width: u8,
         tables: [SymbolTable; MAX_BUNDLE_WIDTH],
+    }
+
+    #[cfg(feature = "schema-structural")]
+    impl ::iroha_schema::TypeId for BundleAnsTables {
+        fn id() -> String {
+            "BundleAnsTables".to_owned()
+        }
+    }
+
+    #[cfg(feature = "schema-structural")]
+    impl ::iroha_schema::IntoSchema for BundleAnsTables {
+        fn type_name() -> String {
+            "BundleAnsTables".to_owned()
+        }
+
+        fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
+            if map.contains_key::<Self>() {
+                return;
+            }
+
+            map.insert::<Self>(::iroha_schema::Metadata::Struct(
+                ::iroha_schema::NamedFieldsMeta {
+                    declarations: vec![
+                        ::iroha_schema::Declaration {
+                            name: "precision_bits".to_owned(),
+                            ty: core::any::TypeId::of::<u8>(),
+                        },
+                        ::iroha_schema::Declaration {
+                            name: "checksum".to_owned(),
+                            ty: core::any::TypeId::of::<Hash>(),
+                        },
+                        ::iroha_schema::Declaration {
+                            name: "max_width".to_owned(),
+                            ty: core::any::TypeId::of::<u8>(),
+                        },
+                    ],
+                },
+            ));
+
+            <u8 as ::iroha_schema::IntoSchema>::update_schema_map(map);
+            <Hash as ::iroha_schema::IntoSchema>::update_schema_map(map);
+        }
     }
 
     impl BundleAnsTables {
@@ -4652,7 +4695,7 @@ pub mod codec {
 
     /// Errors emitted when validating a manifest against an encoded segment.
     #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::TypeId))]
     pub enum ManifestError {
         #[error(transparent)]
         Segment(#[from] SegmentError),
@@ -4698,6 +4741,122 @@ pub mod codec {
             /// Acceleration mask required by the encoder configuration.
             required_mask: u32,
         },
+    }
+
+    #[cfg(feature = "schema-structural")]
+    #[derive(::iroha_schema::IntoSchema)]
+    #[allow(dead_code)]
+    struct CapabilityEntropyFlagMismatchInfo {
+        required_bundled: bool,
+        found_bundled: bool,
+    }
+
+    #[cfg(feature = "schema-structural")]
+    #[derive(::iroha_schema::IntoSchema)]
+    #[allow(dead_code)]
+    struct CapabilityAccelerationFlagMismatchInfo {
+        entropy_mode: EntropyMode,
+        found_mask: u32,
+        required_mask: u32,
+    }
+
+    #[cfg(feature = "schema-structural")]
+    impl ::iroha_schema::IntoSchema for ManifestError {
+        fn type_name() -> String {
+            "ManifestError".to_owned()
+        }
+
+        fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
+            if map.contains_key::<Self>() {
+                return;
+            }
+
+            map.insert::<Self>(::iroha_schema::Metadata::Enum(::iroha_schema::EnumMeta {
+                variants: vec![
+                    ::iroha_schema::EnumVariant {
+                        tag: "Segment".to_owned(),
+                        discriminant: 0,
+                        ty: Some(core::any::TypeId::of::<SegmentError>()),
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "SegmentNumberMismatch".to_owned(),
+                        discriminant: 1,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "ProfileMismatch".to_owned(),
+                        discriminant: 2,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "EntropyModeMismatch".to_owned(),
+                        discriminant: 3,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "EntropyTablesMismatch".to_owned(),
+                        discriminant: 4,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "EncryptionSuiteMismatch".to_owned(),
+                        discriminant: 5,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "ContentKeyIdMismatch".to_owned(),
+                        discriminant: 6,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "NonceSaltMismatch".to_owned(),
+                        discriminant: 7,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "ChunkRootMismatch".to_owned(),
+                        discriminant: 8,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "AudioSummaryMismatch".to_owned(),
+                        discriminant: 9,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "DescriptorCountMismatch".to_owned(),
+                        discriminant: 10,
+                        ty: None,
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "DescriptorMismatch".to_owned(),
+                        discriminant: 11,
+                        ty: Some(core::any::TypeId::of::<u32>()),
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "CapabilityEntropyFlagMismatch".to_owned(),
+                        discriminant: 12,
+                        ty: Some(core::any::TypeId::of::<CapabilityEntropyFlagMismatchInfo>()),
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "CapabilityAccelerationFlagMismatch".to_owned(),
+                        discriminant: 13,
+                        ty: Some(core::any::TypeId::of::<
+                            CapabilityAccelerationFlagMismatchInfo,
+                        >()),
+                    },
+                ],
+            }));
+
+            <SegmentError as ::iroha_schema::IntoSchema>::update_schema_map(map);
+            <u32 as ::iroha_schema::IntoSchema>::update_schema_map(map);
+            <CapabilityEntropyFlagMismatchInfo as ::iroha_schema::IntoSchema>::update_schema_map(
+                map,
+            );
+            <CapabilityAccelerationFlagMismatchInfo as ::iroha_schema::IntoSchema>::update_schema_map(
+                map,
+            );
+        }
     }
 
     /// Frame geometry used by the baseline codec (luma-only for now).
@@ -5901,11 +6060,55 @@ pub mod codec {
     }
 
     #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize)]
-    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::TypeId))]
     pub enum BundledToken {
         DcDiff(i16),
         Ac { run: u8, value: i16 },
         EndOfBlock,
+    }
+
+    #[cfg(feature = "schema-structural")]
+    #[derive(::iroha_schema::IntoSchema)]
+    #[allow(dead_code)]
+    struct BundledAcTokenSchema {
+        run: u8,
+        value: i16,
+    }
+
+    #[cfg(feature = "schema-structural")]
+    impl ::iroha_schema::IntoSchema for BundledToken {
+        fn type_name() -> String {
+            "BundledToken".to_owned()
+        }
+
+        fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
+            if map.contains_key::<Self>() {
+                return;
+            }
+
+            map.insert::<Self>(::iroha_schema::Metadata::Enum(::iroha_schema::EnumMeta {
+                variants: vec![
+                    ::iroha_schema::EnumVariant {
+                        tag: "DcDiff".to_owned(),
+                        discriminant: 0,
+                        ty: Some(core::any::TypeId::of::<i16>()),
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "Ac".to_owned(),
+                        discriminant: 1,
+                        ty: Some(core::any::TypeId::of::<BundledAcTokenSchema>()),
+                    },
+                    ::iroha_schema::EnumVariant {
+                        tag: "EndOfBlock".to_owned(),
+                        discriminant: 2,
+                        ty: None,
+                    },
+                ],
+            }));
+
+            <i16 as ::iroha_schema::IntoSchema>::update_schema_map(map);
+            <BundledAcTokenSchema as ::iroha_schema::IntoSchema>::update_schema_map(map);
+        }
     }
 
     #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize)]
@@ -10428,7 +10631,7 @@ mod tests {
 
     #[test]
     fn load_bundle_tables_accepts_mangled_payload_string() {
-        let payload = r#"{"version""1","generated_at""1765012527","generator_commit""7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877","checksum_sha256""430943A6D4E8BB34DE9A39879C39FAA5814B5D1FE3D13FE43DEFBA1F2C1741F2","body":{"bundle_width""3","seed""0","groups":[{"width_bits""2","group_size""4","precision_bits""12","frequencies":["542","1113","1011","1430"],"cumulative":["0","542","1655","2666","4096"]},{"width_bits""3","group_size""8","precision_bits""12","frequencies":["280","262","672","441","818","193","692","738"],"cumulative":["0","280","542","1214","1655","2473","2666","3358","4096"]}]}}"#;
+        let payload = r#"{"version""1","generated_at""1765012527","generator_commit""7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877","checksum_sha256""A8C50EF2D4A9E80C0D79AB392B626B62F176B1603963E51CAE1E923B88AE8A06","body":{"bundle_width""3","seed""0","groups":[{"width_bits""2","group_size""4","precision_bits""12","frequencies":["542","1113","1011","1430"],"cumulative":["0","542","1655","2666","4096"]},{"width_bits""3","group_size""8","precision_bits""12","frequencies":["280","262","672","441","818","193","692","738"],"cumulative":["0","280","542","1214","1655","2473","2666","3358","4096"]}]}}"#;
         let toml = format!("payload = '''{payload}'''\nsignature = ''\n");
         let path = write_temp_tables_toml(&toml);
 

@@ -33,9 +33,9 @@ enum NoritoBridgeLoader {
     static let expectedVersion = "0.1.0"
     static let expectedBridgeAbiVersion: UInt32 = 2
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "caade76810c121c7d64a4dd856211976c9eb8a15927de6fbd20a88a05d8df4c4",
-        "ios-arm64": "b821b01b0623648adc5d5297a810b8ef16dbc79076f29fb2369aafb4c5180233",
-        "ios-arm64_x86_64-simulator": "52beecfa8859e721ee76e80ac18c841a480a50b449ae42f33b11c6a87ae79fb3"
+        "macos-arm64": "7096b157ef1ee9bec0b2a238bbd79a76ddae4eaaabfdb960387151a00b175063",
+        "ios-arm64": "b253468efed1c94c2447a7475701bf27846480b45104c4e8cb077acd481dbb4d",
+        "ios-arm64_x86_64-simulator": "7d2db7b96a9c0b8f187d4763db853102937e5842211af77b70e65467634b6cb1"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",

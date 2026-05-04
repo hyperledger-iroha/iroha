@@ -28,6 +28,11 @@ use {
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use crate::metal;
 
+#[cfg(feature = "fastpq-gpu")]
+static POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "fastpq-gpu")]
+static POSEIDON_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
+
 /// Trait describing a Poseidon backend.
 pub trait PoseidonBackend: Send + Sync {
     /// Hash the provided field elements with the Poseidon permutation.
@@ -97,7 +102,9 @@ impl GpuPoseidonBackend {
         Self {
             accelerator,
             fallback: CpuPoseidonBackend,
-            gpu_enabled: Arc::new(AtomicBool::new(true)),
+            gpu_enabled: Arc::new(AtomicBool::new(
+                !POSEIDON_GPU_DISABLED.load(Ordering::Acquire),
+            )),
         }
     }
 
@@ -237,12 +244,91 @@ fn backend() -> &'static dyn PoseidonBackend {
     BACKEND
         .get_or_init(|| {
             #[cfg(feature = "fastpq-gpu")]
-            if let Some(accelerator) = backend::current_gpu_backend() {
+            if !POSEIDON_GPU_DISABLED.load(Ordering::Acquire)
+                && let Some(accelerator) = backend::current_gpu_backend()
+            {
                 return Box::new(GpuPoseidonBackend::new(accelerator));
             }
             Box::new(CpuPoseidonBackend)
         })
         .as_ref()
+}
+
+/// Preflight the configured Poseidon GPU backend used by the prover path.
+///
+/// The preflight performs backend discovery and a tiny deterministic
+/// `poseidon_permute` parity check against the scalar implementation. A failed
+/// self-test disables the accelerated Poseidon path for this process so later
+/// prover work keeps the existing CPU fallback behavior.
+#[cfg(feature = "fastpq-gpu")]
+#[must_use]
+pub fn preflight_gpu_backend() -> bool {
+    if POSEIDON_GPU_DISABLED.load(Ordering::Acquire) {
+        return false;
+    }
+    let Some(backend) = backend::current_gpu_backend() else {
+        return false;
+    };
+    if *POSEIDON_GPU_SELF_TEST.get_or_init(|| run_poseidon_gpu_self_test(backend)) {
+        true
+    } else {
+        POSEIDON_GPU_DISABLED.store(true, Ordering::Release);
+        false
+    }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
+    let inputs = [
+        [0u64, 1, 2],
+        [
+            0x0123_4567_89ab_cdef,
+            0xfedc_ba98_7654_3210,
+            0x0f0f_f0f0_aaaa_5555,
+        ],
+    ];
+    let mut expected = inputs;
+    for state in &mut expected {
+        cpu::permute_state(state);
+    }
+    let expected = expected.iter().flatten().copied().collect::<Vec<_>>();
+    let mut actual = inputs.into_iter().flatten().collect::<Vec<_>>();
+
+    let result = {
+        let _guard = backend::acquire_gpu_lane();
+        match backend {
+            GpuBackend::Cuda => fastpq_cuda::fastpq_poseidon_permute(actual.as_mut_slice())
+                .map_err(|err| err.to_string()),
+            #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+            GpuBackend::Metal => {
+                metal::poseidon_permute(actual.as_mut_slice()).map_err(|err| err.to_string())
+            }
+            other => Err(format!(
+                "{other:?} backend unsupported for Poseidon preflight"
+            )),
+        }
+    };
+
+    match result {
+        Ok(()) if actual == expected => true,
+        Ok(()) => {
+            warn!(
+                target: "fastpq::poseidon",
+                backend = backend.as_str(),
+                "FASTPQ Poseidon GPU preflight produced a CPU parity mismatch; falling back to CPU"
+            );
+            false
+        }
+        Err(error) => {
+            warn!(
+                target: "fastpq::poseidon",
+                %error,
+                backend = backend.as_str(),
+                "FASTPQ Poseidon GPU preflight failed; falling back to CPU"
+            );
+            false
+        }
+    }
 }
 
 /// Hash the provided field elements with the active Poseidon backend.
@@ -352,6 +438,12 @@ mod tests {
         let cpu_second = cpu_sponge.squeeze_element();
         let backend_second = backend_sponge.squeeze_element();
         assert_eq!(cpu_second, backend_second);
+    }
+
+    #[cfg(all(test, feature = "fastpq-gpu"))]
+    #[test]
+    fn preflight_gpu_backend_returns_safely() {
+        let _ = super::preflight_gpu_backend();
     }
 
     #[cfg(all(test, feature = "fastpq-gpu"))]

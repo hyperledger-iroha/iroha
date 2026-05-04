@@ -26,8 +26,9 @@ use fastpq_prover::trace::{
     PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch,
 };
 use fastpq_prover::{
-    CudaBackendError, ExecutionMode, Planner, clear_execution_mode_observer, fastpq_bn254_fft,
-    fastpq_bn254_lde, set_execution_mode_observer,
+    Bn254PoseidonBatchSlice, CudaBackendError, ExecutionMode, Planner,
+    clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde, set_execution_mode_observer,
+    try_hash_bn254_poseidon_word_batches,
 };
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
@@ -67,6 +68,7 @@ enum BenchOperation {
     Ifft,
     Lde,
     Poseidon,
+    Bn254PoseidonWords,
 }
 
 impl BenchOperation {
@@ -76,6 +78,7 @@ impl BenchOperation {
             Self::Ifft => "ifft",
             Self::Lde => "lde",
             Self::Poseidon => "poseidon_hash_columns",
+            Self::Bn254PoseidonWords => "bn254_poseidon_words",
         }
     }
 }
@@ -90,6 +93,9 @@ fn parse_operation_filter(raw: &str) -> Result<OperationFilter, String> {
         "lde" => Ok(OperationFilter::Only(BenchOperation::Lde)),
         "poseidon_hash_columns" | "poseidon-hash" | "poseidon" => {
             Ok(OperationFilter::Only(BenchOperation::Poseidon))
+        }
+        "bn254_poseidon_words" | "bn254-poseidon-words" => {
+            Ok(OperationFilter::Only(BenchOperation::Bn254PoseidonWords))
         }
         _ => Err(format!("unknown --operation '{raw}'")),
     }
@@ -135,7 +141,7 @@ struct Config {
     /// Fail if the GPU backend is unavailable.
     #[arg(long)]
     require_gpu: bool,
-    /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `poseidon_hash_columns`, or `all`).
+    /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `poseidon_hash_columns`, `bn254_poseidon_words`, or `all`).
     #[arg(long, default_value = "all", value_parser = parse_operation_filter)]
     operation: OperationFilter,
 }
@@ -578,6 +584,13 @@ fn collect_operations(
         entries.push(collect_poseidon_entry(config, columns, probe));
     }
 
+    if config
+        .operation
+        .includes(BenchOperation::Bn254PoseidonWords)
+    {
+        entries.push(collect_bn254_poseidon_words_entry(config, probe));
+    }
+
     entries
 }
 
@@ -626,6 +639,91 @@ fn collect_poseidon_entry(
         &poseidon.cpu,
         poseidon.gpu.as_ref(),
     )
+}
+
+#[derive(Clone)]
+struct Bn254PoseidonWordBatch {
+    words: Vec<u64>,
+    slices: Vec<Bn254PoseidonBatchSlice>,
+}
+
+fn collect_bn254_poseidon_words_entry(config: &Config, probe: &ExecutionProbe) -> OperationEntry {
+    let batch = generate_bn254_poseidon_word_batch(config.rows);
+    let cpu = measure_word_batch(&batch, config.warmups, config.iterations, |input| {
+        hash_bn254_poseidon_words_cpu(&input.words, &input.slices)
+    });
+    let gpu = if probe.gpu_available {
+        measure_word_batch_optional(&batch, config.warmups, config.iterations, |input| {
+            try_hash_bn254_poseidon_word_batches(&input.words, &input.slices)
+        })
+    } else {
+        None
+    };
+    let mut entry = operation_entry(
+        BenchOperation::Bn254PoseidonWords.as_str(),
+        batch.words.len(),
+        batch.slices.len() * BN254_LIMBS,
+        1,
+        &cpu,
+        gpu.as_ref(),
+    );
+    entry.estimated_gpu_transfer_bytes = batch
+        .words
+        .len()
+        .saturating_mul(core::mem::size_of::<u64>())
+        .saturating_add(
+            batch
+                .slices
+                .len()
+                .saturating_mul(core::mem::size_of::<u32>() * 2),
+        )
+        .saturating_add(
+            batch
+                .slices
+                .len()
+                .saturating_mul(BN254_LIMBS)
+                .saturating_mul(core::mem::size_of::<u64>()),
+        );
+    entry
+}
+
+fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
+    let mut words = Vec::with_capacity(rows.saturating_mul(5));
+    let mut slices = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let len = match row % 7 {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            4 => 5,
+            5 => 8,
+            _ => 13,
+        };
+        let offset = words.len();
+        for idx in 0..len {
+            let rotation = u32::try_from(idx % 63).expect("rotation count is less than 63");
+            let value = (row as u64)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .rotate_left(rotation)
+                ^ (idx as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
+            words.push(value);
+        }
+        slices.push(Bn254PoseidonBatchSlice::new(offset, len));
+    }
+    Bn254PoseidonWordBatch { words, slices }
+}
+
+fn hash_bn254_poseidon_words_cpu(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> Vec<[u8; 32]> {
+    slices
+        .iter()
+        .map(|slice| {
+            iroha_zkp_halo2::poseidon::hash_u64_words_bytes(&words[slice.offset()..][..slice.len()])
+        })
+        .collect()
 }
 
 fn collect_bn254_metrics(
@@ -1062,6 +1160,29 @@ fn measure_map<T: Clone, R>(
     Summary::from_samples(&samples).expect("at least one iteration recorded")
 }
 
+fn measure_word_batch<R>(
+    template: &Bn254PoseidonWordBatch,
+    warmups: usize,
+    iterations: usize,
+    mut op: impl FnMut(&Bn254PoseidonWordBatch) -> R,
+) -> Summary {
+    let mut samples = Vec::with_capacity(iterations);
+    for _ in 0..warmups {
+        let data = template.clone();
+        let result = op(&data);
+        black_box(result);
+    }
+    for _ in 0..iterations {
+        let data = template.clone();
+        let start = Instant::now();
+        let result = op(&data);
+        let elapsed = elapsed_ms(start.elapsed());
+        samples.push(elapsed);
+        black_box(result);
+    }
+    Summary::from_samples(&samples).expect("at least one iteration recorded")
+}
+
 #[cfg(any(feature = "fastpq-gpu", test))]
 fn measure_map_optional<T: Clone, R>(
     template: &[Vec<T>],
@@ -1077,6 +1198,29 @@ fn measure_map_optional<T: Clone, R>(
     }
     for _ in 0..iterations {
         let data = template.to_vec();
+        let start = Instant::now();
+        let result = op(&data)?;
+        let elapsed = elapsed_ms(start.elapsed());
+        samples.push(elapsed);
+        black_box(result);
+    }
+    Some(Summary::from_samples(&samples).expect("at least one iteration recorded"))
+}
+
+fn measure_word_batch_optional<R>(
+    template: &Bn254PoseidonWordBatch,
+    warmups: usize,
+    iterations: usize,
+    mut op: impl FnMut(&Bn254PoseidonWordBatch) -> Option<R>,
+) -> Option<Summary> {
+    let mut samples = Vec::with_capacity(iterations);
+    for _ in 0..warmups {
+        let data = template.clone();
+        let result = op(&data)?;
+        black_box(result);
+    }
+    for _ in 0..iterations {
+        let data = template.clone();
         let start = Instant::now();
         let result = op(&data)?;
         let elapsed = elapsed_ms(start.elapsed());
@@ -1343,9 +1487,9 @@ mod tests {
         };
         let operations = collect_operations(&planner, &config, padded, eval_len, &columns, &probe);
         #[cfg(feature = "fastpq-gpu")]
-        assert_eq!(operations.len(), 4);
+        assert_eq!(operations.len(), 5);
         #[cfg(not(feature = "fastpq-gpu"))]
-        assert_eq!(operations.len(), 3);
+        assert_eq!(operations.len(), 4);
         assert_eq!(operations[0].operation, "fft");
         assert_eq!(operations[1].operation, "ifft");
         assert_eq!(operations[2].operation, "lde");
@@ -1356,6 +1500,10 @@ mod tests {
             assert_eq!(operations[3].operation, "poseidon_hash_columns");
             assert_eq!(operations[3].output_len, 1);
         }
+        assert_eq!(
+            operations.last().expect("bn254 words op").operation,
+            "bn254_poseidon_words"
+        );
     }
 
     #[cfg(feature = "fastpq-gpu")]
@@ -1380,6 +1528,10 @@ mod tests {
         assert_eq!(
             parse_operation_filter("poseidon-hash").unwrap(),
             OperationFilter::Only(BenchOperation::Poseidon)
+        );
+        assert_eq!(
+            parse_operation_filter("bn254_poseidon_words").unwrap(),
+            OperationFilter::Only(BenchOperation::Bn254PoseidonWords)
         );
         assert!(parse_operation_filter("bogus").is_err());
     }

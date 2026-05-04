@@ -852,6 +852,11 @@ fn validate_proof_verifier_metadata(
                     "proof verifier backend must not be empty".to_owned(),
                 ));
             }
+            if metadata.proof_backend.trim().starts_with("debug/") {
+                return Err(RamLfeError::Bfv(
+                    "debug proof backends are not supported".to_owned(),
+                ));
+            }
             if metadata.circuit_id.trim().is_empty() {
                 return Err(RamLfeError::Bfv(
                     "proof verifier circuit_id must not be empty".to_owned(),
@@ -1399,6 +1404,36 @@ mod tests {
             .expect("decode canonical programmed parameters");
         assert_eq!(canonical.encryption, public_parameters);
         assert_eq!(canonical.ram_fhe_profile, bfv_program_profile());
+    }
+
+    #[test]
+    fn bfv_programmed_public_parameters_reject_debug_proof_backends() {
+        let secret = b"resolver-secret";
+        let params = BfvParameters {
+            polynomial_degree: 64,
+            ciphertext_modulus: BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        };
+        let (public_parameters, _, _) =
+            derive_identifier_key_material_from_seed(&params, 63, secret, b"phone#retail")
+                .expect("derive BFV public parameters");
+        let programmed = bfv_programmed_public_parameters_with_program(
+            public_parameters,
+            &default_bfv_programmed_hidden_program(),
+            RamLfeVerificationMode::Proof,
+            Some(RamLfeProofVerifierMetadata {
+                proof_backend: "debug/ok".to_owned(),
+                circuit_id: "ram-lfe-test".to_owned(),
+                public_inputs_schema_hash: Hash::new(b"schema"),
+                verifying_key_bytes: vec![0xAA],
+            }),
+        );
+        let encoded = norito::to_bytes(&programmed).expect("encode programmed params");
+
+        let err = decode_bfv_programmed_public_parameters(&encoded)
+            .expect_err("debug proof backend must be rejected");
+        assert!(err.to_string().contains("debug proof backends"));
     }
 
     #[test]

@@ -38,17 +38,36 @@ the same deterministic framing.
   header layout, and offers a small `NEPacketTunnelNetworkSettings` helper for
   DNS/route pushes. Unit tests (`IrohaSwift/Tests/IrohaSwiftTests/`) mirror the
   Rust layout.
+- **Native XOR lease flow:** Torii now issues signed VPN quotes before sessions.
+  Each quote binds the account, exit class, relay, client metering public key,
+  XOR fee asset, non-operator escrow account, and tariff, and returns a
+  Norito-framed `OpenVpnLeaseEscrow` instruction in `tx_instructions`. Session
+  creation only succeeds after the wallet submits that exact native lease-open
+  transaction and provides the committed transaction hash.
+- **SDK quote helpers:** JavaScript, C#, Swift, Python, Kotlin/JVM, and Java
+  Android Torii clients expose quote-first VPN helpers plus typed
+  `OpenVpnLeaseEscrow` / `SettleVpnLease` instruction DTOs. Callers should
+  submit the returned native instructions as normal signed transactions; direct
+  prepaid session creation is no longer the supported flow.
 - **Receipt/billing:** Exit gateways produce `VpnSessionReceiptV1` values
-  (ingress/egress/cover bytes, uptime, exit class, meter hash) using the helper
-  in `xtask/src/soranet_vpn.rs`, keeping Norito payloads consistent with the
-  config defaults and governance meters. The relay runtime now emits receipts on
-  circuit teardown with Prometheus counters (`soranet_vpn_session_receipts_total`,
-  `soranet_vpn_receipt_*_bytes_total`) so billing/telemetry pipelines can scrape
-  live usage alongside adapter/unit tests. Runtime counters now split data vs
-  cover traffic for frames/bytes (`soranet_vpn_{data,cover}_{frames,bytes}_total`),
-  where byte counters track payload bytes (derive on-wire bytes as
-  `frames * 1024` when you need padding spend). Control/keepalive cell classes
-  (for example, route-open control frames) are tracked separately via
+  and accept client-signed cumulative `VpnUsageVoucherV1` control cells. The
+  relay verifies voucher/session/quote/relay binding, limits unvouched forwarding
+  with `vpn.usage_voucher_debt_window_bytes`, and only mirrors the highest
+  accepted voucher into settlement receipts. Operator-submitted receipts return a
+  Norito-framed `SettleVpnLease` instruction so earned XOR and refunds are split
+  from native custody instead of trusting relay-supplied prepaid claims. Runtime
+  operators can set `vpn.receipt_spool_dir` on the relay to persist the exact
+  `/v1/vpn/receipts` request body (`relay_receipt_hex`, `client_voucher_hex`,
+  and `lease_id_hex`) whenever a helper-authenticated session closes with an
+  accepted voucher; sessions without a voucher intentionally do not produce a
+  settlement artifact. `soranet-vpn-settlement` signs that artifact with
+  runtime-only operator seed material and prints deterministic Torii headers/body
+  or a ready `curl` command; do not edit the body after signing because Torii
+  verifies the canonical body hash. Runtime counters still split data vs cover
+  traffic for frames/bytes
+  (`soranet_vpn_{data,cover}_{frames,bytes}_total`), where byte counters track
+  payload bytes (derive on-wire bytes as `frames * 1024` when you need padding
+  spend). Control/keepalive cell classes are tracked separately via
   `soranet_vpn_control_{frames,bytes}_total` and are excluded from VPN payload
   metrics and receipts.【tools/soranet-relay/src/runtime.rs:1984】【tools/soranet-relay/src/metrics.rs:744】【tools/soranet-relay/tests/vpn_adapter.rs:1】
 - **End-to-end metrics harness:** The adapter suite now includes a paced

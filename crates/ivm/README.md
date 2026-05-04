@@ -156,9 +156,10 @@ See [`docs/opcodes.md`](docs/opcodes.md) for the full opcode tables, operand con
 
 ## Syscall Interface (ISI)
 
-Smart contracts interact with the host ledger through the `SCALL` instruction
-(opcode `0x60`).  The immediate operand selects an "Iroha Special Instruction"
-(ISI) whose numeric assignments are listed in
+Smart contracts interact with the host ledger through `SCALL` (opcode `0x60`)
+for 8-bit syscall ids and `SYSTEM`/`SCALLX` (opcode `0x62`) for 24-bit syscall
+ids. The immediate operand selects an "Iroha Special Instruction" (ISI) whose
+numeric assignments are listed in
 [`syscalls.rs`](src/syscalls.rs).  The host implementation determines the exact
 semantics and gas costs of these calls.
 

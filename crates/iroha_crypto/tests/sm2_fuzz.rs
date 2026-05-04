@@ -110,9 +110,8 @@ fn load_negative_vectors_arc() -> Arc<Vec<NegativeVector>> {
 fn byte_array_32(seed: u8) -> [u8; 32] {
     let mut out = [0u8; 32];
     for (idx, byte) in out.iter_mut().enumerate() {
-        *byte = seed
-            .wrapping_add(1)
-            .wrapping_add((idx as u8).wrapping_mul(17));
+        let idx = u8::try_from(idx).expect("byte array index fits in u8");
+        *byte = seed.wrapping_add(1).wrapping_add(idx.wrapping_mul(17));
     }
     out
 }
@@ -120,7 +119,8 @@ fn byte_array_32(seed: u8) -> [u8; 32] {
 fn byte_array_16(seed: u8) -> [u8; 16] {
     let mut out = [0u8; 16];
     for (idx, byte) in out.iter_mut().enumerate() {
-        *byte = seed.wrapping_add((idx as u8).wrapping_mul(29));
+        let idx = u8::try_from(idx).expect("byte array index fits in u8");
+        *byte = seed.wrapping_add(idx.wrapping_mul(29));
     }
     out
 }
@@ -128,7 +128,10 @@ fn byte_array_16(seed: u8) -> [u8; 16] {
 fn sample_message(seed: u8) -> Vec<u8> {
     let len = (seed as usize % 63) + 1;
     (0..len)
-        .map(|idx| seed.wrapping_mul(13).wrapping_add(idx as u8))
+        .map(|idx| {
+            let idx = u8::try_from(idx).expect("sample message length fits in u8");
+            seed.wrapping_mul(13).wrapping_add(idx)
+        })
         .collect()
 }
 

@@ -10,10 +10,14 @@ use sm4_wycheproof_fixture::{Sm4WycheproofMode, load_sm4_wycheproof_cases};
 
 const TAG_LENGTHS: [usize; 7] = [4, 6, 8, 10, 12, 14, 16];
 
+fn u8_index(idx: usize) -> u8 {
+    u8::try_from(idx).expect("test helper index fits in u8")
+}
+
 fn key(seed: u8) -> [u8; 16] {
     let mut out = [0u8; 16];
     for (idx, byte) in out.iter_mut().enumerate() {
-        *byte = seed.wrapping_add((idx as u8).wrapping_mul(19));
+        *byte = seed.wrapping_add(u8_index(idx).wrapping_mul(19));
     }
     out
 }
@@ -21,14 +25,14 @@ fn key(seed: u8) -> [u8; 16] {
 fn nonce12(seed: u8) -> [u8; 12] {
     let mut out = [0u8; 12];
     for (idx, byte) in out.iter_mut().enumerate() {
-        *byte = seed.wrapping_add((idx as u8).wrapping_mul(23));
+        *byte = seed.wrapping_add(u8_index(idx).wrapping_mul(23));
     }
     out
 }
 
 fn bytes(seed: u8, len: usize) -> Vec<u8> {
     (0..len)
-        .map(|idx| seed.wrapping_mul(31).wrapping_add(idx as u8))
+        .map(|idx| seed.wrapping_mul(31).wrapping_add(u8_index(idx)))
         .collect()
 }
 

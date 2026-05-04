@@ -88,10 +88,7 @@ impl MerkleTree<[u8; 32]> {
     /// Compute a domain‑tagged leaf hash for a 32‑byte commitment using Blake2b‑32.
     /// The tag is `b"iroha:zk:shield:cm:v1\0"` and is concatenated with the commitment bytes.
     pub fn shielded_leaf_from_commitment(cm: [u8; 32]) -> HashOf<[u8; 32]> {
-        let mut buf = [0u8; TAG_ZK_SHIELD_CM_V1.len() + 32];
-        buf[..TAG_ZK_SHIELD_CM_V1.len()].copy_from_slice(TAG_ZK_SHIELD_CM_V1);
-        buf[TAG_ZK_SHIELD_CM_V1.len()..].copy_from_slice(&cm);
-        HashOf::from_untyped_unchecked(Hash::new(buf))
+        HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[TAG_ZK_SHIELD_CM_V1, &cm]))
     }
 
     /// Explicit empty‑tree root for a fixed height `depth` (binary tree).
@@ -103,15 +100,10 @@ impl MerkleTree<[u8; 32]> {
     /// Returns the raw 32‑byte digest underlying `Hash` (LSB set by `Hash`).
     pub fn shielded_empty_root(depth: u8) -> [u8; 32] {
         // L0 — domain‑tagged zero leaf
-        let mut leaf_buf = [0u8; TAG_ZK_SHIELD_CM_V1.len() + 32];
-        leaf_buf[..TAG_ZK_SHIELD_CM_V1.len()].copy_from_slice(TAG_ZK_SHIELD_CM_V1);
-        // trailing bytes already zeroed
-        let mut h = Hash::new(leaf_buf);
+        let zero_leaf = [0_u8; 32];
+        let mut h = Hash::new_from_chunks(&[TAG_ZK_SHIELD_CM_V1, &zero_leaf]);
         for _ in 0..depth {
-            let mut concat = [0u8; 64];
-            concat[..32].copy_from_slice(h.as_ref());
-            concat[32..].copy_from_slice(h.as_ref());
-            h = Hash::new(concat);
+            h = Hash::new_from_chunks(&[h.as_ref(), h.as_ref()]);
         }
         h.into()
     }
@@ -571,11 +563,10 @@ impl<T> MerkleTree<T> {
             (None, None) => return None,
         };
 
-        let mut concat = [0u8; Hash::LENGTH * 2];
-        concat[..Hash::LENGTH].copy_from_slice(l_hash.as_ref());
-        concat[Hash::LENGTH..].copy_from_slice(r_hash.as_ref());
-
-        Some(HashOf::from_untyped_unchecked(Hash::new(concat)))
+        Some(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            l_hash.as_ref(),
+            r_hash.as_ref(),
+        ])))
     }
 
     /// Parallel builder from typed leaf hashes using canonical pair-hash

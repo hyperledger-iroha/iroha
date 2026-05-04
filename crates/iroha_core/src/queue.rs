@@ -34,7 +34,6 @@ use iroha_data_model::nexus::{
     LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
-    Encode,
     account::AccountId,
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
@@ -45,14 +44,15 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    transaction::Executable,
+    transaction::{Executable, TransactionEntrypoint, error::TransactionRejectionReason},
 };
 use iroha_logger::{trace, warn};
 use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
-use norito::core::{self as ncore, NoritoSerialize};
+#[cfg(test)]
+use norito::core as ncore;
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
@@ -82,7 +82,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     prelude::*,
-    state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
+    state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly, WorldView},
     sumeragi::status,
     telemetry::StateTelemetry,
     tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
@@ -222,6 +222,8 @@ pub struct Queue {
     /// Stored behind `Arc` to avoid deep cloning heavy transactions
     /// (including instruction payloads) during queue operations.
     txs: DashMap<SignedTxHash, Arc<CheckedTransaction<'static>>>,
+    /// Cached count of transactions tracked by `txs`.
+    active_count: AtomicUsize,
     /// Cached routing decision per transaction hash.
     routing_decisions: DashMap<SignedTxHash, RoutingDecision>,
     /// Cached encoded length per queued transaction hash.
@@ -234,6 +236,8 @@ pub struct Queue {
     queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
     queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
+    /// Cached count of hashes still waiting in `tx_hashes`.
+    queued_count: AtomicUsize,
     /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -460,6 +464,8 @@ impl BackpressureHandle {
 pub enum Error {
     /// Queue is full
     Full,
+    /// Queue latency budget is saturated
+    LatencySaturated,
     /// Transaction expired
     Expired,
     /// Transaction is already applied
@@ -500,6 +506,13 @@ pub enum Error {
     NexusFeeAdmissionRejected {
         /// Reason describing why the transaction could not cover the Nexus fee bound.
         reason: String,
+    },
+    /// Confidential policy admission rejected the transaction before queueing: {detail} ({reason})
+    ConfidentialPolicyAdmissionRejected {
+        /// Reason describing why the confidential policy rejected the transaction.
+        reason: TransactionRejectionReason,
+        /// Human-readable confidential policy rejection detail.
+        detail: String,
     },
     /// Nexus fee admission encountered invalid node configuration: {reason}
     NexusFeeAdmissionConfigInvalid {
@@ -593,6 +606,195 @@ impl Drop for TransactionGuard {
     }
 }
 
+trait QueueAdmissionStateAccess {
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        queue: &Queue,
+        tx: &AcceptedTransaction<'static>,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error>;
+
+    fn extract_lane_identity_metadata(
+        &mut self,
+        authority: &AccountId,
+        dataspace_id: DataSpaceId,
+        lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error>;
+
+    fn extract_lane_authority_domains(
+        &mut self,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
+
+    fn validate_confidential_policy_admission(
+        &mut self,
+        executable: &Executable,
+    ) -> Result<(), Error>;
+}
+
+struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
+    world: &'view W,
+    nexus: &'view Nexus,
+    next_block_height: u64,
+}
+
+fn transaction_rejection_detail(reason: &TransactionRejectionReason) -> String {
+    match reason {
+        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+            detail,
+        )) => detail.clone(),
+        _ => reason.to_string(),
+    }
+}
+
+impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
+    const fn new<'view>(
+        world: &'view W,
+        nexus: &'view Nexus,
+        next_block_height: u64,
+    ) -> EagerAdmissionStateAccess<'view, W> {
+        EagerAdmissionStateAccess {
+            world,
+            nexus,
+            next_block_height,
+        }
+    }
+}
+
+impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, W> {
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        queue: &Queue,
+        tx: &AcceptedTransaction<'static>,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error> {
+        queue.recheck_external_nexus_fee_admission(tx, self.world, self.nexus, route_dataspace_id)
+    }
+
+    fn extract_lane_identity_metadata(
+        &mut self,
+        authority: &AccountId,
+        dataspace_id: DataSpaceId,
+        lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
+        Queue::extract_lane_identity_metadata(self.world, authority, dataspace_id, lane_alias)
+    }
+
+    fn extract_lane_authority_domains(
+        &mut self,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+        Queue::extract_lane_authority_domains(self.world, authority, lane_alias)
+    }
+
+    fn validate_confidential_policy_admission(
+        &mut self,
+        executable: &Executable,
+    ) -> Result<(), Error> {
+        crate::tx::validate_confidential_policy_admission_for_world(
+            executable,
+            self.world,
+            self.next_block_height,
+        )
+        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
+            detail: transaction_rejection_detail(&reason),
+            reason,
+        })
+    }
+}
+
+struct LazyAdmissionStateAccess<'state> {
+    state: &'state State,
+    nexus: Option<Nexus>,
+    world: Option<WorldView<'state>>,
+}
+
+impl<'state> LazyAdmissionStateAccess<'state> {
+    const fn new(state: &'state State) -> Self {
+        Self {
+            state,
+            nexus: None,
+            world: None,
+        }
+    }
+
+    fn ensure_world_and_nexus(&mut self) {
+        if self.nexus.is_none() {
+            self.nexus = Some(self.state.nexus_snapshot());
+        }
+        if self.world.is_none() {
+            let nexus = self.nexus.as_ref().expect("nexus initialized above");
+            self.world = Some(self.state.world_view_with_nexus(nexus));
+        }
+    }
+}
+
+impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        queue: &Queue,
+        tx: &AcceptedTransaction<'static>,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error> {
+        self.ensure_world_and_nexus();
+        queue.recheck_external_nexus_fee_admission(
+            tx,
+            self.world.as_ref().expect("world initialized above"),
+            self.nexus.as_ref().expect("nexus initialized above"),
+            route_dataspace_id,
+        )
+    }
+
+    fn extract_lane_identity_metadata(
+        &mut self,
+        authority: &AccountId,
+        dataspace_id: DataSpaceId,
+        lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
+        self.ensure_world_and_nexus();
+        Queue::extract_lane_identity_metadata(
+            self.world.as_ref().expect("world initialized above"),
+            authority,
+            dataspace_id,
+            lane_alias,
+        )
+    }
+
+    fn extract_lane_authority_domains(
+        &mut self,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+        self.ensure_world_and_nexus();
+        Queue::extract_lane_authority_domains(
+            self.world.as_ref().expect("world initialized above"),
+            authority,
+            lane_alias,
+        )
+    }
+
+    fn validate_confidential_policy_admission(
+        &mut self,
+        executable: &Executable,
+    ) -> Result<(), Error> {
+        self.ensure_world_and_nexus();
+        let next_block_height = u64::try_from(self.state.committed_height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        crate::tx::validate_confidential_policy_admission_for_world(
+            executable,
+            self.world.as_ref().expect("world initialized above"),
+            next_block_height,
+        )
+        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
+            detail: transaction_rejection_detail(&reason),
+            reason,
+        })
+    }
+}
+
 impl Queue {
     fn collect_lane_privacy_proofs(tx: &CheckedTransaction<'_>) -> Vec<LanePrivacyProof> {
         tx.external()
@@ -605,26 +807,11 @@ impl Queue {
     }
 
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        match tx.entrypoint() {
-            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => signed
-                .encoded_len_exact()
-                .unwrap_or_else(|| signed.encoded_len()),
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(entrypoint) => {
-                entrypoint
-                    .encoded_len_exact()
-                    .unwrap_or_else(|| entrypoint.encoded_len())
-            }
-            iroha_data_model::transaction::TransactionEntrypoint::Time(entrypoint) => entrypoint
-                .encoded_len_exact()
-                .unwrap_or_else(|| entrypoint.encoded_len()),
-        }
+        tx.encoded_len()
     }
 
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
-        let signed = tx
-            .external()
-            .expect("queue gossip only supports external signed transactions");
-        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction gossip payload"))
+        tx.entrypoint_bytes()
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
@@ -647,6 +834,39 @@ impl Queue {
                                     ?err,
                                     tx = %tx.hash(),
                                     "invalid gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                        }
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                }
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => {
+                gas::meter_sealed_transaction_commitment(tx.encoded_len())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                match reveal.signed_transaction().instructions() {
+                    Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::ContractCall(_) | Executable::Ivm(_) => {
+                        match crate::executor::parse_gas_limit(
+                            reveal.signed_transaction().metadata(),
+                        ) {
+                            Ok(Some(limit)) => limit,
+                            Ok(None) => {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas_limit metadata while deriving proposal gas cost for sealed reveal"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "invalid gas_limit metadata while deriving proposal gas cost for sealed reveal"
                                 );
                                 0
                             }
@@ -984,7 +1204,6 @@ impl Queue {
         alias: &str,
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
-        world: &impl WorldReadOnly,
     ) -> Result<bool, Error> {
         if rules.protected_namespaces.is_empty() {
             return Ok(false);
@@ -1096,7 +1315,6 @@ impl Queue {
             register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
         if !contract_instr_seen {
-            let _ = world;
             return Ok(false);
         }
 
@@ -1132,8 +1350,6 @@ impl Queue {
                 "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
             ));
         }
-
-        let _ = world;
 
         Ok(true)
     }
@@ -1318,6 +1534,7 @@ impl Queue {
                 dataspace_catalog: RwLock::new(Arc::clone(dataspace_catalog)),
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
+                active_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
                 txs_per_user: DashMap::new(),
                 routing_decisions: DashMap::new(),
@@ -1326,6 +1543,7 @@ impl Queue {
                 tx_enqueued_at_ms: DashMap::new(),
                 queued_tx_enqueued_at_ms: DashMap::new(),
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
+                queued_count: AtomicUsize::new(0),
                 tx_gossip_payloads: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
@@ -1403,6 +1621,11 @@ impl Queue {
 
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
+        if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
+            // Sealed commitments have no wall-clock creation timestamp; their lifetime is
+            // bounded by reveal heights during block execution.
+            return false;
+        }
         let tx_creation_time = tx.creation_time();
         let time_limit = self.effective_tx_time_to_live(tx);
 
@@ -1462,6 +1685,7 @@ impl Queue {
                     iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
                 ),
             ),
+            Error::ConfidentialPolicyAdmissionRejected { reason, .. } => Some(reason.clone()),
             Error::NexusFeeAdmissionConfigInvalid { reason } => Some(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::InternalError(reason.clone()),
@@ -1687,11 +1911,18 @@ impl Queue {
         }
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state_view.telemetry;
+        let next_block_height = u64::try_from(state_view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut state_access = EagerAdmissionStateAccess::new(
+            state_view.world(),
+            &state_view.nexus,
+            next_block_height,
+        );
         self.push_checked_with_lane_context(
             checked,
             routing_decision,
-            state_view.world(),
-            &state_view.nexus,
+            &mut state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1764,16 +1995,14 @@ impl Queue {
             });
         }
 
-        let world = state.world_view();
-        let nexus = state.nexus_snapshot();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
 
+        let mut state_access = LazyAdmissionStateAccess::new(state);
         self.push_checked_with_lane_context(
             checked,
             routing_decision,
-            &world,
-            &nexus,
+            &mut state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1782,12 +2011,11 @@ impl Queue {
 
     /// Shared admission logic once routing + committed-hash checks have been performed.
     #[allow(clippy::too_many_lines)]
-    fn push_checked_with_lane_context(
+    fn push_checked_with_lane_context<C: QueueAdmissionStateAccess>(
         &self,
         checked: CheckedTransaction<'static>,
         routing_decision: RoutingDecision,
-        world: &impl WorldReadOnly,
-        nexus: &Nexus,
+        state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
@@ -1795,10 +2023,9 @@ impl Queue {
         let dataspace_id = routing_decision.dataspace_id;
 
         if checked.as_accepted().external().is_some() {
-            if let Err(err) = self.recheck_external_nexus_fee_admission(
+            if let Err(err) = state_access.recheck_external_nexus_fee_admission(
+                self,
                 checked.as_accepted(),
-                world,
-                nexus,
                 Some(dataspace_id),
             ) {
                 return Err(Failure {
@@ -1806,6 +2033,16 @@ impl Queue {
                     err,
                 });
             }
+        }
+
+        if let Some(transaction) = checked.as_accepted().external()
+            && let Err(err) =
+                state_access.validate_confidential_policy_admission(transaction.instructions())
+        {
+            return Err(Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err,
+            });
         }
 
         #[cfg(feature = "telemetry")]
@@ -1919,7 +2156,7 @@ impl Queue {
                     }
                 }
                 let protected_namespace_result =
-                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world);
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked);
                 let protected_namespace_applied = match protected_namespace_result {
                     Ok(applied) => applied,
                     Err(err) => {
@@ -1998,31 +2235,22 @@ impl Queue {
             Some(lane_privacy_registry_handle)
         };
 
-        let lane_identity = checked
-            .as_ref()
-            .authority_opt()
-            .map(|authority| {
-                Self::extract_lane_identity_metadata(world, authority, dataspace_id, &lane_alias)
-            })
-            .transpose()
-            .map_err(|err| Failure {
-                tx: Box::new(checked.as_accepted().clone()),
-                err,
-            })?
-            .unwrap_or((None, Vec::new()));
-
         let lane_compliance = self.lane_compliance.read().clone();
         if let (Some(engine), Some(authority)) =
             (lane_compliance.as_ref(), checked.as_ref().authority_opt())
         {
-            let (uaid_value, capability_tags) = lane_identity;
-            let authority_domains =
-                Self::extract_lane_authority_domains(world, authority, &lane_alias).map_err(
-                    |err| Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err,
-                    },
-                )?;
+            let (uaid_value, capability_tags) = state_access
+                .extract_lane_identity_metadata(authority, dataspace_id, &lane_alias)
+                .map_err(|err| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                })?;
+            let authority_domains = state_access
+                .extract_lane_authority_domains(authority, &lane_alias)
+                .map_err(|err| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                })?;
             let ctx = LaneComplianceContext {
                 lane_id,
                 dataspace_id,
@@ -2067,7 +2295,16 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
-        let gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
+        let provided_gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
+        let canonical_gossip_payload = Some(checked.as_accepted().entrypoint_bytes());
+        let gossip_payload = match (provided_gossip_payload, canonical_gossip_payload) {
+            (Some(provided), Some(canonical)) if provided.as_slice() == canonical.as_slice() => {
+                Some(provided)
+            }
+            (_, Some(canonical)) => Some(canonical),
+            (Some(provided), None) => Some(provided),
+            (None, None) => None,
+        };
         let encoded_len = gossip_payload
             .as_ref()
             .map(|payload| payload.len())
@@ -2075,94 +2312,104 @@ impl Queue {
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let hash = checked.as_ref().hash();
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        let _guard = self.push_remove_lock.lock();
-        let txs_len = self.txs.len();
-        let entry = match self.txs.entry(hash) {
-            Entry::Occupied(_) => {
+        {
+            let _guard = self.push_remove_lock.lock();
+            let txs_len = self.active_len();
+            let entry = match self.txs.entry(hash) {
+                Entry::Occupied(_) => {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::IsInQueue,
+                    });
+                }
+                Entry::Vacant(entry) => entry,
+            };
+
+            if txs_len >= self.capacity.get() {
+                warn!(
+                    lane_id = %lane_id,
+                    dataspace_id = %dataspace_id,
+                    max = self.capacity,
+                    "Achieved maximum amount of transactions"
+                );
+                self.publish_backpressure_state(txs_len, backpressure_telemetry);
                 return Err(Failure {
                     tx: checked.as_accepted().clone().into(),
-                    err: Error::IsInQueue,
+                    err: Error::Full,
                 });
             }
-            Entry::Vacant(entry) => entry,
-        };
 
-        if txs_len >= self.capacity.get() {
-            warn!(
-                lane_id = %lane_id,
-                dataspace_id = %dataspace_id,
-                max = self.capacity,
-                "Achieved maximum amount of transactions"
+            if let Some(authority) = checked.as_ref().authority_opt() {
+                if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err,
+                    });
+                }
+            }
+
+            // Insert before publishing the hash so consumers always find a
+            // matching `(hash, tx)` record in `txs`.
+            let tx_arc = Arc::new(checked);
+            entry.insert(Arc::clone(&tx_arc));
+            self.track_active_transaction();
+            self.routing_decisions.insert(hash, routing_decision);
+            routing_ledger::record(hash, routing_decision);
+            self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+            self.record_queued_age(hash, enqueue_at_ms);
+            // Drop the local holder before attempting to unwrap on push failure.
+            drop(tx_arc);
+            let mut pushed = self.tx_hashes.push(hash).is_ok();
+            let mut restore_queued_age_after_compaction = false;
+            if !pushed {
+                let compacted = self.compact_hash_queue_locked();
+                if compacted > 0 {
+                    restore_queued_age_after_compaction = true;
+                    pushed = self.tx_hashes.push(hash).is_ok();
+                }
+            }
+            if !pushed {
+                warn!("Queue is full");
+                let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                self.untrack_active_transaction();
+                if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    routing_ledger::discard_if_matches(&hash, decision);
+                }
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
+                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+                return Err(Failure {
+                    tx: Box::new(
+                        Arc::try_unwrap(err_tx)
+                            .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
+                            .into_accepted(),
+                    ),
+                    err: Error::Full,
+                });
+            }
+            if restore_queued_age_after_compaction {
+                self.record_queued_age(hash, enqueue_at_ms);
+            }
+            self.tx_encoded_len.insert(hash, encoded_len);
+            if let Some(payload) = gossip_payload {
+                self.tx_gossip_payloads.insert(hash, payload);
+            }
+            self.tx_gas_cost.insert(hash, proposal_gas_cost);
+            self.track_expiry_hash(hash);
+            #[cfg(feature = "telemetry")]
+            self.record_teu_enqueue(
+                hash,
+                TxTeuInfo {
+                    lane_id,
+                    dataspace_id,
+                    teu: pending_teu,
+                },
+                telemetry_handle,
             );
-            self.publish_backpressure_state(txs_len, backpressure_telemetry);
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err: Error::Full,
-            });
         }
-
-        if let Some(authority) = checked.as_ref().authority_opt() {
-            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
-                return Err(Failure {
-                    tx: checked.as_accepted().clone().into(),
-                    err,
-                });
-            }
-        }
-
-        // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
-        let tx_arc = Arc::new(checked);
-        entry.insert(Arc::clone(&tx_arc));
-        self.routing_decisions.insert(hash, routing_decision);
-        routing_ledger::record(hash, routing_decision);
-        self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-        self.record_queued_age(hash, enqueue_at_ms);
-        // Drop the local holder before attempting to unwrap on push failure.
-        drop(tx_arc);
-        let mut pushed = self.tx_hashes.push(hash).is_ok();
-        if !pushed {
-            let compacted = self.compact_hash_queue_locked();
-            if compacted > 0 {
-                pushed = self.tx_hashes.push(hash).is_ok();
-            }
-        }
-        if !pushed {
-            warn!("Queue is full");
-            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
-            if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                routing_ledger::discard_if_matches(&hash, decision);
-            }
-            self.tx_enqueued_at_ms.remove(&hash);
-            self.remove_queued_age(&hash);
-            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
-                self.decrease_per_user_tx_count(authority);
-            }
-            self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
-            return Err(Failure {
-                tx: Box::new(
-                    Arc::try_unwrap(err_tx)
-                        .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
-                        .into_accepted(),
-                ),
-                err: Error::Full,
-            });
-        }
-        self.tx_encoded_len.insert(hash, encoded_len);
-        if let Some(payload) = gossip_payload {
-            self.tx_gossip_payloads.insert(hash, payload);
-        }
-        self.tx_gas_cost.insert(hash, proposal_gas_cost);
-        self.track_expiry_hash(hash);
-        #[cfg(feature = "telemetry")]
-        self.record_teu_enqueue(
-            hash,
-            TxTeuInfo {
-                lane_id,
-                dataspace_id,
-                teu: pending_teu,
-            },
-            telemetry_handle,
-        );
         iroha_logger::debug!(
             tx = %hash,
             lane_id = %lane_id,
@@ -2359,7 +2606,7 @@ impl Queue {
         routing_decision: RoutingDecision,
         state: &State,
     ) -> Result<(), Failure> {
-        let hash = tx.as_ref().hash();
+        let hash = tx.hash();
         if state.has_committed_transaction(hash) {
             return Err(Failure {
                 tx: Box::new(tx),
@@ -2401,91 +2648,101 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        let _guard = self.push_remove_lock.lock();
-        let txs_len = self.txs.len();
-        let entry = match self.txs.entry(hash) {
-            Entry::Occupied(_) => {
+        {
+            let _guard = self.push_remove_lock.lock();
+            let txs_len = self.active_len();
+            let entry = match self.txs.entry(hash) {
+                Entry::Occupied(_) => {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::IsInQueue,
+                    });
+                }
+                Entry::Vacant(entry) => entry,
+            };
+
+            if txs_len >= self.capacity.get() {
+                warn!(
+                    lane_id = %lane_id,
+                    dataspace_id = %dataspace_id,
+                    max = self.capacity,
+                    "Achieved maximum amount of transactions"
+                );
+                self.publish_backpressure_state(txs_len, backpressure_telemetry);
                 return Err(Failure {
                     tx: checked.as_accepted().clone().into(),
-                    err: Error::IsInQueue,
+                    err: Error::Full,
                 });
             }
-            Entry::Vacant(entry) => entry,
-        };
 
-        if txs_len >= self.capacity.get() {
-            warn!(
-                lane_id = %lane_id,
-                dataspace_id = %dataspace_id,
-                max = self.capacity,
-                "Achieved maximum amount of transactions"
+            if let Some(authority) = checked.as_ref().authority_opt() {
+                if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err,
+                    });
+                }
+            }
+
+            // Insert before publishing the hash so consumers always find a
+            // matching `(hash, tx)` record in `txs`.
+            let tx_arc = Arc::new(checked);
+            entry.insert(Arc::clone(&tx_arc));
+            self.track_active_transaction();
+            self.routing_decisions.insert(hash, routing_decision);
+            routing_ledger::record(hash, routing_decision);
+            self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+            self.record_queued_age(hash, enqueue_at_ms);
+            // Drop the local holder before attempting to unwrap on push failure.
+            drop(tx_arc);
+            let mut pushed = self.tx_hashes.push(hash).is_ok();
+            let mut restore_queued_age_after_compaction = false;
+            if !pushed {
+                let compacted = self.compact_hash_queue_locked();
+                if compacted > 0 {
+                    restore_queued_age_after_compaction = true;
+                    pushed = self.tx_hashes.push(hash).is_ok();
+                }
+            }
+            if !pushed {
+                warn!("Queue is full");
+                let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                self.untrack_active_transaction();
+                if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    routing_ledger::discard_if_matches(&hash, decision);
+                }
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
+                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+                return Err(Failure {
+                    tx: Box::new(
+                        Arc::try_unwrap(err_tx)
+                            .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
+                            .into_accepted(),
+                    ),
+                    err: Error::Full,
+                });
+            }
+            if restore_queued_age_after_compaction {
+                self.record_queued_age(hash, enqueue_at_ms);
+            }
+            self.tx_encoded_len.insert(hash, encoded_len);
+            self.tx_gas_cost.insert(hash, proposal_gas_cost);
+            self.track_expiry_hash(hash);
+            #[cfg(feature = "telemetry")]
+            self.record_teu_enqueue(
+                hash,
+                TxTeuInfo {
+                    lane_id,
+                    dataspace_id,
+                    teu: pending_teu,
+                },
+                telemetry_handle,
             );
-            self.publish_backpressure_state(txs_len, backpressure_telemetry);
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err: Error::Full,
-            });
         }
-
-        if let Some(authority) = checked.as_ref().authority_opt() {
-            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
-                return Err(Failure {
-                    tx: checked.as_accepted().clone().into(),
-                    err,
-                });
-            }
-        }
-
-        // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
-        let tx_arc = Arc::new(checked);
-        entry.insert(Arc::clone(&tx_arc));
-        self.routing_decisions.insert(hash, routing_decision);
-        routing_ledger::record(hash, routing_decision);
-        self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-        self.record_queued_age(hash, enqueue_at_ms);
-        // Drop the local holder before attempting to unwrap on push failure.
-        drop(tx_arc);
-        let mut pushed = self.tx_hashes.push(hash).is_ok();
-        if !pushed {
-            let compacted = self.compact_hash_queue_locked();
-            if compacted > 0 {
-                pushed = self.tx_hashes.push(hash).is_ok();
-            }
-        }
-        if !pushed {
-            warn!("Queue is full");
-            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
-            if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                routing_ledger::discard_if_matches(&hash, decision);
-            }
-            self.tx_enqueued_at_ms.remove(&hash);
-            self.remove_queued_age(&hash);
-            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
-                self.decrease_per_user_tx_count(authority);
-            }
-            self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
-            return Err(Failure {
-                tx: Box::new(
-                    Arc::try_unwrap(err_tx)
-                        .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
-                        .into_accepted(),
-                ),
-                err: Error::Full,
-            });
-        }
-        self.tx_encoded_len.insert(hash, encoded_len);
-        self.tx_gas_cost.insert(hash, proposal_gas_cost);
-        self.track_expiry_hash(hash);
-        #[cfg(feature = "telemetry")]
-        self.record_teu_enqueue(
-            hash,
-            TxTeuInfo {
-                lane_id,
-                dataspace_id,
-                teu: pending_teu,
-            },
-            telemetry_handle,
-        );
         iroha_logger::debug!(
             tx = %hash,
             lane_id = %lane_id,
@@ -2527,7 +2784,9 @@ impl Queue {
     /// Used when a peer is removed from the topology so it stops advertising stale transactions.
     pub fn clear_all(&self) {
         while let Some(hash) = self.tx_hashes.pop() {
-            self.txs.remove(&hash);
+            if self.txs.remove(&hash).is_some() {
+                self.untrack_active_transaction();
+            }
             self.routing_decisions.remove(&hash);
             self.removed_hashes.remove(&hash);
         }
@@ -2546,7 +2805,7 @@ impl Queue {
             self.lane_teu_pending.clear();
             self.dataspace_teu_pending.clear();
         }
-        self.publish_backpressure_state(0, None);
+        self.publish_backpressure_state(self.active_len(), None);
     }
 
     fn record_inflight_guard(&self) {
@@ -2605,6 +2864,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2633,12 +2893,14 @@ impl Queue {
                 continue;
             }
 
-            if let Err(e) = self.recheck_external_nexus_fee_admission(
-                tx_arc.as_accepted(),
-                state_view.world(),
-                &state_view.nexus,
-                routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
-            ) {
+            if tx_arc.as_accepted().external().is_some()
+                && let Err(e) = self.recheck_external_nexus_fee_admission(
+                    tx_arc.as_accepted(),
+                    state_view.world(),
+                    &state_view.nexus,
+                    routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
+                )
+            {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -2646,6 +2908,7 @@ impl Queue {
                 );
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2731,8 +2994,7 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         let committed_transactions = state.transactions.view();
-        let world = state.world_view();
-        let nexus = state.nexus_snapshot();
+        let mut state_access = LazyAdmissionStateAccess::new(state);
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2769,6 +3031,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2802,12 +3065,13 @@ impl Queue {
                 .get(&hash)
                 .map(|decision| decision.dataspace_id)
                 .or_else(|| routing_ledger::get(&hash).map(|decision| decision.dataspace_id));
-            if let Err(e) = self.recheck_external_nexus_fee_admission(
-                tx_arc.as_accepted(),
-                &world,
-                &nexus,
-                route_dataspace_id,
-            ) {
+            if tx_arc.as_accepted().external().is_some()
+                && let Err(e) = state_access.recheck_external_nexus_fee_admission(
+                    self,
+                    tx_arc.as_accepted(),
+                    route_dataspace_id,
+                )
+            {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -2815,6 +3079,7 @@ impl Queue {
                 );
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2891,7 +3156,7 @@ impl Queue {
         &self,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> bool {
-        if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
             return false;
         }
         if self.inflight_guards.load(Ordering::Relaxed) > 0 {
@@ -2899,11 +3164,11 @@ impl Queue {
         }
 
         let _guard = self.push_remove_lock.lock();
-        if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
             return false;
         }
 
-        let total = self.txs.len();
+        let total = self.active_len();
         // Sort by hash to keep the recovery order deterministic across peers.
         let mut hashes: Vec<SignedTxHash> = self.txs.iter().map(|entry| *entry.key()).collect();
         hashes.sort();
@@ -2952,13 +3217,77 @@ impl Queue {
 
     /// Return the number of transactions tracked by the queue (queued + in-flight).
     pub fn active_len(&self) -> usize {
-        self.txs.len()
+        self.active_count.load(Ordering::Relaxed)
     }
 
     /// Return the number of transactions still awaiting selection from the queue.
     pub fn queued_len(&self) -> usize {
-        let queued = self.tx_hashes.len();
-        queued.saturating_sub(self.removed_hashes.len())
+        if self.tx_hashes.is_empty() {
+            return 0;
+        }
+        self.queued_count.load(Ordering::Relaxed)
+    }
+
+    fn track_active_transaction(&self) {
+        self.active_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn untrack_active_transaction(&self) {
+        Self::decrement_atomic_count(&self.active_count, "active transaction");
+    }
+
+    fn track_queued_hash(&self) {
+        self.queued_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn untrack_queued_hash(&self) {
+        Self::decrement_atomic_count(&self.queued_count, "queued transaction");
+    }
+
+    #[cfg(test)]
+    fn assert_pressure_counters_consistent_for_tests(&self) {
+        assert_eq!(
+            self.active_len(),
+            self.txs.len(),
+            "active transaction counter must match tracked transactions"
+        );
+        assert_eq!(
+            self.queued_count.load(Ordering::Relaxed),
+            self.queued_tx_enqueued_at_ms.len(),
+            "queued transaction counter must match queued-age index"
+        );
+        if self.tx_hashes.is_empty() {
+            assert_eq!(
+                self.queued_len(),
+                0,
+                "empty hash queue must report zero queued transactions"
+            );
+        } else {
+            assert_eq!(
+                self.queued_len(),
+                self.queued_tx_enqueued_at_ms.len(),
+                "queued length must match queued-age index while the hash queue is non-empty"
+            );
+        }
+    }
+
+    fn decrement_atomic_count(counter: &AtomicUsize, name: &str) {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            debug_assert!(current > 0, "{name} counter underflow");
+            if current == 0 {
+                return;
+            }
+            match counter.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(next) => current = next,
+            }
+        }
     }
 
     /// Track a queued transaction hash for TTL sweeps.
@@ -3195,19 +3524,28 @@ impl Queue {
     }
 
     fn record_queued_age(&self, hash: SignedTxHash, enqueued_at_ms: u64) {
-        self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        if self
+            .queued_tx_enqueued_at_ms
+            .insert(hash, enqueued_at_ms)
+            .is_none()
+        {
+            self.track_queued_hash();
+        }
         self.queued_age_ring
             .lock()
             .push_back((hash, enqueued_at_ms));
     }
 
     fn remove_queued_age(&self, hash: &SignedTxHash) {
-        self.queued_tx_enqueued_at_ms.remove(hash);
+        if self.queued_tx_enqueued_at_ms.remove(hash).is_some() {
+            self.untrack_queued_hash();
+        }
     }
 
     fn clear_queued_age_index(&self) {
         self.queued_tx_enqueued_at_ms.clear();
         self.queued_age_ring.lock().clear();
+        self.queued_count.store(0, Ordering::Relaxed);
     }
 
     fn oldest_queued_tx_age_ms(&self) -> u64 {
@@ -3233,6 +3571,7 @@ impl Queue {
     fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
         self.clear_queued_age_index();
         let mut age_entries = Vec::new();
+        let mut inserted = 0usize;
         for hash in queued_hashes {
             let Some(enqueued_at_ms) = self
                 .tx_enqueued_at_ms
@@ -3241,11 +3580,18 @@ impl Queue {
             else {
                 continue;
             };
-            self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            if self
+                .queued_tx_enqueued_at_ms
+                .insert(hash, enqueued_at_ms)
+                .is_none()
+            {
+                inserted = inserted.saturating_add(1);
+            }
             age_entries.push((hash, enqueued_at_ms));
         }
         age_entries.sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
         self.queued_age_ring.lock().extend(age_entries);
+        self.queued_count.store(inserted, Ordering::Relaxed);
     }
 
     fn pressure_snapshot_with_tracked_count(
@@ -3306,7 +3652,7 @@ impl Queue {
     fn cull_expired_entries(&self, now: Duration) -> usize {
         const CULL_WARN_MS: u64 = 1_000;
         let scan_start = std::time::Instant::now();
-        let tracked_before = self.txs.len();
+        let tracked_before = self.active_len();
         let mut to_remove = Vec::new();
         let mut expired = 0usize;
         let mut scanned = 0usize;
@@ -3353,6 +3699,7 @@ impl Queue {
         let mut removed = 0usize;
         for hash in to_remove {
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
+                self.untrack_active_transaction();
                 let routing = self
                     .routing_decisions
                     .remove(&hash)
@@ -3403,7 +3750,7 @@ impl Queue {
                 remove_ms,
                 total_ms,
                 tracked_before,
-                tracked_after = self.txs.len(),
+                tracked_after = self.active_len(),
                 scanned,
                 ring_len,
                 expired,
@@ -3418,7 +3765,7 @@ impl Queue {
     ///
     /// Caller must hold `push_remove_lock` to exclude concurrent enqueue operations.
     fn compact_hash_queue_locked(&self) -> usize {
-        let mut retained = Vec::with_capacity(self.txs.len());
+        let mut retained = Vec::with_capacity(self.active_len());
         let mut dropped = 0usize;
         let mut inserted_hashes = Vec::new();
         while let Some(hash) = self.tx_hashes.pop() {
@@ -3433,7 +3780,7 @@ impl Queue {
             if self.tx_hashes.push(hash).is_err() {
                 warn!(
                     queued = self.tx_hashes.len(),
-                    tracked = self.txs.len(),
+                    tracked = self.active_len(),
                     "queue hash compaction reached capacity before re-enqueuing all transactions"
                 );
                 break;
@@ -3459,9 +3806,10 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         telemetry: Option<&StateTelemetry>,
     ) {
-        let hash = tx.as_ref().hash();
+        let hash = tx.hash();
         let _guard = self.push_remove_lock.lock();
         if self.txs.remove(&hash).is_some() {
+            self.untrack_active_transaction();
             self.untrack_expiry_hash(&hash);
             let decision = self
                 .routing_decisions
@@ -3507,6 +3855,7 @@ impl Queue {
             self.remove_queued_age(&hash);
             self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
+                self.untrack_active_transaction();
                 self.removed_hashes.insert(hash, ());
                 if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
                     self.decrease_per_user_tx_count(authority);
@@ -3577,6 +3926,29 @@ impl Queue {
                     }
                     Executable::ContractCall(_) => {
                         match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            _ => 0,
+                        }
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                    Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
+                }
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => {
+                gas::meter_sealed_transaction_commitment(tx.encoded_len())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                match reveal.signed_transaction().instructions() {
+                    Executable::Instructions(batch) => {
+                        let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
+                        gas::meter_instructions(&instructions)
+                    }
+                    Executable::ContractCall(_) => {
+                        match crate::executor::parse_gas_limit(
+                            reveal.signed_transaction().metadata(),
+                        ) {
                             Ok(Some(limit)) => limit,
                             _ => 0,
                         }
@@ -4132,6 +4504,7 @@ impl Queue {
 /// Test helpers and cases for `Queue` and related logic.
 pub mod tests {
     use std::{
+        borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         num::NonZeroU32,
         path::PathBuf,
@@ -4161,6 +4534,10 @@ pub mod tests {
         prelude::*,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         runtime::RuntimeUpgradeManifest,
+        transaction::signed::{
+            SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+            compute_sealed_transaction_commitment,
+        },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
     use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
@@ -5778,8 +6155,34 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
+        let entrypoint = tx.entrypoint().clone();
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let payload = tx.entrypoint_bytes();
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let tx = AcceptedTransaction::accept_gossip_entrypoint_with_payload(
+            entrypoint,
+            Arc::clone(&payload),
+            entrypoint_hash,
+            &ChainId::from("00000000-0000-0000-0000-000000000000"),
+            Duration::from_millis(10),
+            tx_limits,
+            &crypto_cfg,
+        )
+        .expect("accept gossip entrypoint with cached payload");
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
+        assert!(
+            Arc::ptr_eq(&tx.entrypoint_bytes(), &payload),
+            "accepted gossip transaction should reuse inbound entrypoint bytes"
+        );
 
         queue
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
@@ -5810,7 +6213,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
+        let payload = tx.entrypoint_bytes();
         let state_view = state.view();
 
         queue
@@ -5831,7 +6234,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
+        let payload = tx.entrypoint_bytes();
 
         queue
             .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
@@ -5842,7 +6245,7 @@ pub mod tests {
     }
 
     #[test]
-    fn queue_generated_gossip_payload_uses_framed_signed_transaction_wire() {
+    fn queue_generated_gossip_payload_uses_framed_entrypoint_wire() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -5850,13 +6253,62 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let expected_payload = ncore::to_bytes(tx.as_ref()).expect("encode signed transaction");
+        let cached_payload = tx.entrypoint_bytes();
+        let expected_payload =
+            ncore::to_bytes(tx.entrypoint()).expect("encode transaction entrypoint");
 
         queue.push(tx, state.view()).expect("push tx");
 
         let batch = queue.gossip_batch(1, &state.view());
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].payload.as_slice(), expected_payload.as_slice());
+        assert!(
+            Arc::ptr_eq(&batch[0].payload, &cached_payload),
+            "queue gossip should reuse accepted transaction entrypoint bytes"
+        );
+    }
+
+    #[test]
+    fn sealed_commitment_is_not_expired_by_wall_clock_queue_ttl() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_secs(3600));
+        let queue = Queue::test(config_factory(), &time_source);
+        let chain_id = ChainId::from("sealed-queue-expiry");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let inner_tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            authority.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "sealed queue expiry inner".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let salt = [0xD4; 32];
+        let reveal_deadline_height = 10;
+        let commitment_hash = compute_sealed_transaction_commitment(
+            &chain_id,
+            &inner_tx,
+            salt,
+            reveal_deadline_height,
+        );
+        let payload = SealedTransactionCommitmentPayload::new(
+            chain_id,
+            authority,
+            commitment_hash,
+            2,
+            reveal_deadline_height,
+            None,
+        );
+        let commitment = SignedSealedTransactionCommitment::sign(payload, keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::SealedCommitment(commitment),
+        ));
+
+        assert!(
+            !queue.is_expired(&accepted),
+            "sealed commitment queue lifetime is height-based, not wall-clock based"
+        );
     }
 
     #[test]
@@ -5949,6 +6401,66 @@ pub mod tests {
                 "route rejection reason should include lane lookup failure"
             );
         }
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_confidential_policy_before_enqueue() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let account = Account::new(authority_id.clone()).build(&authority_id);
+        let asset_def_id =
+            AssetDefinitionId::new(domain_id, "zkqueuepolicy".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .confidential_policy(
+                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+            )
+            .build(&authority_id);
+        let mut world = World::with([domain], [account], [asset_definition]);
+        let mut zk_state = crate::state::ZkAssetState::default();
+        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+        zk_state.allow_shield = false;
+        zk_state.allow_unshield = true;
+        world.zk_assets.insert(asset_def_id.clone(), zk_state);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_with(
+            authority_id.clone(),
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(
+                iroha_data_model::isi::zk::Shield::new(
+                    asset_def_id,
+                    authority_id,
+                    10,
+                    [3; 32],
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                ),
+            )],
+            Metadata::default(),
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &state)
+            .expect_err("disabled shield must be rejected before enqueue");
+
+        assert!(matches!(
+            err.err,
+            Error::ConfidentialPolicyAdmissionRejected { .. }
+        ));
+        if let Error::ConfidentialPolicyAdmissionRejected { detail, reason } = &err.err {
+            assert_eq!(detail, "shield not permitted by policy");
+            assert!(matches!(
+                reason,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message == "shield not permitted by policy"
+            ));
+        }
+        assert_eq!(queue.queued_len(), 0);
     }
 
     #[test]
@@ -6937,7 +7449,7 @@ pub mod tests {
         let entry = &batch[0];
         assert_eq!(entry.tx.as_ref().hash(), hash);
         let expected_payload =
-            ncore::to_bytes(entry.tx.as_ref()).expect("encode signed transaction");
+            ncore::to_bytes(entry.tx.entrypoint()).expect("encode transaction entrypoint");
         assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
         assert_eq!(entry.routing.dataspace_id, DataSpaceId::UNIVERSAL);
@@ -7148,7 +7660,7 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(vec![1_u8, 2, 3, 4]);
+        let payload = tx.entrypoint_bytes();
         queue
             .push_with_gossip_payload_with_state_and_routing(
                 tx,
@@ -7169,6 +7681,11 @@ pub mod tests {
             .get(&hash)
             .expect("cached gossip payload should exist");
         assert_eq!(stored_payload.as_slice(), payload.as_slice());
+        assert_eq!(
+            queue.tx_gossip.pop(),
+            Some(hash),
+            "successful gossip admission should still enqueue the gossip side channel"
+        );
     }
 
     fn config_factory() -> Config {
@@ -8315,6 +8832,124 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn queue_pressure_counters_track_committed_removal_before_hash_drain() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        queue
+            .push(first, state.view())
+            .expect("first push succeeds");
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("second push succeeds");
+
+        assert_eq!(queue.active_len(), 2);
+        assert_eq!(queue.queued_len(), 2);
+        queue.assert_pressure_counters_consistent_for_tests();
+
+        assert_eq!(queue.remove_committed_hashes([first_hash], None), 1);
+
+        let snapshot = queue.pressure_snapshot();
+        assert_eq!(snapshot.tracked_tx_count, 1);
+        assert_eq!(snapshot.queued_tx_count, 1);
+        assert_eq!(queue.active_len(), queue.txs.len());
+        assert_eq!(queue.queued_len(), queue.queued_tx_enqueued_at_ms.len());
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[tokio::test]
+    async fn queue_pressure_counters_restore_age_after_enqueue_compaction_retry() {
+        let capacity = nonzero!(1_usize);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(
+            Config {
+                capacity,
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        queue
+            .push(first, state.view())
+            .expect("first push succeeds");
+        assert_eq!(queue.remove_committed_hashes([first_hash], None), 1);
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        queue.assert_pressure_counters_consistent_for_tests();
+
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.as_ref().hash();
+        queue
+            .push(second, state.view())
+            .expect("second push compacts stale hash and succeeds");
+
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.queued_tx_enqueued_at_ms.contains_key(&second_hash));
+        assert_eq!(queue.pressure_snapshot().queued_tx_count, 1);
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[tokio::test]
+    async fn queue_pressure_counters_stay_consistent_under_sustained_backlog() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(
+            Config {
+                capacity: nonzero!(64_usize),
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        let target_backlog = 8usize;
+
+        for _ in 0..target_backlog {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("prefill push succeeds");
+            time_handle.advance(Duration::from_millis(1));
+        }
+        queue.assert_pressure_counters_consistent_for_tests();
+        assert_eq!(queue.pressure_snapshot().queued_tx_count, target_backlog);
+
+        for _ in 0..32 {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("sustained push succeeds");
+            queue.assert_pressure_counters_consistent_for_tests();
+
+            let mut guards = Vec::new();
+            queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+            assert_eq!(guards.len(), 1, "one transaction should leave the queue");
+
+            let inflight = queue.pressure_snapshot();
+            assert_eq!(inflight.tracked_tx_count, target_backlog + 1);
+            assert_eq!(inflight.queued_tx_count, target_backlog);
+            queue.assert_pressure_counters_consistent_for_tests();
+
+            drop(guards);
+            let after_drop = queue.pressure_snapshot();
+            assert_eq!(after_drop.tracked_tx_count, target_backlog);
+            assert_eq!(after_drop.queued_tx_count, target_backlog);
+            queue.assert_pressure_counters_consistent_for_tests();
+
+            time_handle.advance(Duration::from_millis(1));
+        }
+    }
+
+    #[tokio::test]
     async fn resync_rebuilds_hash_queue_when_empty() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -8342,6 +8977,7 @@ pub mod tests {
             1,
             "remaining queue size should be tracked"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[tokio::test]
@@ -8372,6 +9008,7 @@ pub mod tests {
             1,
             "remaining queue size should be tracked"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[tokio::test]
@@ -8521,6 +9158,11 @@ pub mod tests {
                 .get(&hash)
                 .map(|entry| *entry.value()),
             Some(routing)
+        );
+        assert_eq!(
+            queue.tx_gossip.pop(),
+            Some(hash),
+            "successful requeue should still enqueue the gossip side channel"
         );
 
         let mut expired = Vec::new();
@@ -8822,6 +9464,7 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
         assert_eq!(queue.active_len(), 1, "tx tracked before expiration");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         time_handle.advance(Duration::from_secs(2));
         let culled = queue.cull_expired_entries_if_due();
@@ -8831,6 +9474,7 @@ pub mod tests {
             0,
             "expired tx removed from active count"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]
@@ -8854,16 +9498,19 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
         assert_eq!(queue.queued_len(), 2, "hash queue tracks queued txs");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         time_handle.advance(Duration::from_secs(2));
         let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 2, "expired transactions should be culled");
         assert_eq!(queue.queued_len(), 0, "hash queue compacted after cull");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         queue
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push after compaction succeeds");
         assert_eq!(queue.queued_len(), 1, "hash queue accepts new txs");
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]
@@ -8890,11 +9537,13 @@ pub mod tests {
         let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 1, "batch-limited sweep culls one tx");
         assert_eq!(queue.active_len(), 1, "one tx remains after first sweep");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         time_handle.advance(Duration::from_millis(2));
         let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 1, "second sweep culls remaining tx");
         assert_eq!(queue.active_len(), 0, "all expired txs removed");
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]
@@ -8916,6 +9565,7 @@ pub mod tests {
         let removed = queue.remove_committed_hashes([hash], None);
         assert_eq!(removed, 1, "committed hash should be removed");
         assert_eq!(queue.active_len(), 0, "queue no longer tracks tx");
+        queue.assert_pressure_counters_consistent_for_tests();
         assert!(
             !queue.expiry_ring_members.contains_key(&hash),
             "expiry tracking cleared on commit removal"
@@ -8943,6 +9593,7 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
         assert_eq!(queue.queued_len(), 1, "queued count before pop");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         let mut expired = Vec::new();
         let guard = queue
@@ -8952,12 +9603,14 @@ pub mod tests {
         assert_eq!(queue.queued_len(), 0, "hash queue empty after pop");
         assert_eq!(queue.active_len(), 1, "active count includes in-flight");
         assert_eq!(queue.queued_len(), 0, "queued count excludes in-flight");
+        queue.assert_pressure_counters_consistent_for_tests();
         drop(guard);
         assert_eq!(
             queue.active_len(),
             0,
             "active count clears after guard drop"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]

@@ -13,8 +13,10 @@ fn vpn_defaults_apply_and_validate() {
         dns_push_interval_secs: 0,
         route_push: vec!["10.0.0.0/24 ".to_string()],
         dns_overrides: vec![" 1.1.1.1 ".to_string()],
-        helper_ticket_secret_hex: None,
+        helper_ticket_secret_hex: Some("ab".repeat(32)),
         backend_addr: None,
+        usage_voucher_debt_window_bytes: 0,
+        receipt_spool_dir: None,
         cover: VpnCoverTrafficConfig {
             enabled: false,
             cover_to_data_per_mille: 0,
@@ -67,8 +69,10 @@ fn vpn_cover_jitter_guardrails() {
         dns_push_interval_secs: 60,
         route_push: vec![],
         dns_overrides: vec![],
-        helper_ticket_secret_hex: None,
+        helper_ticket_secret_hex: Some("ab".repeat(32)),
         backend_addr: None,
+        usage_voucher_debt_window_bytes: 1_048_576,
+        receipt_spool_dir: None,
         cover: VpnCoverTrafficConfig {
             enabled: true,
             cover_to_data_per_mille: 500,
@@ -105,7 +109,7 @@ fn vpn_config_json_roundtrip_preserves_fields() {
     let mut cfg = VpnConfig {
         enabled: true,
         cell_size_bytes: 1_024,
-        flow_label_bits: 20,
+        flow_label_bits: 24,
         pacing_millis: 15,
         padding_budget_ms: 8,
         exit_class: "standard".to_string(),
@@ -113,8 +117,10 @@ fn vpn_config_json_roundtrip_preserves_fields() {
         dns_push_interval_secs: 120,
         route_push: vec!["10.0.0.0/24".into()],
         dns_overrides: vec!["8.8.8.8".into()],
-        helper_ticket_secret_hex: None,
+        helper_ticket_secret_hex: Some("ab".repeat(32)),
         backend_addr: None,
+        usage_voucher_debt_window_bytes: 65_536,
+        receipt_spool_dir: None,
         cover: VpnCoverTrafficConfig::default(),
         billing: Default::default(),
     };
@@ -130,6 +136,11 @@ fn vpn_config_json_roundtrip_preserves_fields() {
     assert_eq!(cfg.padding_budget_ms, decoded.padding_budget_ms);
     assert_eq!(cfg.route_push, decoded.route_push);
     assert_eq!(cfg.dns_overrides, decoded.dns_overrides);
+    assert_eq!(
+        cfg.usage_voucher_debt_window_bytes,
+        decoded.usage_voucher_debt_window_bytes
+    );
+    assert_eq!(cfg.receipt_spool_dir, decoded.receipt_spool_dir);
 }
 
 #[test]

@@ -28,6 +28,7 @@ async fn protected_namespaces_endpoints_work() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+    let chain_id = Arc::new(iroha_data_model::ChainId::from("test-chain"));
 
     // Wire routes for GET and POST
     let app = Router::new().route(
@@ -38,8 +39,19 @@ async fn protected_namespaces_endpoints_work() {
         })
         .post({
             let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::ProtectedNamespacesDto>| async move {
-                iroha_torii::handle_gov_protected_set(state, req).await
+            let chain_id = chain_id.clone();
+            move |req: iroha_torii::NoritoJson<iroha_torii::ProtectedNamespacesDto>| {
+                let state = state.clone();
+                let chain_id = chain_id.clone();
+                async move {
+                    iroha_torii::handle_gov_protected_set(
+                        chain_id,
+                        state,
+                        iroha_torii::MaybeTelemetry::disabled(),
+                        req,
+                    )
+                    .await
+                }
             }
         }),
     );

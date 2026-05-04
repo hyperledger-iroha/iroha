@@ -50,7 +50,7 @@ fn vadd_basic() {
         .unwrap();
     set_vector(&mut vm, 10, &[1, 2, 3, 4]);
     set_vector(&mut vm, 20, &[10, 20, 30, 40]);
-    vm.execute_instruction(Instruction::Vadd {
+    vm.execute_instruction(Instruction::Vadd32 {
         rd: 30,
         rs: 10,
         rt: 20,
@@ -66,7 +66,7 @@ fn vadd_vl1() {
         .unwrap();
     set_vector(&mut vm, 5, &[100]);
     set_vector(&mut vm, 6, &[23]);
-    vm.execute_instruction(Instruction::Vadd {
+    vm.execute_instruction(Instruction::Vadd32 {
         rd: 7,
         rs: 5,
         rt: 6,
@@ -82,7 +82,7 @@ fn vadd_chunks() {
         .unwrap();
     set_vector(&mut vm, 10, &[0, 1, 2, 3, 4, 5]);
     set_vector(&mut vm, 20, &[0, 2, 4, 6, 8, 10]);
-    vm.execute_instruction(Instruction::Vadd {
+    vm.execute_instruction(Instruction::Vadd32 {
         rd: 30,
         rs: 10,
         rt: 20,
@@ -101,7 +101,7 @@ fn vadd_privacy_violation() {
     set_vector(&mut vm, 20, &[3, 4]);
     set_vector_tags(&mut vm, 10, &[true, false]);
     set_vector_tags(&mut vm, 20, &[true, true]);
-    let res = vm.execute_instruction(Instruction::Vadd {
+    let res = vm.execute_instruction(Instruction::Vadd32 {
         rd: 30,
         rs: 10,
         rt: 20,

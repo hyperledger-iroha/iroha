@@ -373,7 +373,8 @@ pub fn build_approve_preimage_with_relay(
 }
 
 fn push_tagged(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
-    out.extend_from_slice(&(tag.len() as u16).to_le_bytes());
+    let tag_len = u16::try_from(tag.len()).expect("connect SDK tags are bounded");
+    out.extend_from_slice(&tag_len.to_le_bytes());
     out.extend_from_slice(tag);
     out.extend_from_slice(&(value.len() as u64).to_le_bytes());
     out.extend_from_slice(value);

@@ -106,40 +106,81 @@ impl InnerLimiter {
         }
     }
 
-    fn allow_cost(&mut self, key: &str, cost: u64, now: Instant) -> bool {
-        let burst = self.burst;
-        if !self.buckets.contains_key(key) {
-            if self.buckets.len() >= self.max_buckets {
-                if let Some(oldest) = self.order.pop_front() {
-                    self.buckets.remove(&oldest);
-                }
+    fn insert_full_bucket(&mut self, key: &str, now: Instant) {
+        if self.buckets.len() >= self.max_buckets {
+            if let Some(oldest) = self.order.pop_front() {
+                self.buckets.remove(&oldest);
             }
-            let key_owned = key.to_string();
-            self.order.push_back(key_owned.clone());
-            self.buckets.insert(
-                key_owned,
-                TokenBucket {
-                    tokens: burst,
-                    last: now,
-                },
-            );
         }
-        let Some(bucket) = self.buckets.get_mut(key) else {
-            return true;
-        };
+        let key_owned = key.to_string();
+        self.order.push_back(key_owned.clone());
+        self.buckets.insert(
+            key_owned,
+            TokenBucket {
+                tokens: self.burst,
+                last: now,
+            },
+        );
+    }
+
+    fn refill_bucket(rate_per_sec: f64, burst: f64, bucket: &mut TokenBucket, now: Instant) {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         if elapsed > 0.0 {
-            bucket.tokens = (bucket.tokens + elapsed * self.rate_per_sec).min(burst);
+            bucket.tokens = (bucket.tokens + elapsed * rate_per_sec).min(burst);
             bucket.last = now;
         }
+    }
+
+    fn allow_cost(&mut self, key: &str, cost: u64, now: Instant) -> bool {
+        let burst = self.burst;
         let required = (cost.max(1) as f64).min(f64::MAX);
         if required > burst {
             return false;
         }
+
+        let rate_per_sec = self.rate_per_sec;
+        let bucket = match self.buckets.get_mut(key) {
+            Some(bucket) => bucket,
+            None => {
+                self.insert_full_bucket(key, now);
+                self.buckets
+                    .get_mut(key)
+                    .expect("inserted rate-limit bucket must be present")
+            }
+        };
+        Self::refill_bucket(rate_per_sec, burst, bucket, now);
         if bucket.tokens >= required {
             bucket.tokens -= required;
             true
         } else {
+            false
+        }
+    }
+
+    fn allow_repeated(&mut self, key: &str, count: usize, now: Instant) -> bool {
+        if count == 0 {
+            return true;
+        }
+
+        let burst = self.burst;
+        let rate_per_sec = self.rate_per_sec;
+        let bucket = match self.buckets.get_mut(key) {
+            Some(bucket) => bucket,
+            None => {
+                self.insert_full_bucket(key, now);
+                self.buckets
+                    .get_mut(key)
+                    .expect("inserted rate-limit bucket must be present")
+            }
+        };
+        Self::refill_bucket(rate_per_sec, burst, bucket, now);
+
+        let required = count as f64;
+        if bucket.tokens >= required {
+            bucket.tokens -= required;
+            true
+        } else {
+            bucket.tokens = bucket.tokens.fract();
             false
         }
     }
@@ -187,6 +228,21 @@ impl RateLimiter {
             .shard_for(key)
             .lock()
             .allow_cost(key, cost, Instant::now())
+    }
+
+    /// Returns true after consuming `count` single-token requests for the same key.
+    ///
+    /// On rejection this preserves repeated [`Self::allow`] semantics by consuming
+    /// the whole-token prefix that would have passed before the first limited request.
+    #[allow(clippy::unused_async)]
+    pub async fn allow_repeated(&self, key: &str, count: usize) -> bool {
+        if self.inner.disabled || count == 0 {
+            return true;
+        }
+        self.inner
+            .shard_for(key)
+            .lock()
+            .allow_repeated(key, count, Instant::now())
     }
 
     #[cfg(test)]
@@ -813,6 +869,50 @@ mod tests {
         assert!(limiter.allow_cost("cost", 4).await);
         // Bucket should be drained beyond burst
         assert!(!limiter.allow_cost("cost", 3).await);
+    }
+
+    #[tokio::test]
+    async fn limiter_rejects_impossible_cost_without_tracking_key() {
+        let limiter = RateLimiter::new(Some(10), Some(10));
+
+        assert!(!limiter.allow_cost("too-large", 11).await);
+        assert_eq!(
+            limiter.bucket_count().await,
+            0,
+            "requests larger than burst should not allocate an unserviceable bucket"
+        );
+        assert!(limiter.allow_cost("too-large", 1).await);
+        assert_eq!(limiter.bucket_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn limiter_existing_key_reuses_bucket() {
+        let limiter = RateLimiter::new(Some(10), Some(10));
+
+        assert!(limiter.allow("same").await);
+        assert!(limiter.allow_cost("same", 2).await);
+        assert!(limiter.allow_repeated("same", 3).await);
+        assert_eq!(
+            limiter.bucket_count().await,
+            1,
+            "repeated checks for an existing key should stay on one bucket"
+        );
+    }
+
+    #[tokio::test]
+    async fn limiter_allow_repeated_matches_single_key_prefix_consumption() {
+        let limiter = RateLimiter::new(Some(1), Some(2));
+
+        assert!(!limiter.allow_repeated("batch", 3).await);
+        assert!(
+            !limiter.allow("batch").await,
+            "failed repeated check should consume the two requests that would have passed"
+        );
+
+        let limiter = RateLimiter::new(Some(1), Some(3));
+        assert!(limiter.allow_repeated("batch", 2).await);
+        assert!(limiter.allow("batch").await);
+        assert!(!limiter.allow("batch").await);
     }
 
     #[test]

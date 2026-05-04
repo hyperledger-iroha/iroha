@@ -237,6 +237,7 @@ where
                         spam_invalid_transactions: false,
                         network_latency: None,
                         network_partition: None,
+                        network_packet_loss: None,
                         cpu_stress: None,
                         disk_saturation: None,
                     },
@@ -298,7 +299,8 @@ struct MochiFaultPeer {
     supervisor: Arc<Mutex<Supervisor>>,
     alias: String,
     storage_dir: PathBuf,
-    trusted_peers_pop: Vec<Value>,
+    trusted_peer_entry: String,
+    isolated_trusted_peers_pop: Vec<Value>,
     client: MochiFaultClient,
 }
 
@@ -318,13 +320,29 @@ impl MochiFaultPeer {
             .map_err(|err| ChaosError::Message(format!("read peer config failed: {err}")))?;
         let table: Table = toml::from_str(&config)
             .map_err(|err| ChaosError::Message(format!("parse peer config failed: {err}")))?;
-        let trusted_peers_pop = table
+        let peer_public_key = peer.peer_id().to_string();
+        let trusted_peer_entry = format!("{peer_public_key}@{}", peer.p2p_address());
+        let isolated_trusted_peers_pop = table
             .get("trusted_peers_pop")
             .and_then(Value::as_array)
             .cloned()
             .ok_or_else(|| {
                 ChaosError::Message("peer config missing trusted_peers_pop roster".to_owned())
-            })?;
+            })?
+            .into_iter()
+            .filter(|entry| {
+                entry
+                    .as_table()
+                    .and_then(|table| table.get("public_key"))
+                    .and_then(Value::as_str)
+                    == Some(peer_public_key.as_str())
+            })
+            .collect::<Vec<_>>();
+        if isolated_trusted_peers_pop.is_empty() {
+            return Err(ChaosError::Message(format!(
+                "peer config missing trusted_peers_pop entry for `{peer_public_key}`"
+            )));
+        }
         let peer_dir = peer
             .config_path()
             .parent()
@@ -338,7 +356,8 @@ impl MochiFaultPeer {
             supervisor: shared.clone(),
             alias: alias.to_owned(),
             storage_dir: peer_dir.join("storage"),
-            trusted_peers_pop,
+            trusted_peer_entry,
+            isolated_trusted_peers_pop,
             client: MochiFaultClient { client },
         })
     }
@@ -359,8 +378,12 @@ impl FaultPeer for MochiFaultPeer {
         self.client.clone()
     }
 
-    fn trusted_peers_pop_entries(&self) -> EyreResult<Vec<Value>> {
-        Ok(self.trusted_peers_pop.clone())
+    fn isolated_trusted_peer_entry(&self) -> EyreResult<String> {
+        Ok(self.trusted_peer_entry.clone())
+    }
+
+    fn isolated_trusted_peers_pop_entries(&self) -> EyreResult<Vec<Value>> {
+        Ok(self.isolated_trusted_peers_pop.clone())
     }
 
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -486,6 +509,7 @@ where
             spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: Some(CpuStressConfig {
                 duration: half..=half,
                 workers: 1..=2,
@@ -511,6 +535,7 @@ where
             spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: Some(DiskSaturationConfig {
                 duration: half..=half,
@@ -584,6 +609,7 @@ fn fault_config_for_latency(duration: Duration) -> FaultConfig {
             gossip_delay: Duration::from_millis(1_200)..=Duration::from_millis(1_200),
         }),
         network_partition: None,
+        network_packet_loss: None,
         cpu_stress: None,
         disk_saturation: None,
     }
@@ -599,6 +625,7 @@ fn fault_config_for_partition(duration: Duration) -> FaultConfig {
         network_partition: Some(NetworkPartitionConfig {
             duration: duration..=duration,
         }),
+        network_packet_loss: None,
         cpu_stress: None,
         disk_saturation: None,
     }
@@ -611,6 +638,7 @@ fn scenario_label(scenario: FaultScenarioKind) -> &'static str {
         FaultScenarioKind::SpamInvalidTransactions => "invalid-traffic fault",
         FaultScenarioKind::NetworkLatencySpike => "network latency fault",
         FaultScenarioKind::NetworkPartition => "network partition fault",
+        FaultScenarioKind::NetworkPacketLoss => "network packet-loss fault",
         FaultScenarioKind::CpuStress => "CPU stress fault",
         FaultScenarioKind::DiskSaturation => "disk saturation fault",
     }

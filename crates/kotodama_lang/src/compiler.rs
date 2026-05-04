@@ -70,11 +70,6 @@ const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
-const TEST_SYSCALL_ACTOR_ACCOUNT: u8 = 0xF8;
-const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u8 = 0xF9;
-const TEST_SYSCALL_ACTOR_SIGN: u8 = 0xFA;
-const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u8 = 0xFB;
-const TEST_SYSCALL_EXPECT_REJECT_AS: u8 = 0xFC;
 
 #[derive(Clone)]
 struct AccessSets {
@@ -145,11 +140,21 @@ impl AccessHintDiagnostics {
 
 struct HintReport {
     emitted: bool,
+    complete: bool,
     skipped_reasons: Vec<String>,
 }
 
 fn push_word(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
+}
+
+fn push_syscall(code: &mut Vec<u8>, number: u32) {
+    let word = if let Ok(imm8) = u8::try_from(number) {
+        encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
+    } else {
+        encoding::wide::encode_syscallx(number)
+    };
+    push_word(code, word);
 }
 
 fn chunk_immediate(value: i64) -> i8 {
@@ -606,7 +611,7 @@ pub struct CompilerOptions {
     pub force_zk: bool,
     /// Force VECTOR mode bit in header even if program does not use vector ops.
     pub force_vector: bool,
-    /// Requested logical vector length (0 = max).
+    /// Requested logical vector length; 0 selects the runtime default.
     pub vector_length: u8,
     /// Optional maximum cycles to encode; 0 means "use compiler default".
     pub max_cycles: u64,
@@ -725,6 +730,25 @@ seiyaku MyC {
         let code = compiler.compile_source(src).expect("compile");
         let parsed = ProgramMetadata::parse(&code).expect("parse meta");
         assert_eq!(parsed.metadata.max_cycles, 42);
+    }
+
+    #[test]
+    fn compiler_options_reject_vector_length_above_abi_max() {
+        let opts = CompilerOptions {
+            vector_length: ivm_abi::metadata::VECTOR_LENGTH_MAX + 1,
+            ..CompilerOptions::default()
+        };
+        let compiler = Compiler::new_with_options(opts);
+        let src = r#"
+seiyaku MyC {
+  hajimari() { let a = 1; }
+}
+"#;
+        let err = compiler.compile_source(src).unwrap_err();
+        assert!(
+            err.contains("unsupported vector_length"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1625,8 +1649,8 @@ seiyaku Test {
             .expect("read entrypoint");
         assert_eq!(read.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
         assert_eq!(read.write_keys, vec![STATE_WILDCARD_KEY.to_string()]);
-        assert_eq!(read.access_hints_complete, Some(true));
-        assert!(read.access_hints_skipped.is_empty());
+        assert_eq!(read.access_hints_complete, Some(false));
+        assert!(!read.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -1654,8 +1678,8 @@ seiyaku Test {
             .expect("relay entrypoint");
         assert!(relay.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
         assert!(relay.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-        assert_eq!(relay.access_hints_complete, Some(true));
-        assert!(relay.access_hints_skipped.is_empty());
+        assert_eq!(relay.access_hints_complete, Some(false));
+        assert!(!relay.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -1993,8 +2017,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2022,8 +2046,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2051,8 +2075,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2081,8 +2105,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2110,8 +2134,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2139,8 +2163,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2169,8 +2193,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2199,8 +2223,8 @@ seiyaku Test {
             .expect("main entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2228,8 +2252,8 @@ seiyaku Test {
             .expect("move entrypoint");
         assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
+        assert_eq!(main.access_hints_complete, Some(false));
+        assert!(!main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2257,8 +2281,8 @@ seiyaku Test {
             .expect("register entrypoint");
         assert_eq!(register.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(register.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
-        assert_eq!(register.access_hints_complete, Some(true));
-        assert!(register.access_hints_skipped.is_empty());
+        assert_eq!(register.access_hints_complete, Some(false));
+        assert!(!register.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -3496,6 +3520,49 @@ mod test_mode_tests {
                 .any(|entry| entry.function_name == "smoke")
         );
     }
+
+    #[test]
+    fn test_mode_helpers_emit_private_scallx_syscalls() {
+        let src = r#"
+        seiyaku Demo {
+            #[access(read="*", write="*")]
+            kotoage fn run() {}
+
+            #[test]
+            fn smoke() {
+                let _acct = actor_account("issuer");
+                let _pk = actor_public_key("issuer");
+                let _sig = actor_sign("issuer", b"message");
+                invoke_entrypoint_as("issuer", "run", json("{}"));
+                expect_reject_as("issuer", "run", json("{}"));
+            }
+        }
+        "#;
+
+        let compiler = Compiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        });
+        let code = compiler.compile_source(src).expect("compile test helpers");
+        let metadata = ProgramMetadata::parse(&code).expect("parse metadata");
+        let code_region = &code[metadata.code_offset..];
+
+        for syscall in [
+            syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+            syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY,
+            syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN,
+            syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
+            syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
+        ] {
+            let needle = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+            assert!(
+                code_region
+                    .windows(needle.len())
+                    .any(|window| window == needle),
+                "expected private Kotodama test syscall {syscall:#x} to use SCALLX"
+            );
+        }
+    }
 }
 
 impl Compiler {
@@ -3652,6 +3719,7 @@ impl Compiler {
         }
         let func_count = ir_prog.functions.len();
         let mut access_sets: Vec<AccessSets> = vec![AccessSets::default(); func_count];
+        let mut hint_skips: Vec<IndexSet<String>> = vec![IndexSet::new(); func_count];
         let mut hint_diagnostics = AccessHintDiagnostics::default();
         let mut uses_isi = false;
         use super::ir::DataRefKind as DRK;
@@ -3822,6 +3890,10 @@ impl Compiler {
                             } else {
                                 hint_diagnostics.state_wildcards =
                                     hint_diagnostics.state_wildcards.saturating_add(1);
+                                record_hint_skip(
+                                    &mut hint_skips[func_idx],
+                                    "dynamic state path requires state wildcard",
+                                );
                                 access_sets[func_idx]
                                     .reads
                                     .insert(STATE_WILDCARD_KEY.to_string());
@@ -3838,6 +3910,10 @@ impl Compiler {
                             } else {
                                 hint_diagnostics.state_wildcards =
                                     hint_diagnostics.state_wildcards.saturating_add(1);
+                                record_hint_skip(
+                                    &mut hint_skips[func_idx],
+                                    "dynamic state path requires state wildcard",
+                                );
                                 access_sets[func_idx]
                                     .reads
                                     .insert(STATE_WILDCARD_KEY.to_string());
@@ -3849,6 +3925,10 @@ impl Compiler {
                         ir::Instr::CallContract { .. } => {
                             hint_diagnostics.state_wildcards =
                                 hint_diagnostics.state_wildcards.saturating_add(1);
+                            record_hint_skip(
+                                &mut hint_skips[func_idx],
+                                "contract call target requires state wildcard",
+                            );
                             access_sets[func_idx]
                                 .reads
                                 .insert(STATE_WILDCARD_KEY.to_string());
@@ -3981,20 +4061,26 @@ impl Compiler {
                 &dataref_kind_map,
                 &mut access_sets,
                 &mut hint_diagnostics,
+                &mut hint_skips,
             );
         }
         if entrypoints_explicitly_wildcard_everything(&typed) {
             hint_diagnostics = AccessHintDiagnostics::default();
+            for skips in &mut hint_skips {
+                skips.clear();
+            }
         }
         let has_any_hints = access_sets
             .iter()
             .any(|set| !set.reads.is_empty() || !set.writes.is_empty());
         let include_hints = explicit_hints_present || has_any_hints;
         let mut hint_reports = Vec::with_capacity(func_count);
-        for _ in 0..func_count {
+        for skips in hint_skips.iter().take(func_count) {
+            let skipped_reasons = skips.iter().cloned().collect::<Vec<_>>();
             hint_reports.push(HintReport {
                 emitted: include_hints,
-                skipped_reasons: Vec::new(),
+                complete: include_hints && skipped_reasons.is_empty(),
+                skipped_reasons,
             });
         }
 
@@ -4013,6 +4099,7 @@ impl Compiler {
         let mut uses_vector_global = false;
         let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
+        let mut entrypoint_wrapper_offsets: HashMap<String, usize> = HashMap::new();
         let mut function_debug_seeds: Vec<FunctionDebugSeed> = Vec::new();
         struct JumpFixup {
             at: usize,
@@ -6100,11 +6187,10 @@ impl Compiler {
                                 &mut code,
                                 encode_addi(13, 0, if *returns_pointer { 1 } else { 0 })?,
                             );
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                TEST_SYSCALL_INVOKE_ENTRYPOINT_AS,
+                            push_syscall(
+                                &mut code,
+                                syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
                             );
-                            code.extend_from_slice(&word.to_le_bytes());
                             if let Some(dest) = dest {
                                 let (rd, spilled, imm) = dst_reg(dest);
                                 push_word(&mut code, encode_addi(rd, 10, 0)?);
@@ -6154,11 +6240,7 @@ impl Compiler {
                                 let rs_payload = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(12, rs_payload, 0)?);
                             }
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                TEST_SYSCALL_EXPECT_REJECT_AS,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS);
                         }
                         Instr::ActorAccount { dest, actor } => {
                             if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
@@ -6172,11 +6254,7 @@ impl Compiler {
                                 let rs = src_reg(actor, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
                             }
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                TEST_SYSCALL_ACTOR_ACCOUNT,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -6193,11 +6271,7 @@ impl Compiler {
                                 let rs = src_reg(actor, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, rs, 0)?);
                             }
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                TEST_SYSCALL_ACTOR_PUBLIC_KEY,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -6234,11 +6308,7 @@ impl Compiler {
                                 let rs_message = src_reg(message, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(11, rs_message, 0)?);
                             }
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                TEST_SYSCALL_ACTOR_SIGN,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN);
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -8482,6 +8552,21 @@ impl Compiler {
             uses_zk_global |= uses_zk;
         }
 
+        for func in &ir_prog.functions {
+            if func.name == entry_name {
+                continue;
+            }
+            let wrapper_start = code.len();
+            entrypoint_wrapper_offsets.insert(func.name.clone(), wrapper_start);
+            let call_at = reserve_control_transfer_stub(&mut code);
+            call_fixups.push((
+                call_at,
+                func.name.clone(),
+                format!("__entrypoint_wrapper:{}", func.name),
+            ));
+            push_word(&mut code, encoding::wide::encode_halt());
+        }
+
         // Patch call sites now that function offsets are known.
         for (at, callee, _caller) in &call_fixups {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
@@ -8513,13 +8598,20 @@ impl Compiler {
         }
 
         // Construct header using contract meta (if present) with compiler options as fallback
+        let vector_length = meta_decl
+            .and_then(|m| m.vector_length)
+            .unwrap_or(self.opts.vector_length);
+        if vector_length > ivm_abi::metadata::VECTOR_LENGTH_MAX {
+            return Err(format!(
+                "unsupported vector_length {vector_length}; expected 0..={}",
+                ivm_abi::metadata::VECTOR_LENGTH_MAX
+            ));
+        }
         let meta = ProgramMetadata {
             version_major: 1,
             version_minor: 1,
             mode,
-            vector_length: meta_decl
-                .and_then(|m| m.vector_length)
-                .unwrap_or(self.opts.vector_length),
+            vector_length,
             max_cycles: meta_decl
                 .and_then(|m| m.max_cycles)
                 .filter(|value| *value != 0)
@@ -8777,12 +8869,14 @@ impl Compiler {
             Ok(off)
         };
 
+        let mut entrypoint_start_offsets = func_start_offsets.clone();
+        entrypoint_start_offsets.extend(entrypoint_wrapper_offsets);
         let entrypoint_descriptors = build_entrypoint_descriptors(
             &typed,
             &access_sets,
             &ir_prog.functions,
             &hint_reports,
-            &func_start_offsets,
+            &entrypoint_start_offsets,
         )?;
         let state_descriptors = build_state_descriptors(&typed)?;
         let access_set_hints = build_access_set_hints(&access_sets, include_hints);
@@ -9328,6 +9422,7 @@ fn derive_isi_access_hints(
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     access_sets: &mut [AccessSets],
     hint_diagnostics: &mut AccessHintDiagnostics,
+    hint_skips: &mut [IndexSet<String>],
 ) {
     for (func_idx, func) in ir_prog.functions.iter().enumerate() {
         for bb in &func.blocks {
@@ -9342,10 +9437,15 @@ fn derive_isi_access_hints(
                     dataref_kind_map,
                     &mut access_sets[func_idx],
                     hint_diagnostics,
+                    &mut hint_skips[func_idx],
                 );
             }
         }
     }
+}
+
+fn record_hint_skip(skips: &mut IndexSet<String>, reason: &str) {
+    skips.insert(reason.to_owned());
 }
 
 fn record_isi_access(
@@ -9355,12 +9455,15 @@ fn record_isi_access(
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     access_set: &mut AccessSets,
     hint_diagnostics: &mut AccessHintDiagnostics,
+    hint_skips: &mut IndexSet<String>,
 ) {
-    fn apply_fallback(access_set: &mut AccessSets, hint_diagnostics: &mut AccessHintDiagnostics) {
-        hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
-        access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
-        access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
-    }
+    let mut apply_fallback =
+        |access_set: &mut AccessSets, hint_diagnostics: &mut AccessHintDiagnostics| {
+            record_hint_skip(hint_skips, "opaque ISI access requires global wildcard");
+            hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
+            access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
+            access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
+        };
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
         ir::Instr::EscrowOpenOffer { .. }
@@ -10242,7 +10345,7 @@ fn build_entrypoint_descriptors(
             permission: func.modifiers.permission.clone(),
             read_keys: reads,
             write_keys: writes,
-            access_hints_complete: report.map(|r| r.emitted),
+            access_hints_complete: report.and_then(|r| r.emitted.then_some(r.complete)),
             access_hints_skipped: report
                 .map(|r| r.skipped_reasons.clone())
                 .unwrap_or_default(),

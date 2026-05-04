@@ -111,7 +111,7 @@ rota carrega um segmento de domínio.
 Rotas Torii atuais:| Rota | Finalidade |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | Lista as políticas do programa RAM-LFE ativas e inativas, além de seus metadados de execução pública, incluindo parâmetros BFV `input_encryption` opcionais e o back-end programado `ram_fhe_profile`. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | Aceita exatamente um de `{ input_hex }` ou `{ encrypted_input }` e retorna o `RamLfeExecutionReceipt` sem estado mais `{ output_hex, output_hash, receipt_hash }` para o programa selecionado. O tempo de execução Torii atual emite recibos para o backend BFV programado. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Aceita exatamente um de `{ input_hex }` ou `{ encrypted_input }` e retorna o `RamLfeExecutionReceipt` sem estado mais `{ output_hash, receipt_hash }` para o programa selecionado. Torii não retorna a saída RAM-LFE em texto claro. O tempo de execução Torii atual emite recibos para o backend BFV programado. |
 | `POST /v1/ram-lfe/receipts/verify` | Valida apátrida um `RamLfeExecutionReceipt` em relação à política do programa on-chain publicada e, opcionalmente, verifica se um `output_hex` fornecido pelo chamador corresponde ao recibo `output_hash`. |
 | `GET /v1/identifier-policies` | Lista namespaces de política de função oculta ativos e inativos, além de seus metadados públicos, incluindo parâmetros BFV `input_encryption` opcionais, o modo `normalization` necessário para entrada criptografada do lado do cliente e `ram_fhe_profile` para políticas BFV programadas. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Aceita exatamente um de `{ input }` ou `{ encrypted_input }`. O texto simples `input` é normalizado no lado do servidor; O BFV `encrypted_input` já deve estar normalizado de acordo com o modo de política publicado. O endpoint então deriva o identificador `opaque:` e retorna um recibo assinado que `ClaimIdentifier` pode enviar na cadeia, incluindo o `signature_payload_hex` bruto e o `signature_payload` analisado. || `POST /v1/identifiers/resolve` | Aceita exatamente um de `{ input }` ou `{ encrypted_input }`. O texto simples `input` é normalizado no lado do servidor; O BFV `encrypted_input` já deve estar normalizado de acordo com o modo de política publicado. O ponto de extremidade resolve o identificador em `{ opaque_id, receipt_hash, uaid, account_id, signature }` quando existe uma declaração ativa e também retorna a carga canônica assinada como `{ signature_payload_hex, signature_payload }`. |
@@ -227,8 +227,9 @@ Existem três maneiras suportadas de obter um UAID:
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```Sempre armazene o literal em letras minúsculas e normalize os espaços em branco antes do hash.
 Ajudantes CLI, como `iroha app space-directory manifest scaffold` e Android
 O analisador `UaidLiteral` aplica as mesmas regras de corte para que as revisões de governança possam

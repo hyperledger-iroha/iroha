@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use iroha_crypto::KeyPair;
 use iroha_data_model::nexus::{
-    AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
+    AxtFastpqBinding, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
 };
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
@@ -16,6 +16,30 @@ use ivm::{
     mock_wsv::{AccountId, DataspaceAxtPolicy, MockWorldStateView, WsvHost},
     syscalls,
 };
+
+const AXT_VERIFY_EMPTY_GAS: u64 = 64;
+const AXT_GAS_BASE: u64 = 16;
+
+fn axt_gas(payload_len: usize) -> u64 {
+    AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn use_handle_gas(
+    handle: &AssetHandle,
+    intent: &RemoteSpendIntent,
+    proof: Option<&axt::ProofBlob>,
+) -> u64 {
+    let handle_len = norito::to_bytes(handle).expect("encode handle").len();
+    let intent_len = norito::to_bytes(intent).expect("encode intent").len();
+    let proof_len = proof
+        .map(|p| norito::to_bytes(p).expect("encode proof").len())
+        .unwrap_or(0);
+    axt_gas(
+        handle_len
+            .saturating_add(intent_len)
+            .saturating_add(proof_len),
+    )
+}
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -45,32 +69,29 @@ fn begin_with_touch<T: IVMHost>(
     descriptor: &axt::AxtDescriptor,
     manifest: &TouchManifest,
 ) -> (DataSpaceId, u64) {
-    let desc_ptr = store_tlv(
-        vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let dsid = descriptor
         .dsids
         .first()
         .copied()
         .expect("descriptor contains dataspace");
-    let ds_ptr = store_tlv(
-        vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
-    let manifest_ptr = store_tlv(
-        vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(manifest).expect("encode manifest"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(vm, PointerType::DataSpaceId, &ds_bytes);
+    let manifest_bytes = norito::to_bytes(manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, vm),
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
+    );
     (dsid, ds_ptr)
 }
 
@@ -100,6 +121,57 @@ fn build_handle(
         manifest_view_root: vec![1; 32],
         expiry_slot: 99,
         max_clock_skew_ms: Some(0),
+    }
+}
+
+fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(domain);
+    for part in parts {
+        payload.extend_from_slice(part);
+    }
+    iroha_crypto::Hash::new(payload)
+}
+
+fn proof_blob_for(
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+    proof_seed: &[u8],
+    expiry_slot: Option<u64>,
+) -> axt::ProofBlob {
+    let source_tx_commitment = test_digest(b"ivm-axt-test:source-tx", &[proof_seed]);
+    let claim_digest = test_digest(b"ivm-axt-test:claim", &[proof_seed]);
+    let witness_commitment = test_digest(b"ivm-axt-test:witness", &[proof_seed]);
+    let policy_commitment = test_digest(b"ivm-axt-test:policy", &[&manifest_root]);
+    let proof_digest = test_digest(b"ivm-axt-test:proof", &[proof_seed, &manifest_root]);
+    let envelope = axt::AxtProofEnvelope {
+        dsid,
+        manifest_root,
+        da_commitment: None,
+        proof: proof_digest.as_ref().to_vec(),
+        fastpq_binding: Some(AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_string(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: "ivm-test-dataspace".to_string(),
+            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_string(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "test_effect".to_string(),
+            corridor: "ivm-test-corridor".to_string(),
+            verifier_id: "fastpq".to_string(),
+            verifier_version: "v1".to_string(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }),
+        committed_amount: None,
+        amount_commitment: None,
+    };
+    axt::ProofBlob {
+        payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+        expiry_slot,
     }
 }
 
@@ -137,7 +209,7 @@ fn use_handle<T: IVMHost>(
 }
 
 #[test]
-fn default_host_axt_flow_happy_path() {
+fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
 
@@ -153,7 +225,10 @@ fn default_host_axt_flow_happy_path() {
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
@@ -165,7 +240,10 @@ fn default_host_axt_flow_happy_path() {
     let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
+    );
 
     let binding = axt::compute_binding(&descriptor).expect("compute binding");
     let handle = AssetHandle {
@@ -205,30 +283,128 @@ fn default_host_axt_flow_happy_path() {
     let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
     let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &intent_bytes);
 
-    let handle_proof = axt::ProofBlob {
-        payload: vec![1, 2, 3, 4],
-        expiry_slot: None,
-    };
+    let handle_proof = proof_blob_for(dsid, [1; 32], b"default-happy", None);
     let proof_bytes = norito::to_bytes(&handle_proof).expect("encode proof");
     let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
 
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 
-    // Register an explicit DS proof for completeness
+    // Standalone DefaultHost can preflight the envelope, but cannot verify it.
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
+        Err(VMError::PermissionDenied)
+    ));
+
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
+}
+
+#[test]
+fn default_host_rejects_raw_axt_proof_bytes() {
+    let mut vm = IVM::new(1_000_000);
+    let mut host = DefaultHost::new();
+
+    let dsid = DataSpaceId::new(43);
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/raw".into()],
+        write: vec!["ledger/raw".into()],
+    };
+    let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+    let raw_proof = axt::ProofBlob {
+        payload: vec![1, 2, 3, 4],
+        expiry_slot: None,
+    };
+    let raw_proof_ptr = store_tlv(
+        &mut vm,
+        PointerType::ProofBlob,
+        &norito::to_bytes(&raw_proof).expect("encode raw proof"),
     );
 
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm), Ok(0));
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, raw_proof_ptr);
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::NoritoInvalid)
+    ));
+}
+
+#[test]
+fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
+    let mut vm = IVM::new(1_000_000);
+    let mut host = DefaultHost::new();
+
+    let dsid = DataSpaceId::new(44);
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/late".into()],
+        write: vec!["ledger/late".into()],
+    };
+    let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let handle = build_handle(
+        dsid,
+        binding,
+        &["transfer"],
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        50,
+        None,
+    );
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            amount: "10".into(),
+        },
+    };
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
+        Ok(use_handle_gas(&handle, &intent, None))
+    );
+
+    let mismatched_proof = proof_blob_for(dsid, [0x44; 32], b"default-late-mismatch", None);
+    let proof_ptr = store_tlv(
+        &mut vm,
+        PointerType::ProofBlob,
+        &norito::to_bytes(&mismatched_proof).expect("encode proof"),
+    );
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -355,10 +531,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         300,
         Some(200),
     );
-    let proof = axt::ProofBlob {
-        payload: vec![9, 9, 9],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-multiple-uses", None);
 
     let first_intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -370,8 +543,8 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         },
     };
     assert_eq!(
-        use_handle(&mut vm, &mut host, &handle, &first_intent, Some(&proof)),
-        Ok(0)
+        use_handle(&mut vm, &mut host, &handle, &first_intent, None),
+        Ok(use_handle_gas(&handle, &first_intent, None))
     );
 
     let second_intent = RemoteSpendIntent {
@@ -385,8 +558,8 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
     };
     handle.sub_nonce += 1;
     assert_eq!(
-        use_handle(&mut vm, &mut host, &handle, &second_intent, Some(&proof)),
-        Ok(0)
+        use_handle(&mut vm, &mut host, &handle, &second_intent, None),
+        Ok(use_handle_gas(&handle, &second_intent, None))
     );
 
     let proof_ptr = store_tlv(
@@ -396,12 +569,15 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
     );
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm), Ok(0));
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -433,10 +609,7 @@ fn default_host_rejects_handle_scope_mismatch() {
         50,
         None,
     );
-    let proof = axt::ProofBlob {
-        payload: vec![1],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-scope-mismatch", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -482,10 +655,7 @@ fn default_host_rejects_handle_subject_mismatch() {
         80,
         None,
     );
-    let proof = axt::ProofBlob {
-        payload: vec![1],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-subject-mismatch", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -542,7 +712,7 @@ fn default_host_rejects_commit_without_required_proof() {
     };
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle, &intent, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &intent, None))
     );
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
@@ -551,7 +721,7 @@ fn default_host_rejects_commit_without_required_proof() {
 }
 
 #[test]
-fn handle_proof_satisfies_dataspace_requirement() {
+fn handle_proof_fails_closed_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
 
@@ -579,10 +749,7 @@ fn handle_proof_satisfies_dataspace_requirement() {
         90,
         None,
     );
-    let proof = axt::ProofBlob {
-        payload: vec![7],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-handle-proof", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -592,12 +759,15 @@ fn handle_proof_satisfies_dataspace_requirement() {
             amount: "15".into(),
         },
     };
-    assert_eq!(
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm), Ok(0));
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -630,10 +800,7 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
         None,
     );
     handle.manifest_view_root = vec![1, 2, 3]; // invalid length
-    let proof = axt::ProofBlob {
-        payload: vec![3],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-invalid-root", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -680,10 +847,7 @@ fn default_host_rejects_handle_with_empty_scope() {
         None,
     );
     handle.scope.clear();
-    let proof = axt::ProofBlob {
-        payload: vec![4],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-empty-scope", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -729,10 +893,7 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
         10,
         None,
     );
-    let proof = axt::ProofBlob {
-        payload: vec![5],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-zero-handle-fields", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -794,10 +955,7 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         10,
         None,
     );
-    let proof = axt::ProofBlob {
-        payload: vec![6],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-zero-budget", None);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -825,7 +983,7 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
     empty_group.group_binding.composability_group_id.clear();
     assert!(matches!(
         use_handle(&mut vm, &mut host, &empty_group, &intent, Some(&proof)),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::PermissionDenied)
     ));
 }
 
@@ -860,43 +1018,41 @@ fn commit_requires_proof_for_every_dataspace() {
         write: vec!["ledger/b/1".into()],
     };
 
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     // Touch ds_a
-    let ds_a_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_a).expect("encode ds"),
-    );
-    let manifest_a_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_a).expect("encode manifest"),
-    );
+    let ds_a_bytes = norito::to_bytes(&ds_a).expect("encode ds");
+    let ds_a_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_a_bytes);
+    let manifest_a_bytes = norito::to_bytes(&manifest_a).expect("encode manifest");
+    let manifest_a_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_a_bytes);
     vm.set_register(10, ds_a_ptr);
     vm.set_register(11, manifest_a_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(
+            ds_a_bytes.len().saturating_add(manifest_a_bytes.len())
+        ))
+    );
 
     // Touch ds_b
-    let ds_b_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_b).expect("encode ds"),
-    );
-    let manifest_b_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_b).expect("encode manifest"),
-    );
+    let ds_b_bytes = norito::to_bytes(&ds_b).expect("encode ds");
+    let ds_b_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_b_bytes);
+    let manifest_b_bytes = norito::to_bytes(&manifest_b).expect("encode manifest");
+    let manifest_b_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_b_bytes);
     vm.set_register(10, ds_b_ptr);
     vm.set_register(11, manifest_b_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(
+            ds_b_bytes.len().saturating_add(manifest_b_bytes.len())
+        ))
+    );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = build_handle(
@@ -916,16 +1072,7 @@ fn commit_requires_proof_for_every_dataspace() {
         None,
     );
     handle_b.sub_nonce = handle_a.sub_nonce + 1;
-    let proof_a = axt::ProofBlob {
-        payload: vec![8],
-        expiry_slot: None,
-    };
-    let proof_b = axt::ProofBlob {
-        payload: vec![9],
-        expiry_slot: None,
-    };
-
-    // Attach proofs only via handles
+    // Record handle usage without proofs; commit must fail closed.
     let intent_a = RemoteSpendIntent {
         asset_dsid: ds_a,
         op: SpendOp {
@@ -936,8 +1083,8 @@ fn commit_requires_proof_for_every_dataspace() {
         },
     };
     assert_eq!(
-        use_handle(&mut vm, &mut host, &handle_a, &intent_a, Some(&proof_a)),
-        Ok(0)
+        use_handle(&mut vm, &mut host, &handle_a, &intent_a, None),
+        Ok(use_handle_gas(&handle_a, &intent_a, None))
     );
     let intent_b = RemoteSpendIntent {
         asset_dsid: ds_b,
@@ -949,68 +1096,48 @@ fn commit_requires_proof_for_every_dataspace() {
         },
     };
     assert_eq!(
-        use_handle(&mut vm, &mut host, &handle_b, &intent_b, Some(&proof_b)),
-        Ok(0)
+        use_handle(&mut vm, &mut host, &handle_b, &intent_b, None),
+        Ok(use_handle_gas(&handle_b, &intent_b, None))
     );
 
-    // Missing proof for ds_b would be rejected; we provided both so commit should pass.
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm), Ok(0));
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
 
     // Now show failure if a dataspace proof is absent
     let mut vm_fail = IVM::new(1_000_000);
     let mut host_fail = DefaultHost::new();
-    let desc_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_ptr_fail = store_tlv(&mut vm_fail, PointerType::AxtDescriptor, &desc_bytes);
     vm_fail.set_register(10, desc_ptr_fail);
     assert_eq!(
         host_fail.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm_fail),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
-    let ds_a_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_a).expect("encode ds"),
-    );
-    let manifest_a_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_a).expect("encode manifest"),
-    );
+    let ds_a_ptr_fail = store_tlv(&mut vm_fail, PointerType::DataSpaceId, &ds_a_bytes);
+    let manifest_a_ptr_fail = store_tlv(&mut vm_fail, PointerType::NoritoBytes, &manifest_a_bytes);
     vm_fail.set_register(10, ds_a_ptr_fail);
     vm_fail.set_register(11, manifest_a_ptr_fail);
     assert_eq!(
         host_fail.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail),
-        Ok(0)
+        Ok(axt_gas(
+            ds_a_bytes.len().saturating_add(manifest_a_bytes.len())
+        ))
     );
-    let ds_b_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_b).expect("encode ds"),
-    );
-    let manifest_b_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_b).expect("encode manifest"),
-    );
+    let ds_b_ptr_fail = store_tlv(&mut vm_fail, PointerType::DataSpaceId, &ds_b_bytes);
+    let manifest_b_ptr_fail = store_tlv(&mut vm_fail, PointerType::NoritoBytes, &manifest_b_bytes);
     vm_fail.set_register(10, ds_b_ptr_fail);
     vm_fail.set_register(11, manifest_b_ptr_fail);
     assert_eq!(
         host_fail.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail),
-        Ok(0)
+        Ok(axt_gas(
+            ds_b_bytes.len().saturating_add(manifest_b_bytes.len())
+        ))
     );
 
     assert_eq!(
-        use_handle(
-            &mut vm_fail,
-            &mut host_fail,
-            &handle_a,
-            &intent_a,
-            Some(&proof_a)
-        ),
-        Ok(0)
+        use_handle(&mut vm_fail, &mut host_fail, &handle_a, &intent_a, None),
+        Ok(use_handle_gas(&handle_a, &intent_a, None))
     );
     assert!(matches!(
         host_fail.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm_fail),
@@ -1141,13 +1268,13 @@ fn axt_policy_rejects_touch() {
             write: vec![],
         }],
     };
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let ds_ptr = store_tlv(
         &mut vm,
@@ -1206,10 +1333,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, manifest_root, b"policy-root-expiry", None);
     assert!(matches!(
         use_handle(&mut vm, &mut host, &expired_handle, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
@@ -1240,14 +1364,14 @@ fn wsv_host_policy_checks_root_and_expiry() {
     );
     ok_handle.expiry_slot = 60;
     ok_handle.manifest_view_root = manifest_root.to_vec();
-    assert_eq!(
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &ok_handle, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
-fn wsv_host_uses_slot_length_and_skew_for_expiry() {
+fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(140);
@@ -1303,14 +1427,11 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
-    assert_eq!(
+    let proof = proof_blob_for(dsid, manifest_root, b"slot-skew", None);
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -1370,10 +1491,7 @@ fn wsv_host_rejects_handle_skew_above_config() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, manifest_root, b"skew-above-config", None);
     assert!(matches!(
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
@@ -1381,7 +1499,7 @@ fn wsv_host_rejects_handle_skew_above_config() {
 }
 
 #[test]
-fn wsv_host_accepts_proof_within_skew() {
+fn wsv_host_rejects_preflighted_proof_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(142);
@@ -1416,10 +1534,14 @@ fn wsv_host_accepts_proof_within_skew() {
     };
     let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
 
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: Some(1),
-    };
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, 0);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Ok(AXT_VERIFY_EMPTY_GAS)
+    );
+
+    let proof = proof_blob_for(dsid, manifest_root, b"proof-within-skew", Some(1));
     let proof_ptr = store_tlv(
         &mut vm,
         PointerType::ProofBlob,
@@ -1427,10 +1549,10 @@ fn wsv_host_accepts_proof_within_skew() {
     );
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -1489,10 +1611,7 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: Some(3),
-    };
+    let proof = proof_blob_for(dsid, manifest_root, b"inline-proof-expired", Some(3));
     assert!(matches!(
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
@@ -1637,10 +1756,7 @@ fn wsv_host_policy_checks_target_lane() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, manifest_root, b"lane-policy", None);
     assert!(matches!(
         use_handle(&mut vm, &mut host, &wrong_lane, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
@@ -1655,10 +1771,10 @@ fn wsv_host_policy_checks_target_lane() {
         None,
     );
     ok_lane.target_lane = LaneId::new(7);
-    assert_eq!(
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -1709,10 +1825,7 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, manifest_root, b"lane-policy-snapshot", None);
 
     let mut wrong_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     wrong_lane.target_lane = LaneId::new(1);
@@ -1725,10 +1838,10 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
     let mut ok_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     ok_lane.target_lane = LaneId::new(4);
     ok_lane.manifest_view_root = manifest_root.to_vec();
-    assert_eq!(
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -1785,14 +1898,11 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
-    assert_eq!(
+    let proof = proof_blob_for(dsid, manifest_root, b"policy-current-slot", None);
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -1831,10 +1941,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
             amount: "1".into(),
         },
     };
-    let proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, manifest_root, b"era-nonce-policy", None);
 
     let mut low_era = build_handle(
         dsid,
@@ -1874,10 +1981,10 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     );
     ok.handle_era = 3;
     ok.sub_nonce = 5;
-    assert_eq!(
+    assert!(matches!(
         use_handle(&mut vm, &mut host, &ok, &intent, Some(&proof)),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]
@@ -1963,13 +2070,13 @@ fn wsv_host_applies_axt_policy() {
             write: Vec::new(),
         }],
     };
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let ds_ptr = store_tlv(
         &mut vm,

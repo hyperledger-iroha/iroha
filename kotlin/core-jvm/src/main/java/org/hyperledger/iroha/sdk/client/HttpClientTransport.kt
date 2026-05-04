@@ -63,6 +63,38 @@ class HttpClientTransport(
         return flushPendingQueue().exceptionally { null }.thenCompose { submitWithRetryInternal(transaction, hashHex, 1, true) }
     }
 
+    override fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
+        val request = ToriiRequestBuilder.buildSubmitEntrypointRequest(
+            config.baseUri(),
+            encodedVersionedEntrypoint,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+        )
+        notifyRequest(request)
+        return executor.execute(request).handle { response, throwable ->
+            if (throwable != null) {
+                val cause = if (throwable is CompletionException) throwable.cause else throwable
+                notifyFailure(request, cause!!)
+                val failed = CompletableFuture<ClientResponse>()
+                failed.completeExceptionally(cause)
+                return@handle failed
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                extractTransactionHash(response),
+                extractRejectCode(response),
+            )
+            if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
+                notifyFailure(request, RuntimeException("Torii request failed with status ${clientResponse.statusCode}"))
+            } else {
+                notifyResponse(request, clientResponse)
+            }
+            CompletableFuture.completedFuture(clientResponse)
+        }.thenCompose { it }
+    }
+
     override fun waitForTransactionStatus(hashHex: String, options: PipelineStatusOptions?): CompletableFuture<Map<String, Any>> {
         val resolved = PipelineStatusOptions.resolve(options)
         val deadline = if (resolved.timeoutMillis == null) Long.MAX_VALUE else System.currentTimeMillis() + maxOf(0L, resolved.timeoutMillis!!)
@@ -148,6 +180,45 @@ class HttpClientTransport(
     }
 
     fun verifyRamLfeReceipt(receipt: Map<String, Any>, outputHex: String?): CompletableFuture<RamLfeReceiptVerifyResponse> = verifyRamLfeReceipt(RamLfeReceiptVerifyRequest(receipt, outputHex))
+
+    fun getVpnProfile(): CompletableFuture<VpnProfile> =
+        fetchJson(buildJsonGetRequest("/v1/vpn/profile", emptyMap()), VpnJsonParser::parseProfile, "vpn profile")
+
+    fun createVpnQuote(requestBody: VpnQuoteCreateRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnQuote> {
+        val body = encodeJsonBody(buildVpnQuoteCreatePayload(requestBody.exitClass, requestBody.meteringPublicKeyHex))
+        return fetchJson(buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth), VpnJsonParser::parseQuote, "vpn quote create")
+    }
+
+    fun createVpnSession(requestBody: VpnSessionCreateRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnSession> {
+        val body = encodeJsonBody(buildVpnSessionCreatePayload(requestBody.exitClass, requestBody.quoteId, requestBody.paymentTxHash, requestBody.meteringPublicKeyHex))
+        return fetchJson(buildVpnRequest("POST", "/v1/vpn/sessions", body, canonicalAuth), VpnJsonParser::parseSession, "vpn session create")
+    }
+
+    fun getVpnSession(sessionId: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<Optional<VpnSession>> {
+        val normalizedSessionId = normalizeHex32(sessionId, "sessionId")
+        return fetchJsonAllowingNotFound(
+            buildVpnRequest("GET", "/v1/vpn/sessions/${encodePathSegment(normalizedSessionId)}", null, canonicalAuth),
+            VpnJsonParser::parseSession,
+            "vpn session lookup",
+        )
+    }
+
+    fun deleteVpnSession(sessionId: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<Optional<VpnReceipt>> {
+        val normalizedSessionId = normalizeHex32(sessionId, "sessionId")
+        return fetchJsonAllowingNotFound(
+            buildVpnRequest("DELETE", "/v1/vpn/sessions/${encodePathSegment(normalizedSessionId)}", null, canonicalAuth),
+            VpnJsonParser::parseReceipt,
+            "vpn session delete",
+        )
+    }
+
+    fun submitVpnReceipt(requestBody: VpnReceiptSubmitRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceipt> {
+        val body = encodeJsonBody(buildVpnReceiptSubmitPayload(requestBody.relayReceiptHex, requestBody.clientVoucherHex, requestBody.leaseIdHex))
+        return fetchJson(buildVpnRequest("POST", "/v1/vpn/receipts", body, canonicalAuth), VpnJsonParser::parseReceipt, "vpn receipt submit")
+    }
+
+    fun listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceiptListResponse> =
+        fetchJson(buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth), VpnJsonParser::parseReceiptList, "vpn receipt list")
 
     fun deployContract(
         authority: String,
@@ -392,6 +463,29 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    private fun buildVpnRequest(method: String, path: String, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): TransportRequest {
+        val target = resolvePath(path)
+        val builder = TransportRequest.builder().setUri(target).setMethod(method).addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
+        if (body != null) {
+            builder.setBody(body).addHeader("Content-Type", "application/json")
+        }
+        for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
+        val canonicalHeaders = buildCanonicalHeaders(method, target, body, canonicalAuth)
+        for ((k, v) in canonicalHeaders) builder.addHeader(k, v)
+        return builder.build()
+    }
+
+    private fun buildCanonicalHeaders(method: String, target: URI, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): Map<String, String> {
+        val timestampMs = canonicalAuth.timestampMs
+        val nonce = canonicalAuth.nonce
+        require((timestampMs == null) == (nonce == null)) { "timestampMs and nonce must be provided together" }
+        return if (timestampMs == null) {
+            CanonicalRequestSigner.buildHeaders(method, target, body, canonicalAuth.accountId, canonicalAuth.privateKey)
+        } else {
+            CanonicalRequestSigner.buildHeaders(method, target, body, canonicalAuth.accountId, canonicalAuth.privateKey, timestampMs, nonce!!)
+        }
+    }
+
     private fun resolvePath(path: String?): URI {
         if (path.isNullOrBlank()) return config.baseUri()
         if (path.startsWith("http://") || path.startsWith("https://")) return URI.create(path)
@@ -539,6 +633,35 @@ class HttpClientTransport(
         @JvmStatic internal fun buildRamLfeReceiptVerifyPayload(receipt: Map<String, Any>, outputHex: String?): Map<String, Any> {
             val payload = LinkedHashMap<String, Any>(); payload["receipt"] = LinkedHashMap(receipt)
             if (outputHex != null) payload["output_hex"] = normalizeEvenLengthHex(outputHex, "outputHex")
+            return payload
+        }
+
+        @JvmStatic internal fun buildVpnQuoteCreatePayload(exitClass: String?, meteringPublicKeyHex: String): Map<String, Any> {
+            val payload = LinkedHashMap<String, Any>()
+            payload["exit_class"] = normalizeOptionalNonBlank(exitClass, "exitClass") ?: ""
+            payload["metering_public_key_hex"] = normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex")
+            return payload
+        }
+
+        @JvmStatic internal fun buildVpnSessionCreatePayload(
+            exitClass: String?,
+            quoteId: String,
+            paymentTxHash: String,
+            meteringPublicKeyHex: String,
+        ): Map<String, Any> {
+            val payload = LinkedHashMap<String, Any>()
+            payload["exit_class"] = normalizeOptionalNonBlank(exitClass, "exitClass") ?: ""
+            payload["quote_id"] = normalizeHex32(quoteId, "quoteId")
+            payload["payment_tx_hash"] = normalizeHex32(paymentTxHash, "paymentTxHash")
+            payload["metering_public_key_hex"] = normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex")
+            return payload
+        }
+
+        @JvmStatic internal fun buildVpnReceiptSubmitPayload(relayReceiptHex: String, clientVoucherHex: String, leaseIdHex: String?): Map<String, Any> {
+            val payload = LinkedHashMap<String, Any>()
+            payload["relay_receipt_hex"] = normalizeEvenLengthHex(relayReceiptHex, "relayReceiptHex")
+            payload["client_voucher_hex"] = normalizeEvenLengthHex(clientVoucherHex, "clientVoucherHex")
+            if (leaseIdHex != null) payload["lease_id_hex"] = normalizeHex32(leaseIdHex, "leaseIdHex")
             return payload
         }
 

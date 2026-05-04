@@ -142,6 +142,45 @@ pub(super) fn spawn_validation_workers(
 impl Actor {
     const SUPERSEDED_VALIDATION_RESULT_CAP: usize = 4_096;
 
+    pub(in crate::sumeragi::main_loop) fn maybe_corrupt_debug_witness_roots(
+        &self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        roots: StateRoots,
+    ) -> StateRoots {
+        if !self.config.debug.rbc.corrupt_witness_ack {
+            return roots;
+        }
+
+        let mut salt_input = Vec::new();
+        salt_input.extend_from_slice(b"sumeragi/debug/corrupt-witness-ack/v1");
+        salt_input.extend_from_slice(hash.as_ref().as_ref());
+        salt_input.extend_from_slice(&height.to_be_bytes());
+        salt_input.extend_from_slice(&view.to_be_bytes());
+        salt_input.extend_from_slice(self.common_config.peer.id().to_string().as_bytes());
+        let salt = Hash::new(&salt_input);
+
+        let mut post_state_root = *roots.post_state_root.as_ref();
+        for (byte, salt_byte) in post_state_root.iter_mut().zip(salt.as_ref()) {
+            *byte ^= *salt_byte;
+        }
+        if post_state_root == *roots.post_state_root.as_ref() {
+            post_state_root[0] ^= 1;
+        }
+
+        warn!(
+            height,
+            view,
+            block = %hash,
+            "debug RBC witness corruption changed local execution root"
+        );
+        StateRoots {
+            parent_state_root: roots.parent_state_root,
+            post_state_root: Hash::prehashed(post_state_root),
+        }
+    }
+
     fn replay_cached_precommit_qc_for_valid_block(
         &mut self,
         hash: HashOf<BlockHeader>,
@@ -625,6 +664,12 @@ impl Actor {
         match result {
             Ok(roots) => {
                 if let Some(roots) = roots {
+                    let roots = self.maybe_corrupt_debug_witness_roots(
+                        hash,
+                        pending.height,
+                        pending.view,
+                        roots,
+                    );
                     pending.parent_state_root = Some(roots.parent_state_root);
                     pending.post_state_root = Some(roots.post_state_root);
                     pending.note_validated_commit_artifact(
@@ -884,6 +929,8 @@ impl Actor {
                     match outcome {
                         Ok(roots) => {
                             if let Some(roots) = roots {
+                                let roots = self
+                                    .maybe_corrupt_debug_witness_roots(hash, height, view, roots);
                                 pending.parent_state_root = Some(roots.parent_state_root);
                                 pending.post_state_root = Some(roots.post_state_root);
                                 pending.note_validated_commit_artifact(

@@ -54,8 +54,8 @@ pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSp
 
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3 + 1);
-    let domain = consensus_domain(chain_id, "Vote", b"v1", mode_tag);
+    let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
+    let domain = consensus_domain(chain_id, "Vote", b"v2", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(v.block_hash.as_ref().as_ref());
     out.extend_from_slice(v.parent_state_root.as_ref());
@@ -64,6 +64,39 @@ pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     out.extend_from_slice(&v.view.to_be_bytes());
     out.extend_from_slice(&v.epoch.to_be_bytes());
     out.push(v.phase as u8);
+    match v.highest_qc {
+        Some(highest_qc) => {
+            out.push(1);
+            out.extend_from_slice(&highest_qc.height.to_be_bytes());
+            out.extend_from_slice(&highest_qc.view.to_be_bytes());
+            out.extend_from_slice(&highest_qc.epoch.to_be_bytes());
+            out.extend_from_slice(highest_qc.subject_block_hash.as_ref().as_ref());
+            out.push(highest_qc.phase as u8);
+        }
+        None => out.push(0),
+    }
+    out
+}
+
+/// Build the canonical preimage for a VRF commit signature under the given chain and mode tag.
+pub fn vrf_commit_preimage(chain_id: &ChainId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
+    let domain = consensus_domain(chain_id, "VrfCommit", b"v1", mode_tag);
+    out.extend_from_slice(&domain);
+    out.extend_from_slice(&c.epoch.to_be_bytes());
+    out.extend_from_slice(&c.signer.to_be_bytes());
+    out.extend_from_slice(&c.commitment);
+    out
+}
+
+/// Build the canonical preimage for a VRF reveal signature under the given chain and mode tag.
+pub fn vrf_reveal_preimage(chain_id: &ChainId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
+    let domain = consensus_domain(chain_id, "VrfReveal", b"v1", mode_tag);
+    out.extend_from_slice(&domain);
+    out.extend_from_slice(&r.epoch.to_be_bytes());
+    out.extend_from_slice(&r.signer.to_be_bytes());
+    out.extend_from_slice(&r.reveal);
     out
 }
 
@@ -77,7 +110,15 @@ pub mod bls_preimage {
         super::vote_preimage(chain_id, mode_tag, v)
     }
 
-    // QC vote preimages reuse `vote_preimage`.
+    /// Build the canonical preimage for a VRF commit signature.
+    pub fn vrf_commit(chain_id: &ChainId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
+        super::vrf_commit_preimage(chain_id, mode_tag, c)
+    }
+
+    /// Build the canonical preimage for a VRF reveal signature.
+    pub fn vrf_reveal(chain_id: &ChainId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
+        super::vrf_reveal_preimage(chain_id, mode_tag, r)
+    }
 }
 
 /// Domain separation helper for signable payloads.
@@ -570,6 +611,29 @@ mod tests {
         assert_ne!(
             &vote_preimage[..32],
             &consensus_domain(&chain, "Vote", b"v2", PERMISSIONED_TAG)
+        );
+
+        let vrf_commit = VrfCommit {
+            epoch: 0,
+            commitment: [0xA1; 32],
+            signer: 3,
+            bls_sig: Vec::new(),
+        };
+        let vrf_commit_preimage = vrf_commit_preimage(&chain, PERMISSIONED_TAG, &vrf_commit);
+        assert_eq!(
+            &vrf_commit_preimage[..32],
+            &consensus_domain(&chain, "VrfCommit", b"v1", PERMISSIONED_TAG)
+        );
+        let vrf_reveal = VrfReveal {
+            epoch: 0,
+            reveal: [0xB2; 32],
+            signer: 3,
+            bls_sig: Vec::new(),
+        };
+        let vrf_reveal_preimage = vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &vrf_reveal);
+        assert_eq!(
+            &vrf_reveal_preimage[..32],
+            &consensus_domain(&chain, "VrfReveal", b"v1", PERMISSIONED_TAG)
         );
 
         let ready = RbcReady {

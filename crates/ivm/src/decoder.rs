@@ -33,7 +33,11 @@ pub fn decode_wide(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
             perm: Perm::EXECUTE,
         });
     }
-    if pc + 4 > memory.code_len() {
+    let fetch_end = pc.checked_add(4).ok_or(VMError::MemoryAccessViolation {
+        addr: pc as u32,
+        perm: Perm::EXECUTE,
+    })?;
+    if fetch_end > memory.code_len() {
         return Err(VMError::MemoryAccessViolation {
             addr: pc as u32,
             perm: Perm::EXECUTE,

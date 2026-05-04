@@ -63,6 +63,8 @@ fn bench_decode(c: &mut Criterion) {
 
     let vec_registry = VecRegistry::new().register::<Log>();
     let hash_registry = InstructionRegistry::new().register::<Log>();
+    let boxed = InstructionBox::from(instruction);
+    let boxed_payload = norito::codec::encode_adaptive(&boxed);
 
     c.bench_function("decode_vec", |b| {
         b.iter(|| {
@@ -73,6 +75,22 @@ fn bench_decode(c: &mut Criterion) {
     c.bench_function("decode_hashmap", |b| {
         b.iter(|| {
             hash_registry.decode(name, &framed_bytes).unwrap().unwrap();
+        })
+    });
+
+    c.bench_function("decode_instruction_box_pair_owned", |b| {
+        b.iter(|| {
+            let (wire_id, bytes): (String, Vec<u8>) =
+                norito::codec::decode_exact_from_slice(&boxed_payload)
+                    .expect("decode owned instruction pair");
+            hash_registry.decode(&wire_id, &bytes).unwrap().unwrap();
+        })
+    });
+
+    c.bench_function("decode_instruction_box", |b| {
+        b.iter(|| {
+            norito::codec::decode_exact_from_slice::<InstructionBox>(&boxed_payload)
+                .expect("decode instruction box");
         })
     });
 }

@@ -48,7 +48,7 @@ Endpoints
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
   - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
-  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractCode`, `RegisterSmartContractBytes`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractBytes`, `RegisterSmartContractCode`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
   - Redeploying the same `contract_alias` is the public upgrade path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `upgraded = true`.
   - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
   - Related:

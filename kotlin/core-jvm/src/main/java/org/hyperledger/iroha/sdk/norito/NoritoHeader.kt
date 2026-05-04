@@ -22,10 +22,13 @@ class NoritoHeader(
 
     init {
         require(schemaHash.size == 16) { "schemaHash must be 16 bytes" }
+        require(payloadLength >= 0) { "payloadLength must be non-negative" }
         val normalizedMinor = minor and 0xFF
         require(normalizedMinor == MINOR_VERSION) {
             "Unsupported Norito minor version: 0x${"%02x".format(normalizedMinor)}"
         }
+        validateCompression(compression)
+        validateFlags(flags)
         _schemaHash = schemaHash.copyOf()
         this.minor = normalizedMinor
     }
@@ -33,6 +36,8 @@ class NoritoHeader(
     val schemaHash: ByteArray get() = _schemaHash.copyOf()
 
     fun encode(): ByteArray {
+        validateCompression(compression)
+        validateFlags(flags)
         val buffer = ByteBuffer.allocate(HEADER_LENGTH).order(ByteOrder.LITTLE_ENDIAN)
         buffer.put(MAGIC)
         buffer.put(MAJOR_VERSION.toByte())
@@ -89,7 +94,7 @@ class NoritoHeader(
         const val FIELD_BITSET = 0x20
 
         private const val SUPPORTED_FLAGS_MASK =
-            PACKED_SEQ or COMPACT_LEN or PACKED_STRUCT or VARINT_OFFSETS or COMPACT_SEQ_LEN or FIELD_BITSET
+            PACKED_SEQ or COMPACT_LEN or PACKED_STRUCT or FIELD_BITSET
 
         /** Minor version is fixed for v1; layout flags are declared in the header flag byte. */
         const val MINOR_VERSION = 0
@@ -99,6 +104,27 @@ class NoritoHeader(
 
         const val HEADER_LENGTH = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
         const val MAX_HEADER_PADDING = 64
+
+        @JvmStatic
+        fun validateFlags(flags: Int) {
+            val normalizedFlags = flags and 0xFF
+            val unsupportedFlags = normalizedFlags and SUPPORTED_FLAGS_MASK.inv()
+            require(unsupportedFlags == 0) {
+                "Unsupported Norito layout flags: 0x${"%02x".format(unsupportedFlags)}"
+            }
+            if ((normalizedFlags and FIELD_BITSET) != 0) {
+                val required = PACKED_STRUCT or COMPACT_LEN
+                require((normalizedFlags and required) == required) {
+                    "Unsupported Norito layout flag combination: 0x${"%02x".format(normalizedFlags)}"
+                }
+            }
+        }
+
+        private fun validateCompression(compression: Int) {
+            require(compression == COMPRESSION_NONE || compression == COMPRESSION_ZSTD) {
+                "Unsupported compression byte: $compression"
+            }
+        }
 
         @JvmStatic
         fun decode(data: ByteArray, expectedHash: ByteArray?): DecodeResult {
@@ -130,20 +156,17 @@ class NoritoHeader(
             }
 
             val compression = buffer.get().toInt() and 0xFF
-            check(compression == COMPRESSION_NONE || compression == COMPRESSION_ZSTD) {
-                "Unsupported compression byte: $compression"
-            }
+            validateCompression(compression)
 
             val payloadLength = buffer.getLong()
-            require(payloadLength <= Int.MAX_VALUE) { "Payload too large for Java implementation" }
+            require(payloadLength >= 0 && payloadLength <= Int.MAX_VALUE) {
+                "Payload too large for Java implementation"
+            }
 
             val checksum = buffer.getLong()
 
             val flags = buffer.get().toInt() and 0xFF
-            val unsupportedFlags = flags and SUPPORTED_FLAGS_MASK.inv()
-            require(unsupportedFlags == 0) {
-                "Unsupported Norito layout flags: 0x${"%02x".format(unsupportedFlags)}"
-            }
+            validateFlags(flags)
 
             val intPayloadLength = payloadLength.toInt()
             var payloadOffset = HEADER_LENGTH

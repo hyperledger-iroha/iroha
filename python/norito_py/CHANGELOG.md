@@ -79,7 +79,7 @@
 - Implements header parsing/serialization, CRC64 verification, and optional Zstandard compression
 - Supports primitive values (signed/unsigned integers, floats, bool), strings, bytes, options, results, sequences, maps, and packed structs
 - Includes CLI inspector (`norito-dump`), unittest coverage, and a publishing guide
-- Adds structural schema hashing (type-name and structural descriptors) matching Rust FNV-1a output
+- Adds structural schema hashing (type-name and structural descriptors) matching Rust SHA-256 output
 - Implements columnar helpers and adaptive AoS layouts for `(u64, str, bool)` rows
 - Columnar helpers currently target only the `(u64, str, bool)` telemetry shape with adaptive
   AoS layouts; extending coverage to additional row patterns and compression heuristics remains on

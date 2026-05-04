@@ -304,8 +304,6 @@ fn roster_member_has_live_consensus_key(
         if found_index_record {
             return false;
         }
-    } else {
-        return true;
     }
     let mut found_scan_record = false;
     let live = world.consensus_keys().iter().any(|(id, record)| {
@@ -316,7 +314,7 @@ fn roster_member_has_live_consensus_key(
             && record.public_key == *pk
             && record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks)
     });
-    live || !found_scan_record
+    live && found_scan_record
 }
 
 pub(super) fn filter_roster_with_live_consensus_keys_at_height_world(
@@ -324,9 +322,6 @@ pub(super) fn filter_roster_with_live_consensus_keys_at_height_world(
     roster: Vec<PeerId>,
     height: u64,
 ) -> Vec<PeerId> {
-    if world.consensus_keys().is_empty() {
-        return roster;
-    }
     let params = world.parameters();
     let sumeragi = params.sumeragi();
     let overlap_grace_blocks = sumeragi.key_overlap_grace_blocks;
@@ -662,6 +657,38 @@ mod tests {
         Peer::new(format!("127.0.0.1:{port}").parse().expect("addr"), peer_id)
     }
 
+    fn seed_live_validator_consensus_keys<I, K>(world: &World, keypairs: I)
+    where
+        I: IntoIterator<Item = K>,
+        K: std::borrow::Borrow<KeyPair>,
+    {
+        let mut block = world.block();
+        for kp in keypairs {
+            let kp = kp.borrow();
+            let id = crate::state::derive_validator_key_id(kp.public_key());
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: kp.public_key().clone(),
+                pop: None,
+                activation_height: 1,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            block.consensus_keys.insert(id.clone(), record);
+            let pk_label = kp.public_key().to_string();
+            let mut by_pk = block
+                .consensus_keys_by_pk
+                .get(&pk_label)
+                .cloned()
+                .unwrap_or_default();
+            by_pk.push(id);
+            block.consensus_keys_by_pk.insert(pk_label, by_pk);
+        }
+        block.commit();
+    }
+
     #[test]
     fn canonicalize_roster_sorts_and_dedups() {
         let first = PeerId::new(
@@ -780,6 +807,7 @@ mod tests {
                     epoch: 0,
                     commitment: [7u8; 32],
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             crate::sumeragi::epoch::VrfNoteResult::Accepted
@@ -791,6 +819,7 @@ mod tests {
                     epoch: 0,
                     commitment: [9u8; 32],
                     signer: 4,
+                    bls_sig: Vec::new(),
                 },
             ),
             crate::sumeragi::epoch::VrfNoteResult::RejectedUnknownSigner
@@ -837,6 +866,7 @@ mod tests {
             }
             block.commit();
         }
+        seed_live_validator_consensus_keys(&world, keypairs.iter());
 
         let mut pops = BTreeMap::new();
         for kp in keypairs.iter().take(3) {
@@ -870,14 +900,12 @@ mod tests {
 
     #[test]
     fn active_topology_sorts_world_peers_when_commit_topology_empty() {
-        let mut peers: Vec<PeerId> = (0..4)
-            .map(|_| {
-                PeerId::new(
-                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                        .public_key()
-                        .clone(),
-                )
-            })
+        let keypairs: Vec<KeyPair> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let mut peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
         peers.sort();
 
@@ -893,7 +921,7 @@ mod tests {
             }
             block.commit();
         }
-
+        seed_live_validator_consensus_keys(&world, keypairs.iter());
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
         let trusted = iroha_config::parameters::actual::TrustedPeers {
@@ -988,6 +1016,33 @@ mod tests {
     }
 
     #[test]
+    fn active_topology_filters_missing_consensus_keys() {
+        let keypairs: Vec<KeyPair> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+        seed_live_validator_consensus_keys(&world, [&keypairs[0]]);
+
+        let filtered =
+            filter_roster_with_live_consensus_keys_at_height_world(&world.view(), peers.clone(), 1);
+
+        assert_eq!(filtered, vec![peers[0].clone()]);
+    }
+
+    #[test]
     fn active_topology_for_mode_from_world_matches_view_path() {
         let keypairs: Vec<KeyPair> = (0..3)
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
@@ -1006,6 +1061,7 @@ mod tests {
             }
             block.commit();
         }
+        seed_live_validator_consensus_keys(&world, keypairs.iter());
 
         let kura = Kura::blank_kura_for_testing();
         let mut state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
@@ -1090,6 +1146,7 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: Peer::new(
@@ -1138,6 +1195,7 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: make_peer(peer_active.clone(), 12_000),
@@ -1224,6 +1282,10 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(
+            &state.world,
+            [&lane3_peer, &lane4_local, &lane4_peer_b],
+        );
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: make_peer(lane4_local_peer.clone(), 12_100),
@@ -1318,6 +1380,10 @@ mod tests {
             }
             block.commit();
         }
+        seed_live_validator_consensus_keys(
+            &state.world,
+            [&lane3_peer_a, &lane3_peer_b, &lane4_local, &lane4_peer],
+        );
         {
             let mut block = state.commit_topology.block();
             let mut tx = block.transaction();
@@ -1394,6 +1460,7 @@ mod tests {
             }
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, keypairs.iter());
 
         let mut pops = BTreeMap::new();
         for kp in keypairs.iter().take(2) {
@@ -1473,6 +1540,7 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
         {
             let mut block = state.commit_topology.block();
             let mut tx = block.transaction();
@@ -1537,6 +1605,7 @@ mod tests {
             }
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_a, &keypair_b, &keypair_c]);
         {
             let mut block = state.commit_topology.block();
             let mut tx = block.transaction();
@@ -1612,6 +1681,7 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active_a, &keypair_active_b]);
         {
             let mut block = state.commit_topology.block();
             let mut tx = block.transaction();
@@ -1667,6 +1737,7 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: Peer::new(
@@ -1717,6 +1788,7 @@ mod tests {
             );
             block.commit();
         }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: Peer::new(
@@ -1748,14 +1820,12 @@ mod tests {
 
     #[test]
     fn active_topology_from_views_matches_state_view() {
-        let peers: Vec<PeerId> = (0..3)
-            .map(|_| {
-                PeerId::new(
-                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                        .public_key()
-                        .clone(),
-                )
-            })
+        let keypairs: Vec<KeyPair> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
         let world = World::new();
         {
@@ -1766,6 +1836,7 @@ mod tests {
             }
             block.commit();
         }
+        seed_live_validator_consensus_keys(&world, keypairs.iter());
 
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());

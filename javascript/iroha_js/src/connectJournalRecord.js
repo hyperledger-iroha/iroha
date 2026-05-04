@@ -1,3 +1,4 @@
+import { sha256 } from "@noble/hashes/sha2";
 import { blake2b256 } from "./blake2b.js";
 import { crc64 } from "./crc64.js";
 
@@ -34,18 +35,13 @@ export class ConnectJournalError extends Error {
 }
 
 function computeSchemaHash(typeName) {
-  const input = new TextEncoder().encode(typeName);
-  const offsetBasis = 0xcbf29ce484222325n;
-  const fnvPrime = 0x100000001b3n;
-  let hash = offsetBasis;
-  for (const byte of input) {
-    hash ^= BigInt(byte);
-    hash = (hash * fnvPrime) & 0xffffffffffffffffn;
-  }
-  const buffer = new Uint8Array(16);
-  writeUint64LE(buffer, 0, hash);
-  writeUint64LE(buffer, 8, hash);
-  return buffer;
+  const encoder = new TextEncoder();
+  const domain = encoder.encode("norito:v1:type-name\0");
+  const typeNameBytes = encoder.encode(typeName);
+  const input = new Uint8Array(domain.length + typeNameBytes.length);
+  input.set(domain, 0);
+  input.set(typeNameBytes, domain.length);
+  return sha256(input).subarray(0, 16);
 }
 
 function writeUint64LE(buffer, offset, value) {

@@ -50,7 +50,6 @@ object RamLfeJsonParser {
             requiredString(root["program_id"], "ram-lfe execute response.program_id"),
             requiredString(root["opaque_hash"], "ram-lfe execute response.opaque_hash"),
             requiredString(root["receipt_hash"], "ram-lfe execute response.receipt_hash"),
-            canonicalizeHex(requiredString(root["output_hex"], "ram-lfe execute response.output_hex"), "ram-lfe execute response.output_hex"),
             requiredString(root["output_hash"], "ram-lfe execute response.output_hash"),
             requiredString(root["associated_data_hash"], "ram-lfe execute response.associated_data_hash"),
             asLong(root["executed_at_ms"], "ram-lfe execute response.executed_at_ms"),

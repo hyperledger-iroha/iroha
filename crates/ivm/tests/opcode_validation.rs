@@ -1,10 +1,10 @@
-//! Opcode validation checks for reserved instruction slots.
+//! Opcode validation checks for instruction slots.
 
 use ivm::instruction;
 
 #[test]
-fn reserved_opcodes_are_invalid() {
-    assert!(!instruction::wide::is_valid_opcode(
+fn syscallx_opcode_is_valid_but_reserved_iso_slot_is_invalid() {
+    assert!(instruction::wide::is_valid_opcode(
         instruction::wide::system::SYSTEM
     ));
     assert!(!instruction::wide::is_valid_opcode(

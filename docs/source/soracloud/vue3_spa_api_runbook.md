@@ -166,17 +166,19 @@ plan to publish:
 
 ```bash
 cargo xtask soracloud-inrou-smoke portable
-sudo cargo xtask soracloud-inrou-smoke firecracker
+sudo --preserve-env=IROHA_INROU_LINUX_KVM_KERNEL_IMAGE,IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE,IROHA_INROU_LINUX_KVM_INITRD_IMAGE \
+  cargo xtask soracloud-inrou-smoke firecracker
 cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
 ```
 
 That validation path exercises the real `HttpService + Inrou` runtime, not the
 local `dev.sh` shim. `PortableVm` attaches shared lease storage as persistent
 block devices in unprivileged userspace, while the Linux/KVM fast path keeps
-the Firecracker NFS transport adapter. The mixed gate is expected to cover one
-Linux Firecracker host, one non-Linux PortableVm host, and one proxy-only
-validator that publishes zero hosted capacity while still proxying routed
-hosted-HTTP traffic correctly.
+the Firecracker NFS transport adapter and explicit tap-scoped deny rules for
+`Isolated` network policy. The mixed gate is expected to cover one Linux
+Firecracker host, one non-Linux PortableVm host, and one proxy-only validator
+that publishes zero hosted capacity while still proxying routed hosted-HTTP
+traffic correctly.
 
 The proxy-only host command in the example inventory runs the focused
 `proxy_only_inrou_host` runtime tests instead of a plain compile check, so the
@@ -202,10 +204,23 @@ Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
 `IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional
 `IROHA_INROU_PORTABLE_ACCEL=auto|tcg|kvm|hvf|whpx`. Firecracker smoke uses the
-corresponding `IROHA_INROU_LINUX_KVM_*` environment variables.
+corresponding `IROHA_INROU_LINUX_KVM_*` environment variables; the example
+mixed-host inventory preserves them through `sudo` for the root-only
+Firecracker smoke.
 For local PortableVm validation, prepare verified Debian genericcloud assets
 with `eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"`
-before running `cargo xtask soracloud-inrou-smoke portable`.
+before running `cargo xtask soracloud-inrou-smoke portable`. The helper now
+uses the pinned Debian Bookworm cloud build by default, verifies
+`SHA512SUMS.sign` with GPG and a Debian archive/cloud-image keyring when a
+detached signature is published, and emits the root image used as the backing
+file for the mutable `qcow2` PortableVm root overlay. The current official
+pinned cloud directory does not publish `SHA512SUMS.sign`, so the helper falls
+back only to the hard-pinned SHA512 digest for the exact `20260413-2447` `amd64`
+or `arm64` archive. Unsigned archives without a pinned digest still fail closed.
+
+Hosted HTTP responses forwarded over the Torii P2P proxy path are capped by
+`torii.soracloud_public_max_response_bytes` before buffering. The default is
+64 MiB; over-limit responses fail closed with `502 Bad Gateway`.
 
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,

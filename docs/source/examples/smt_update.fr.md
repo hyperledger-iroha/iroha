@@ -12,7 +12,7 @@ translator: machine-google-reviewed
 
 # Exemple de mise à jour Sparse Merkle
 
-Cet exemple concret illustre comment la trace FASTPQ Stage 2 code un
+Cet exemple concret illustre comment la trace FASTPQ V1 code un
 témoin de non-appartenance en utilisant la colonne `neighbour_leaf`. L'arbre Merkle clairsemé
 est binaire sur les éléments du champ Poséidon2. Les clés sont converties en canoniques
 Chaînes petit-boutiste de 32 octets, hachées en un élément de champ, et la plupart

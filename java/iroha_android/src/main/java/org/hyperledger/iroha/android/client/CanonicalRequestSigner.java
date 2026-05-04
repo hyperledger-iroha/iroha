@@ -10,7 +10,6 @@ import java.security.Signature;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -173,7 +172,7 @@ public final class CanonicalRequestSigner {
   private static String randomNonce() {
     final byte[] bytes = new byte[16];
     NONCE_RANDOM.nextBytes(bytes);
-    return HexFormat.of().formatHex(bytes);
+    return hex(bytes);
   }
 
   private static String urlEncode(final String value) {
@@ -193,9 +192,12 @@ public final class CanonicalRequestSigner {
   }
 
   private static String hex(final byte[] bytes) {
+    final char[] digits = "0123456789abcdef".toCharArray();
     final StringBuilder builder = new StringBuilder(bytes.length * 2);
     for (final byte b : bytes) {
-      builder.append(String.format("%02x", b));
+      final int value = b & 0xff;
+      builder.append(digits[value >>> 4]);
+      builder.append(digits[value & 0x0f]);
     }
     return builder.toString();
   }

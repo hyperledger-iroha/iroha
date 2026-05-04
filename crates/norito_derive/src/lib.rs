@@ -88,8 +88,6 @@ fn is_fixed_size(ty: &syn::Type) -> Option<usize> {
                 "NonZeroU16" => Some(2),
                 "NonZeroU32" => Some(4),
                 "NonZeroU64" => Some(8),
-                "ContractCodeHash" | "ContractAbiHash" | "ProposalId" => Some(36),
-                "Dir" | "Role" => Some(4),
                 _ => None,
             }
         }
@@ -126,20 +124,7 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
             //
             // Collections like Vec/Map/Set/Option/Result are self‑delimiting
             // because they embed their own lengths.
-            if matches!(id.as_str(), "String" | "Cow" | "ViewChangeProofPayload") {
-                return true;
-            }
-            // A few specific data-model types are known to be self‑delimiting
-            // at their field boundary.
-            if matches!(
-                id.as_str(),
-                "Name"
-                    | "Metadata"
-                    | "ProofAttachment"
-                    | "VerifyingKeyId"
-                    | "ConstString"
-                    | "PhantomData"
-            ) {
+            if matches!(id.as_str(), "String" | "Cow" | "PhantomData") {
                 return true;
             }
             if matches!(
@@ -163,39 +148,14 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
     }
 }
 
-// Treat cryptographic signature wrappers as staged-size (not self-delimiting), but
-// enable a precise `DecodeFromSlice` fast path during hybrid packed-struct decode.
 fn is_signature_like(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Path(tp) => tp
-            .path
-            .segments
-            .last()
-            .map(|s| {
-                let id = s.ident.to_string();
-                id == "Signature" || id == "SignatureOf" || id.ends_with("Signature")
-            })
-            .unwrap_or(false),
-        _ => false,
-    }
+    let _ = ty;
+    false
 }
 
-// Dynamic wrappers that should always be staged-size under packed-struct
-// (i.e., require an explicit size header in the hybrid layout).
 fn is_staged_wrapper(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Path(tp) => tp
-            .path
-            .segments
-            .last()
-            .map(|s| {
-                let id = s.ident.to_string();
-                // Known dynamic wrappers in this workspace
-                id == "ConstVec" || id == "ConstString"
-            })
-            .unwrap_or(false),
-        _ => false,
-    }
+    let _ = ty;
+    false
 }
 
 // Recognize `Option<..>` and `Result<..>` to enable slice-based enum decoding fast path
@@ -713,12 +673,6 @@ mod self_delimiting_tests {
         let ok_types: Vec<syn::Type> = vec![
             syn::parse_quote!(String),
             syn::parse_quote!(Cow<'static, str>),
-            syn::parse_quote!(ViewChangeProofPayload),
-            syn::parse_quote!(Name),
-            syn::parse_quote!(Metadata),
-            syn::parse_quote!(ProofAttachment),
-            syn::parse_quote!(VerifyingKeyId),
-            syn::parse_quote!(ConstString),
             syn::parse_quote!(PhantomData<u8>),
             syn::parse_quote!(Vec<u8>),
             syn::parse_quote!(VecDeque<u8>),
@@ -743,6 +697,12 @@ mod self_delimiting_tests {
             syn::parse_quote!(u32),
             syn::parse_quote!(Foo),
             syn::parse_quote!(ConstVec<u8>),
+            syn::parse_quote!(Name),
+            syn::parse_quote!(Metadata),
+            syn::parse_quote!(ProofAttachment),
+            syn::parse_quote!(VerifyingKeyId),
+            syn::parse_quote!(ConstString),
+            syn::parse_quote!(ViewChangeProofPayload),
         ];
 
         for ty in bad_types {
@@ -1044,9 +1004,6 @@ fn derive_struct_serialize(
                     "NonZeroU16" => Some(2),
                     "NonZeroU32" => Some(4),
                     "NonZeroU64" => Some(8),
-                    "ContractCodeHash" | "ContractAbiHash" | "ProposalId" => Some(36),
-                    // Common small enums in Connect wire types; encoded as 4-byte tag
-                    "Dir" | "Role" => Some(4),
                     _ => None,
                 }
             }
@@ -1073,19 +1030,7 @@ fn derive_struct_serialize(
                     .last()
                     .map(|s| s.ident.to_string())
                     .unwrap_or_default();
-                // Keep in sync with the top-level is_self_delimiting allowlist.
-                if matches!(id.as_str(), "String" | "Cow" | "ViewChangeProofPayload") {
-                    return true;
-                }
-                if matches!(
-                    id.as_str(),
-                    "Name"
-                        | "Metadata"
-                        | "ProofAttachment"
-                        | "VerifyingKeyId"
-                        | "ConstString"
-                        | "PhantomData"
-                ) {
+                if matches!(id.as_str(), "String" | "Cow" | "PhantomData") {
                     return true;
                 }
                 if matches!(

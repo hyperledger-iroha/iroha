@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import org.hyperledger.iroha.norito.SchemaHash;
 
 /** Builds framed Norito BFV identifier ciphertext envelopes from plaintext input. */
 final class IdentifierBfvEnvelopeBuilder {
@@ -26,8 +27,6 @@ final class IdentifierBfvEnvelopeBuilder {
   private static final byte[] E2_DOMAIN =
       "iroha.sdk.identifier.bfv.e2.v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] NORITO_MAGIC = {'N', 'R', 'T', '0'};
-  private static final long FNV_OFFSET = 0xcbf29ce484222325L;
-  private static final long FNV_PRIME = 0x100000001b3L;
   private static final long CRC64_POLY = 0xC96C5795D7870F42L;
   private static final long[] CRC64_TABLE = buildCrc64Table();
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -258,7 +257,7 @@ final class IdentifierBfvEnvelopeBuilder {
     out.writeBytes(NORITO_MAGIC);
     out.write(0);
     out.write(0);
-    final byte[] schemaHash = schemaHash(SCHEMA_NAME);
+    final byte[] schemaHash = SchemaHash.hash16(SCHEMA_NAME);
     out.writeBytes(schemaHash);
     out.write(0);
     out.writeBytes(littleEndianUInt64(payload.length));
@@ -283,19 +282,6 @@ final class IdentifierBfvEnvelopeBuilder {
       out[index] = (byte) ((value >>> (index * 8)) & 0xff);
     }
     return out;
-  }
-
-  private static byte[] schemaHash(final String typeName) {
-    long hash = FNV_OFFSET;
-    for (final byte value : typeName.getBytes(StandardCharsets.UTF_8)) {
-      hash ^= value & 0xffL;
-      hash *= FNV_PRIME;
-    }
-    final byte[] part = littleEndianUInt64(hash);
-    final byte[] output = new byte[16];
-    System.arraycopy(part, 0, output, 0, 8);
-    System.arraycopy(part, 0, output, 8, 8);
-    return output;
   }
 
   private static long crc64(final byte[] payload) {

@@ -21,11 +21,44 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+#[allow(dead_code)]
+const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
+#[allow(dead_code)]
+const RC_NO_SPACE: i32 = 2;
 #[cfg_attr(all(jsonstage1_cuda_available, crc64_cuda_available), allow(dead_code))]
 const RC_GPU_UNAVAILABLE: i32 = 3;
+#[allow(dead_code)]
+const RC_BACKEND_ERROR: i32 = 4;
+#[allow(dead_code)]
+const FLAG_COMPACT_LEN: u8 = 0x02;
+#[allow(dead_code)]
+const LAYOUT_LENGTH_PREFIXED: u32 = 0;
+#[allow(dead_code)]
+const LAYOUT_FIXED_OFFSETS: u32 = 1;
 
-#[cfg_attr(jsonstage1_cuda_available, allow(dead_code))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NoritoSequenceSpan {
+    start: usize,
+    end: usize,
+}
+
+#[cfg(jsonstage1_cuda_available)]
+unsafe extern "C" {
+    fn norito_sequence_plan_cuda_impl(
+        input_ptr: *const u8,
+        input_len: usize,
+        flags: u8,
+        layout_kind: u32,
+        out_spans: *mut NoritoSequenceSpan,
+        out_capacity: usize,
+        out_count: *mut usize,
+        out_used: *mut usize,
+    ) -> i32;
+}
+
+#[cfg_attr(any(not(test), jsonstage1_cuda_available), allow(dead_code))]
 fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize {
     let mut count = 0usize;
     let mut base = 0usize;
@@ -111,7 +144,7 @@ pub unsafe extern "C" fn json_stage1_build_tape(
     }
 }
 
-#[cfg_attr(jsonstage1_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), jsonstage1_cuda_available), allow(dead_code))]
 unsafe fn json_stage1_build_tape_cpu(
     input_ptr: *const u8,
     input_len: usize,
@@ -140,7 +173,7 @@ unsafe fn json_stage1_build_tape_cpu(
     0
 }
 
-#[cfg_attr(crc64_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), crc64_cuda_available), allow(dead_code))]
 fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     const POLY: u64 = 0xC96C_5795_D787_0F42;
     let mut crc = init;
@@ -157,7 +190,7 @@ fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     crc
 }
 
-#[cfg_attr(crc64_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), crc64_cuda_available), allow(dead_code))]
 fn crc64_cpu(bytes: &[u8]) -> u64 {
     const INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -190,11 +223,198 @@ pub unsafe extern "C" fn norito_crc64_cuda(
     }
 }
 
+/// Plan Norito binary sequence element spans through the helper ABI.
+///
+/// # Safety
+/// The caller must ensure all pointers are valid for their supplied lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn norito_binary_sequence_plan(
+    input_ptr: *const u8,
+    input_len: usize,
+    flags: u8,
+    layout_kind: u32,
+    out_spans: *mut NoritoSequenceSpan,
+    out_capacity: usize,
+    out_count: *mut usize,
+    out_used: *mut usize,
+) -> i32 {
+    if input_ptr.is_null() || out_count.is_null() || out_used.is_null() {
+        return RC_INVALID;
+    }
+    if out_capacity > 0 && out_spans.is_null() {
+        return RC_INVALID;
+    }
+
+    #[cfg(jsonstage1_cuda_available)]
+    {
+        return unsafe {
+            norito_sequence_plan_cuda_impl(
+                input_ptr,
+                input_len,
+                flags,
+                layout_kind,
+                out_spans,
+                out_capacity,
+                out_count,
+                out_used,
+            )
+        };
+    }
+
+    #[cfg(not(jsonstage1_cuda_available))]
+    {
+        let _ = (input_len, flags, layout_kind, out_spans, out_capacity);
+        unsafe {
+            *out_count = 0;
+            *out_used = 0;
+        }
+        RC_GPU_UNAVAILABLE
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+enum PlanError {
+    Invalid,
+    Unavailable,
+    Backend,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn plan_sequence_cpu(
+    bytes: &[u8],
+    flags: u8,
+    layout_kind: u32,
+) -> Result<(Vec<NoritoSequenceSpan>, usize), PlanError> {
+    // TODO: replace this ABI reference path with a CUDA kernel once the span
+    // planner has a tuned grid layout for large transaction batches.
+    let (count, mut offset) = read_seq_len(bytes)?;
+    match layout_kind {
+        LAYOUT_LENGTH_PREFIXED => {
+            let mut spans = Vec::new();
+            spans.try_reserve(count).map_err(|_| PlanError::Invalid)?;
+            for _ in 0..count {
+                let tail = bytes.get(offset..).ok_or(PlanError::Invalid)?;
+                let (elem_len, header_len) = read_value_len(tail, flags)?;
+                let start = offset.checked_add(header_len).ok_or(PlanError::Invalid)?;
+                let end = start.checked_add(elem_len).ok_or(PlanError::Invalid)?;
+                if end > bytes.len() {
+                    return Err(PlanError::Invalid);
+                }
+                spans.push(NoritoSequenceSpan { start, end });
+                offset = end;
+            }
+            Ok((spans, offset))
+        }
+        LAYOUT_FIXED_OFFSETS => {
+            let entries = count.checked_add(1).ok_or(PlanError::Invalid)?;
+            let table_len = entries.checked_mul(8).ok_or(PlanError::Invalid)?;
+            let table_end = offset.checked_add(table_len).ok_or(PlanError::Invalid)?;
+            let table = bytes.get(offset..table_end).ok_or(PlanError::Invalid)?;
+            if read_u64(table, 0)? != 0 {
+                return Err(PlanError::Invalid);
+            }
+            let data_len =
+                usize::try_from(read_u64(table, count)?).map_err(|_| PlanError::Invalid)?;
+            let data_start = table_end;
+            let data_end = data_start.checked_add(data_len).ok_or(PlanError::Invalid)?;
+            if data_end > bytes.len() {
+                return Err(PlanError::Invalid);
+            }
+            let mut spans = Vec::new();
+            spans.try_reserve(count).map_err(|_| PlanError::Invalid)?;
+            let mut prev = 0usize;
+            for idx in 0..count {
+                let next =
+                    usize::try_from(read_u64(table, idx + 1)?).map_err(|_| PlanError::Invalid)?;
+                if next < prev || next > data_len {
+                    return Err(PlanError::Invalid);
+                }
+                spans.push(NoritoSequenceSpan {
+                    start: data_start.checked_add(prev).ok_or(PlanError::Invalid)?,
+                    end: data_start.checked_add(next).ok_or(PlanError::Invalid)?,
+                });
+                prev = next;
+            }
+            if prev != data_len {
+                return Err(PlanError::Invalid);
+            }
+            Ok((spans, data_end))
+        }
+        _ => Err(PlanError::Unavailable),
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn read_seq_len(bytes: &[u8]) -> Result<(usize, usize), PlanError> {
+    let raw = read_u64(bytes, 0)?;
+    let len = usize::try_from(raw).map_err(|_| PlanError::Invalid)?;
+    Ok((len, 8))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn read_u64(bytes: &[u8], idx: usize) -> Result<u64, PlanError> {
+    let start = idx.checked_mul(8).ok_or(PlanError::Invalid)?;
+    let end = start.checked_add(8).ok_or(PlanError::Invalid)?;
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(bytes.get(start..end).ok_or(PlanError::Invalid)?);
+    Ok(u64::from_le_bytes(buf))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn read_value_len(bytes: &[u8], flags: u8) -> Result<(usize, usize), PlanError> {
+    if (flags & FLAG_COMPACT_LEN) == 0 {
+        return read_seq_len(bytes);
+    }
+    let (value, used) = decode_varint(bytes)?;
+    let len = usize::try_from(value).map_err(|_| PlanError::Invalid)?;
+    Ok((len, used))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn decode_varint(bytes: &[u8]) -> Result<(u64, usize), PlanError> {
+    let mut result = 0u64;
+    let mut shift = 0u32;
+    for (idx, byte) in bytes.iter().copied().enumerate().take(10) {
+        let payload = (byte & 0x7f) as u64;
+        if shift == 63 && payload > 1 {
+            return Err(PlanError::Invalid);
+        }
+        result |= payload << shift;
+        if byte & 0x80 == 0 {
+            let used = idx + 1;
+            if used != varint_len(result) {
+                return Err(PlanError::Invalid);
+            }
+            return Ok((result, used));
+        }
+        shift += 7;
+    }
+    Err(PlanError::Invalid)
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn varint_len(mut value: u64) -> usize {
+    let mut len = 1usize;
+    while value >= 0x80 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        RC_GPU_UNAVAILABLE, RC_INVALID, crc64_cpu, crc64_raw, json_stage1_build_tape,
-        json_stage1_build_tape_cpu, norito_crc64_cuda, scan_structural_offsets,
+        NoritoSequenceSpan, RC_GPU_UNAVAILABLE, RC_INVALID, crc64_cpu, crc64_raw,
+        json_stage1_build_tape, json_stage1_build_tape_cpu, norito_binary_sequence_plan,
+        norito_crc64_cuda, scan_structural_offsets,
     };
 
     const CRC_123456789: u64 = 0x995D_C9BB_DF19_39FA;
@@ -350,6 +570,44 @@ mod tests {
         };
         assert_eq!(rc, 0);
         assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn binary_sequence_plan_fixed_offsets() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        for offset in [0u64, 1, 3, 6] {
+            bytes.extend_from_slice(&offset.to_le_bytes());
+        }
+        bytes.extend_from_slice(b"abcdef");
+
+        let mut spans = vec![NoritoSequenceSpan { start: 0, end: 0 }; 3];
+        let mut count = 0usize;
+        let mut used = 0usize;
+        let rc = unsafe {
+            norito_binary_sequence_plan(
+                bytes.as_ptr(),
+                bytes.len(),
+                0,
+                super::LAYOUT_FIXED_OFFSETS,
+                spans.as_mut_ptr(),
+                spans.len(),
+                &mut count,
+                &mut used,
+            )
+        };
+        if skip_if_unavailable(rc, "jsonstage1_cuda sequence planner") {
+            return;
+        }
+        assert_eq!(rc, super::RC_OK);
+        spans.truncate(count);
+        assert_eq!(spans[0].start, 40);
+        assert_eq!(spans[0].end, 41);
+        assert_eq!(spans[1].start, 41);
+        assert_eq!(spans[1].end, 43);
+        assert_eq!(spans[2].start, 43);
+        assert_eq!(spans[2].end, 46);
+        assert_eq!(used, bytes.len());
     }
 
     #[test]

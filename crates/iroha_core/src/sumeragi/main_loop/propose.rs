@@ -200,6 +200,49 @@ fn trim_batch_for_size_cap<T, U>(
     removed_count
 }
 
+fn canonicalize_parallel_batch_by_key<T, U, K, F>(
+    tx_batch: &mut Vec<T>,
+    routing_batch: &mut Vec<U>,
+    sizes: &mut Vec<usize>,
+    key: F,
+) where
+    K: Ord,
+    F: Fn(&T) -> K,
+{
+    assert_eq!(
+        tx_batch.len(),
+        routing_batch.len(),
+        "routing decisions must align with transactions"
+    );
+    assert_eq!(
+        tx_batch.len(),
+        sizes.len(),
+        "transaction sizes must align with transactions"
+    );
+    if tx_batch.len() <= 1 {
+        return;
+    }
+
+    let mut entries: Vec<_> = std::mem::take(tx_batch)
+        .into_iter()
+        .zip(std::mem::take(routing_batch))
+        .zip(std::mem::take(sizes))
+        .enumerate()
+        .map(|(idx, ((tx, routing), size))| (key(&tx), idx, tx, routing, size))
+        .collect();
+
+    entries.sort_unstable_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+
+    tx_batch.reserve(entries.len());
+    routing_batch.reserve(entries.len());
+    sizes.reserve(entries.len());
+    for (_, _, tx, routing, size) in entries {
+        tx_batch.push(tx);
+        routing_batch.push(routing);
+        sizes.push(size);
+    }
+}
+
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy)]
@@ -1670,6 +1713,8 @@ impl Actor {
         tx_sizes = filtered_sizes;
 
         if transactions.len() > 1 {
+            // Lane interleaving is a budget-selection policy only. The default block builder
+            // still canonicalizes normal-lane payload order by entrypoint hash for consensus.
             let order = interleave_lane_indices(&routing_decisions);
 
             if order.iter().enumerate().any(|(idx, &value)| idx != value) {
@@ -1700,7 +1745,7 @@ impl Actor {
             if !work.has_work() {
                 if allow_recovery_heartbeat {
                     let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
-                    let encoded_len = heartbeat.as_ref().encode().len();
+                    let encoded_len = heartbeat.encoded_len();
                     transactions.push(heartbeat);
                     routing_decisions.push(RoutingDecision::default());
                     tx_sizes.push(encoded_len);
@@ -1861,9 +1906,15 @@ impl Actor {
         let assembly_result: Result<()> = (|| {
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
-                    tx_sizes.push(tx.as_ref().encode().len());
+                    tx_sizes.push(tx.encoded_len());
                 }
             }
+            canonicalize_parallel_batch_by_key(
+                &mut tx_batch,
+                &mut routing_batch,
+                &mut tx_sizes,
+                crate::tx::AcceptedTransaction::hash_as_entrypoint,
+            );
             let (
                 signed_block,
                 block_created_msg,
@@ -2477,7 +2528,7 @@ impl Actor {
         if let Err(err) = assembly_result {
             tx_guards.clear();
             for (tx, routing) in original_for_requeue {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2487,7 +2538,7 @@ impl Actor {
                 );
             }
             for (tx, routing) in std::mem::take(&mut overflow_transactions) {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2497,7 +2548,7 @@ impl Actor {
                 );
             }
             for (tx, routing) in removed_for_chunk_cap {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2507,7 +2558,7 @@ impl Actor {
                 );
             }
             for (tx, routing) in removed_for_frame_cap {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2520,7 +2571,7 @@ impl Actor {
         }
         tx_guards.clear();
         for (tx, routing) in std::mem::take(&mut overflow_transactions) {
-            if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+            if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                 continue;
             }
             self.requeue_accepted_transaction(
@@ -2530,7 +2581,7 @@ impl Actor {
             );
         }
         for (tx, routing) in removed_for_chunk_cap {
-            if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+            if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                 continue;
             }
             self.requeue_accepted_transaction(
@@ -2540,7 +2591,7 @@ impl Actor {
             );
         }
         for (tx, routing) in removed_for_frame_cap {
-            if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+            if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                 continue;
             }
             self.requeue_accepted_transaction(
@@ -4688,8 +4739,8 @@ impl Actor {
 mod tests {
     use super::{
         ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
-        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
-        trim_batch_for_size_cap,
+        canonicalize_parallel_batch_by_key, consensus_queue_backpressure, da_payload_budget,
+        next_cached_slot_timeout_streak, trim_batch_for_size_cap,
     };
     use crate::queue::BackpressureState;
     use crate::sumeragi::status;
@@ -4763,6 +4814,19 @@ mod tests {
         assert_eq!(txs.len(), 1);
         assert_eq!(routes.len(), 1);
         assert_eq!(sizes.len(), 1);
+    }
+
+    #[test]
+    fn canonicalize_parallel_batch_by_key_reorders_companions_stably() {
+        let mut txs = vec![30, 10, 20, 10];
+        let mut routes = vec!["c", "a", "b", "a2"];
+        let mut sizes = vec![3, 1, 2, 4];
+
+        canonicalize_parallel_batch_by_key(&mut txs, &mut routes, &mut sizes, |tx| *tx);
+
+        assert_eq!(txs, vec![10, 10, 20, 30]);
+        assert_eq!(routes, vec!["a", "a2", "b", "c"]);
+        assert_eq!(sizes, vec![1, 4, 2, 3]);
     }
 
     #[test]

@@ -171,12 +171,8 @@ GPU ပိတ်ဆို့ရေးကုဒ်ကို ကြိုးတပ
 
 | လယ် | ပုံသေ | ရည်ရွယ်ချက် |
 |---------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bytes | ဤအရာအောက်တွင်၊ ဝန်ဆောင်ခများသည် zstd ကို လုံးဝကျော်သွားသည် ။ |
-| `min_compress_bytes_gpu` | `1_048_576` ဘိုက် (1MiB) | `norito::core::hw::has_gpu_compression()` မှန်သောအခါတွင် ဤကန့်သတ်ချက်နှင့်အထက်တွင် ပေးဆောင်မှုများသည် GPU zstd သို့ပြောင်းသည်။ |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | <32KiB နှင့် ≥32KiB payloads အသီးသီးအတွက် CPU ချုံ့မှုအဆင့်များ။ |
-| `zstd_level_gpu` | `1` | ကွန်ဆာဗေးတစ် GPU အဆင့်သည် အမိန့်စာတန်းများကိုဖြည့်နေစဉ် latency တသမတ်တည်းရှိနေရန်။ |
-| `large_threshold` | `32_768` bytes | "အသေး" နှင့် "ကြီး" CPU zstd အဆင့်များကြား အရွယ်အစား နယ်နိမိတ်။ |
-| `aos_ncb_small_n` | `64` အတန်း | ဤအတန်း၏အောက်တွင် အသေးငယ်ဆုံး payload ကိုရွေးချယ်ရန်အတွက် adaptive encoders များသည် AoS နှင့် NCB အပြင်အဆင်နှစ်ခုလုံးကို စူးစမ်းလေ့လာပါသည်။ |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` တန်း | အတန်း 1-2 တွင် ဆဲလ်အလွတ်များပါရှိသောအခါ u32/id delta ကုဒ်နံပါတ်များကို ဖွင့်ခြင်းကို တားဆီးသည်။ |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas ကန်သွင်းရာတွင် အနည်းဆုံး အတန်းနှစ်တန်းရှိပါသည် ။ |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | ကောင်းစွာ ပြုမူထားသော ထည့်သွင်းမှုများအတွက် မြစ်ဝကျွန်းပေါ်အသွင်ပြောင်းမှုအားလုံးကို မူရင်းအတိုင်း ဖွင့်ထားသည်။ |
@@ -189,7 +185,7 @@ GPU ပိတ်ဆို့ရေးကုဒ်ကို ကြိုးတပ
 ဝါယာကြိုးဖော်မတ်ကို ပြောင်းလဲမည့် မည်သည့်အခါမျှ ဆုံးဖြတ်ချက်မချဘဲ တံခါးခုံများကို ပြင်ဆင်ထားသည်။
 ထုတ်ဝေမှုနှုန်း။ ပရိုဖိုင်းလုပ်ခြင်းသည် ပိုမိုကောင်းမွန်သည့် အကျိုးအမြတ်အချက်များကို ဖော်ထုတ်သောအခါ၊ Norito သည် အပ်ဒိတ်လုပ်သည်
 Canonical `Heuristics::canonical` အကောင်အထည်ဖော်မှုနှင့် `docs/source/benchmarks.md` အပေါင်း
-`status.md` သည် ဗားရှင်းပြောင်းထားသော အထောက်အထားများနှင့်အတူ အပြောင်းအလဲကို မှတ်တမ်းတင်သည်။GPU zstd helper သည် တူညီသော `min_compress_bytes_gpu` ကိုဖြတ်တောက်ထားချိန်တွင်ပင်၊
+`status.md` သည် ဗားရှင်းပြောင်းထားသော အထောက်အထားများနှင့်အတူ အပြောင်းအလဲကို မှတ်တမ်းတင်သည်။GPU zstd helper သည် တူညီသော compiled GPU cutoff ကိုဖြတ်တောက်ထားချိန်တွင်ပင်၊
 တိုက်ရိုက်ခေါ်သည် (ဥပမာ `norito::core::gpu_zstd::encode_all`) ဆိုတော့ သေးသေးလေးပါ။
 GPU ရရှိနိုင်မှု မခွဲခြားဘဲ payload များသည် CPU လမ်းကြောင်းပေါ်တွင် အမြဲရှိနေပါသည်။
 

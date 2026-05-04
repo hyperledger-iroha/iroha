@@ -616,7 +616,7 @@ mod tests {
         let rendered = err.to_string();
 
         assert!(rendered.contains("ML-DSA-65 public key"));
-        assert!(rendered.contains("9"));
+        assert!(rendered.contains('9'));
         assert!(rendered.contains("1952"));
     }
 

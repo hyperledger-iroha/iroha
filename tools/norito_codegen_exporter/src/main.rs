@@ -567,6 +567,10 @@ fn metadata_to_value(meta: &Metadata, index: &TypeIndex) -> Value {
             ("kind".into(), Value::String("int".to_owned())),
             ("mode".into(), Value::String(format!("{mode:?}"))),
         ]),
+        Metadata::Float(mode) => object([
+            ("kind".into(), Value::String("float".to_owned())),
+            ("mode".into(), Value::String(format!("{mode:?}"))),
+        ]),
         Metadata::String => object([("kind".into(), Value::String("string".to_owned()))]),
         Metadata::Bool => object([("kind".into(), Value::String("bool".to_owned()))]),
         Metadata::FixedPoint(meta) => object([
@@ -893,6 +897,18 @@ mod tests {
             }),
             "expected `value: u32` field in layout"
         );
+    }
+
+    #[test]
+    fn metadata_to_value_renders_float_mode() {
+        let index = TypeIndex::new();
+        let layout = metadata_to_value(&Metadata::Float(iroha_schema::FloatMode::Binary64), &index);
+        let Value::Object(map) = layout else {
+            panic!("expected float metadata object");
+        };
+
+        assert_eq!(map.get("kind").and_then(Value::as_str), Some("float"));
+        assert_eq!(map.get("mode").and_then(Value::as_str), Some("Binary64"));
     }
 
     #[test]

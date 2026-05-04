@@ -250,19 +250,16 @@ fn append_bootstrap_authority_overlay(
     let mut has_publish_manifest = false;
 
     for instruction in manifest.instructions() {
-        if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
-            if let RegisterBox::Account(register_account) = register {
-                if register_account.object().id == authority.account_id {
-                    has_account_registration = true;
-                }
-            }
+        if let Some(RegisterBox::Account(register_account)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+            && register_account.object().id == authority.account_id
+        {
+            has_account_registration = true;
         }
-        if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
-            if let MintBox::Asset(mint_asset) = mint {
-                if mint_asset.destination() == &authority_fee_asset {
-                    has_fee_funding = true;
-                }
-            }
+        if let Some(MintBox::Asset(mint_asset)) = instruction.as_any().downcast_ref::<MintBox>()
+            && mint_asset.destination() == &authority_fee_asset
+        {
+            has_fee_funding = true;
         }
         let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
             continue;

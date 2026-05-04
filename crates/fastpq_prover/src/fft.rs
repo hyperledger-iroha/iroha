@@ -984,7 +984,7 @@ mod tests {
                 for column in 0..column_count {
                     let values = (0..len)
                         .map(|idx| {
-                            let seed = ((trace_log as u64 + 1) << 40)
+                            let seed = ((u64::from(trace_log) + 1) << 40)
                                 ^ ((column as u64 + 17) << 24)
                                 ^ idx as u64;
                             seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) % FIELD_MODULUS

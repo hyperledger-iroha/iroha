@@ -1,4 +1,4 @@
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use iroha_data_model::nexus::{AxtFastpqBinding, DataSpaceId, LaneId};
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
     axt::{
@@ -7,6 +7,13 @@ use ivm::{
     },
     host::DefaultHost,
 };
+
+const AXT_VERIFY_EMPTY_GAS: u64 = 64;
+const AXT_GAS_BASE: u64 = 16;
+
+fn axt_gas(payload_len: usize) -> u64 {
+    AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
 
 #[test]
 fn default_host_unknown_syscall_returns_unknown() {
@@ -34,8 +41,54 @@ fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     vm.alloc_input_tlv(&tlv).expect("alloc input")
 }
 
+fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(domain);
+    for part in parts {
+        payload.extend_from_slice(part);
+    }
+    iroha_crypto::Hash::new(payload)
+}
+
+fn proof_blob_for(dsid: DataSpaceId, manifest_root: [u8; 32], proof_seed: &[u8]) -> ProofBlob {
+    let source_tx_commitment = test_digest(b"ivm-host-test:source-tx", &[proof_seed]);
+    let claim_digest = test_digest(b"ivm-host-test:claim", &[proof_seed]);
+    let witness_commitment = test_digest(b"ivm-host-test:witness", &[proof_seed]);
+    let policy_commitment = test_digest(b"ivm-host-test:policy", &[&manifest_root]);
+    let proof_digest = test_digest(b"ivm-host-test:proof", &[proof_seed, &manifest_root]);
+    let envelope = axt::AxtProofEnvelope {
+        dsid,
+        manifest_root,
+        da_commitment: None,
+        proof: proof_digest.as_ref().to_vec(),
+        fastpq_binding: Some(AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_string(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: "ivm-host-test-dataspace".to_string(),
+            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_string(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "test_effect".to_string(),
+            corridor: "ivm-host-test-corridor".to_string(),
+            verifier_id: "fastpq".to_string(),
+            verifier_version: "v1".to_string(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }),
+        committed_amount: None,
+        amount_commitment: None,
+    };
+    ProofBlob {
+        payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+        expiry_slot: None,
+    }
+}
+
 #[test]
-fn default_host_axt_syscalls_handle_valid_sequence() {
+fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
 
@@ -48,42 +101,37 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
             write: vec!["ledger".into()],
         }],
     };
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
-    let ds_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
         read: vec!["orders/123".into()],
         write: vec!["ledger/123".into()],
     };
-    let manifest_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest).expect("encode manifest"),
-    );
+    let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
 
-    let proof = ProofBlob {
-        payload: vec![9, 9, 9],
-        expiry_slot: None,
-    };
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, 0);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Ok(AXT_VERIFY_EMPTY_GAS)
+    );
+
+    let proof = proof_blob_for(dsid, [1; 32], b"default-host-sequence");
     let proof_ptr = store_tlv(
         &mut vm,
         PointerType::ProofBlob,
@@ -91,10 +139,10 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
     );
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
@@ -115,7 +163,7 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
         },
         target_lane: LaneId::new(0),
         axt_binding: binding.to_vec(),
-        manifest_view_root: vec![0; 32],
+        manifest_view_root: vec![1; 32],
         expiry_slot: 10,
         max_clock_skew_ms: Some(0),
     };
@@ -141,15 +189,17 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 
-    assert_eq!(
+    // The inline proof failed closed, so commit must not turn the preflighted
+    // proof shape into AXT acceptance.
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
 
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);

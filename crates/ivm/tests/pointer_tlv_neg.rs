@@ -90,3 +90,12 @@ fn tlv_out_of_bounds_is_rejected() {
     let err = vm.memory.validate_tlv(addr).unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
+
+#[test]
+fn tlv_pointer_overflow_is_rejected() {
+    let mut vm = IVM::new(0);
+    let meta = ProgramMetadata::default().encode();
+    vm.load_program(&meta).unwrap();
+    let err = vm.memory.validate_tlv(u64::MAX).unwrap_err();
+    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+}

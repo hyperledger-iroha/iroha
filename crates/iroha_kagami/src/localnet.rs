@@ -1534,6 +1534,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
     Some((lane_count, catalog))
 }
 
+#[allow(clippy::items_after_statements)]
 fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Table> {
     use toml::{Table, Value};
 
@@ -2776,6 +2777,7 @@ impl BootstrapRegistrations {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
@@ -3083,6 +3085,7 @@ fn write_scripts(
     Ok(())
 }
 
+#[allow(clippy::similar_names, clippy::too_many_lines)]
 fn write_start_script(
     start: &Path,
     peers: u16,
@@ -3655,6 +3658,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn generated_localnet_bootstraps_builtin_offline_note_asset_and_permissions() {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
@@ -3779,7 +3783,7 @@ mod tests {
             let GrantBox::Permission(grant_permission) = grant else {
                 continue;
             };
-            let permission_name: &str = grant_permission.object().name().as_ref();
+            let permission_name: &str = grant_permission.object().name();
             if permission_name == "CanManageOfflineEscrow" {
                 total_manage_offline_escrow_grants =
                     total_manage_offline_escrow_grants.saturating_add(1);
@@ -5158,6 +5162,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
         use std::collections::{BTreeMap, BTreeSet};
 
@@ -5326,6 +5331,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn dataspace_localnet_binds_bpng_restricted_lane_before_genesis_signing() {
         use std::collections::{BTreeMap, BTreeSet};
 
@@ -6048,6 +6054,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {

@@ -7,7 +7,7 @@
 use std::{
     cmp::max,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -18,7 +18,8 @@ use iroha_data_model::soranet::{
     vpn::{
         VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
         VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1, VpnFlowLabelV1,
-        VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
+        VpnHelperTicketV1, VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
+        VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
     },
 };
 use thiserror::Error;
@@ -32,6 +33,14 @@ use crate::{
     metrics::Metrics,
     vpn_adapter::{VpnAdapter, VpnBridge},
 };
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
 
 /// Padded cell with the computed payload length retained for accounting.
 #[derive(Debug, Clone)]
@@ -297,6 +306,20 @@ impl VpnOverlay {
         VpnSessionHandle::new(session, session_id, self.exit_class, self.meter_hash)
     }
 
+    /// Bind a started helper-authenticated VPN session to the ticket metadata.
+    pub fn bind_helper_session(
+        &self,
+        session: VpnSession,
+        helper_ticket: VpnHelperTicketV1,
+    ) -> VpnSessionHandle {
+        VpnSessionHandle::from_helper_ticket(
+            session,
+            helper_ticket,
+            self.exit_class,
+            self.meter_hash,
+        )
+    }
+
     /// Start a new VPN session and return an adapter for recording ingress/egress.
     pub fn start_adapter(&self, metrics: Arc<Metrics>) -> VpnAdapter {
         let session = self.start_session(metrics);
@@ -529,7 +552,10 @@ struct VpnSessionState {
     ingress_bytes: AtomicU64,
     egress_bytes: AtomicU64,
     cover_bytes: AtomicU64,
+    last_ingress_sequence: AtomicU64,
+    last_egress_sequence: AtomicU64,
     started_at: Instant,
+    started_at_ms: u64,
 }
 
 impl VpnSession {
@@ -542,7 +568,10 @@ impl VpnSession {
                 ingress_bytes: AtomicU64::new(0),
                 egress_bytes: AtomicU64::new(0),
                 cover_bytes: AtomicU64::new(0),
+                last_ingress_sequence: AtomicU64::new(u64::MAX),
+                last_egress_sequence: AtomicU64::new(u64::MAX),
                 started_at: Instant::now(),
+                started_at_ms: unix_now_ms(),
             }),
         }
     }
@@ -614,6 +643,7 @@ impl VpnSession {
         frame: &[u8],
     ) -> Result<VpnCellV1, VpnCellError> {
         let cell = overlay.parse_frame(frame)?;
+        self.record_ingress_sequence(cell.header.sequence)?;
         self.record_parsed_ingress(&cell);
         Ok(cell)
     }
@@ -627,8 +657,17 @@ impl VpnSession {
         frame: &[u8],
     ) -> Result<VpnCellV1, VpnCellError> {
         let cell = overlay.parse_frame(frame)?;
+        self.record_egress_sequence(cell.header.sequence)?;
         self.record_parsed_egress(&cell);
         Ok(cell)
+    }
+
+    pub(crate) fn record_ingress_sequence(&self, sequence: u64) -> Result<(), VpnCellError> {
+        record_monotonic_sequence(&self.state.last_ingress_sequence, sequence)
+    }
+
+    pub(crate) fn record_egress_sequence(&self, sequence: u64) -> Result<(), VpnCellError> {
+        record_monotonic_sequence(&self.state.last_egress_sequence, sequence)
     }
 
     /// Account for a parsed ingress cell without re-validating the frame.
@@ -656,12 +695,39 @@ impl VpnSession {
             .min(u64::from(u32::MAX)) as u32;
         VpnSessionReceiptV1 {
             session_id,
+            quote_id: [0u8; 32],
+            payment_tx_hash: [0u8; 32],
+            account_hash: [0u8; 32],
+            relay_id: [0u8; 32],
             ingress_bytes: self.state.ingress_bytes.load(Ordering::Relaxed),
             egress_bytes: self.state.egress_bytes.load(Ordering::Relaxed),
             cover_bytes: self.state.cover_bytes.load(Ordering::Relaxed),
             uptime_secs,
+            started_at_ms: self.state.started_at_ms,
+            ended_at_ms: unix_now_ms(),
             exit_class,
             meter_hash,
+            earned_fee_nanos: 0,
+            highest_voucher_sequence: 0,
+            client_voucher_hash: [0u8; 32],
+        }
+    }
+}
+
+fn record_monotonic_sequence(last: &AtomicU64, sequence: u64) -> Result<(), VpnCellError> {
+    loop {
+        let previous = last.load(Ordering::Acquire);
+        if previous != u64::MAX && sequence <= previous {
+            return Err(VpnCellError::NonMonotonicSequence {
+                last: previous,
+                actual: sequence,
+            });
+        }
+        if last
+            .compare_exchange(previous, sequence, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Ok(());
         }
     }
 }
@@ -671,8 +737,24 @@ impl VpnSession {
 pub struct VpnSessionHandle {
     session: VpnSession,
     session_id: [u8; 16],
+    quote_id: [u8; 32],
+    account_hash: [u8; 32],
+    relay_id: [u8; 32],
+    payment_tx_hash: [u8; 32],
+    highest_voucher: Arc<Mutex<Option<VpnUsageVoucherEnvelopeV1>>>,
     exit_class: VpnExitClassV1,
     meter_hash: [u8; 32],
+}
+
+/// Operator settlement payload emitted when a VPN session has an accepted client voucher.
+#[derive(Debug, Clone)]
+pub struct VpnSettlementArtifact {
+    /// Relay receipt committing to the highest accepted client voucher.
+    pub receipt: VpnSessionReceiptV1,
+    /// Highest client-signed voucher accepted by the relay for this session.
+    pub voucher: VpnUsageVoucherV1,
+    /// Earned fee carried by the accepted voucher envelope.
+    pub earned_fee_nanos: u64,
 }
 
 impl VpnSessionHandle {
@@ -685,6 +767,30 @@ impl VpnSessionHandle {
         Self {
             session,
             session_id,
+            quote_id: [0u8; 32],
+            account_hash: [0u8; 32],
+            relay_id: [0u8; 32],
+            payment_tx_hash: [0u8; 32],
+            highest_voucher: Arc::new(Mutex::new(None)),
+            exit_class,
+            meter_hash,
+        }
+    }
+
+    pub fn from_helper_ticket(
+        session: VpnSession,
+        helper_ticket: VpnHelperTicketV1,
+        exit_class: VpnExitClassV1,
+        meter_hash: [u8; 32],
+    ) -> Self {
+        Self {
+            session,
+            session_id: helper_ticket.session_id,
+            quote_id: helper_ticket.quote_id,
+            account_hash: helper_ticket.account_hash,
+            relay_id: helper_ticket.relay_id,
+            payment_tx_hash: helper_ticket.payment_tx_hash,
+            highest_voucher: Arc::new(Mutex::new(None)),
             exit_class,
             meter_hash,
         }
@@ -698,10 +804,59 @@ impl VpnSessionHandle {
         self.session_id
     }
 
+    /// Record the highest client-signed usage voucher accepted by the relay.
+    pub fn record_usage_voucher(&self, envelope: VpnUsageVoucherEnvelopeV1) {
+        let mut highest = self
+            .highest_voucher
+            .lock()
+            .expect("vpn voucher mutex should not be poisoned");
+        let should_replace = highest
+            .as_ref()
+            .map(|current| envelope.voucher.body.sequence > current.voucher.body.sequence)
+            .unwrap_or(true);
+        if should_replace {
+            *highest = Some(envelope);
+        }
+    }
+
+    fn finalize_receipt(&self, voucher: Option<&VpnUsageVoucherEnvelopeV1>) -> VpnSessionReceiptV1 {
+        let mut receipt =
+            self.session
+                .finish_receipt(self.session_id, self.exit_class, self.meter_hash);
+        receipt.quote_id = self.quote_id;
+        receipt.account_hash = self.account_hash;
+        receipt.relay_id = self.relay_id;
+        receipt.payment_tx_hash = self.payment_tx_hash;
+        if let Some(envelope) = voucher {
+            receipt.earned_fee_nanos = envelope.earned_fee_nanos;
+            receipt.highest_voucher_sequence = envelope.voucher.body.sequence;
+            receipt.client_voucher_hash = envelope.voucher.hash();
+        }
+        receipt
+    }
+
     /// Finalize the handle into a billing/telemetry receipt.
     pub fn receipt(&self) -> VpnSessionReceiptV1 {
-        self.session
-            .finish_receipt(self.session_id, self.exit_class, self.meter_hash)
+        let voucher = self
+            .highest_voucher
+            .lock()
+            .expect("vpn voucher mutex should not be poisoned")
+            .clone();
+        self.finalize_receipt(voucher.as_ref())
+    }
+
+    /// Finalize the handle into an operator settlement artifact if a voucher was accepted.
+    pub fn settlement_artifact(&self) -> Option<VpnSettlementArtifact> {
+        let voucher = self
+            .highest_voucher
+            .lock()
+            .expect("vpn voucher mutex should not be poisoned")
+            .clone()?;
+        Some(VpnSettlementArtifact {
+            receipt: self.finalize_receipt(Some(&voucher)),
+            voucher: voucher.voucher,
+            earned_fee_nanos: voucher.earned_fee_nanos,
+        })
     }
 }
 

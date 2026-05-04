@@ -1,8 +1,15 @@
 //! Consensus surface must remain stable across mixed hardware configurations.
 
-use ivm::{IVM, encoding, instruction, runtime};
+use ivm::{ExecutionProof, IVM, encoding, instruction, runtime};
 mod common;
 use common::assemble_with_mode;
+
+#[derive(Debug, PartialEq, Eq)]
+struct RunOutcome {
+    register_value: u64,
+    gas_used: u64,
+    execution_proof: ExecutionProof,
+}
 
 fn build_add_program() -> Vec<u8> {
     let mut code = Vec::new();
@@ -18,8 +25,12 @@ fn build_add_program() -> Vec<u8> {
     assemble_with_mode(&code, 0)
 }
 
-fn run_with(policy: runtime::AccelerationPolicy, caps: runtime::HardwareCapabilities) -> u64 {
-    let mut vm = IVM::new(u64::MAX);
+fn run_with(
+    policy: runtime::AccelerationPolicy,
+    caps: runtime::HardwareCapabilities,
+) -> RunOutcome {
+    let gas_limit = 10_000;
+    let mut vm = IVM::new(gas_limit);
     vm.set_acceleration_policy(policy);
     vm.set_hardware_capabilities(caps);
     vm.set_register(1, 123);
@@ -27,7 +38,11 @@ fn run_with(policy: runtime::AccelerationPolicy, caps: runtime::HardwareCapabili
     let prog = build_add_program();
     vm.load_program(&prog).expect("load program");
     vm.run().expect("vm run");
-    vm.register(5)
+    RunOutcome {
+        register_value: vm.register(5),
+        gas_used: gas_limit.saturating_sub(vm.remaining_gas()),
+        execution_proof: vm.execution_proof(),
+    }
 }
 
 #[test]
@@ -44,5 +59,6 @@ fn consensus_across_mixed_hardware_configs() {
 
     // Results must not diverge across hardware configurations.
     assert_eq!(hw_enabled, hw_disabled);
-    assert_eq!(hw_enabled, 579);
+    assert_eq!(hw_enabled.register_value, 579);
+    assert_eq!(hw_enabled.gas_used, hw_enabled.execution_proof.gas_used);
 }

@@ -408,6 +408,10 @@ mod tests {
 
     use super::*;
 
+    fn len_as_c_uint(len: usize) -> c_uint {
+        c_uint::try_from(len).expect("test vector length fits in c_uint")
+    }
+
     fn ffi_mldsa_keypair(suite: MlDsaSuite) -> (Vec<u8>, Vec<u8>) {
         let suite_id = c_uint::from(suite.suite_id());
         let mut public_key = vec![0u8; suite.public_key_len()];
@@ -599,25 +603,25 @@ mod tests {
         let rc = unsafe {
             soranet_mlkem_parameters(
                 c_uint::from(suite.kem_id()),
-                &mut public_key_len,
-                &mut secret_key_len,
-                &mut ciphertext_len,
-                &mut shared_secret_len,
+                &raw mut public_key_len,
+                &raw mut secret_key_len,
+                &raw mut ciphertext_len,
+                &raw mut shared_secret_len,
             )
         };
         assert_eq!(rc, 0);
-        assert_eq!(public_key_len, params.public_key as c_uint);
-        assert_eq!(secret_key_len, params.secret_key as c_uint);
-        assert_eq!(ciphertext_len, params.ciphertext as c_uint);
-        assert_eq!(shared_secret_len, params.shared_secret as c_uint);
+        assert_eq!(public_key_len, len_as_c_uint(params.public_key));
+        assert_eq!(secret_key_len, len_as_c_uint(params.secret_key));
+        assert_eq!(ciphertext_len, len_as_c_uint(params.ciphertext));
+        assert_eq!(shared_secret_len, len_as_c_uint(params.shared_secret));
 
         let rc = unsafe {
             soranet_mlkem_parameters(
                 c_uint::from(suite.kem_id()),
-                &mut public_key_len,
+                &raw mut public_key_len,
                 ptr::null_mut(),
-                &mut ciphertext_len,
-                &mut shared_secret_len,
+                &raw mut ciphertext_len,
+                &raw mut shared_secret_len,
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -632,10 +636,10 @@ mod tests {
         let rc = unsafe {
             soranet_mlkem_parameters(
                 0xFF,
-                &mut public_key_len,
-                &mut secret_key_len,
-                &mut ciphertext_len,
-                &mut shared_secret_len,
+                &raw mut public_key_len,
+                &raw mut secret_key_len,
+                &raw mut ciphertext_len,
+                &raw mut shared_secret_len,
             )
         };
         assert_eq!(rc, ERR_INVALID_SUITE);
@@ -919,15 +923,15 @@ mod tests {
         let rc = unsafe {
             soranet_mldsa_parameters(
                 c_uint::from(suite.suite_id()),
-                &mut public_key_len,
-                &mut secret_key_len,
-                &mut signature_len,
+                &raw mut public_key_len,
+                &raw mut secret_key_len,
+                &raw mut signature_len,
             )
         };
         assert_eq!(rc, 0);
-        assert_eq!(public_key_len, suite.public_key_len() as c_uint);
-        assert_eq!(secret_key_len, suite.secret_key_len() as c_uint);
-        assert_eq!(signature_len, suite.signature_len() as c_uint);
+        assert_eq!(public_key_len, len_as_c_uint(suite.public_key_len()));
+        assert_eq!(secret_key_len, len_as_c_uint(suite.secret_key_len()));
+        assert_eq!(signature_len, len_as_c_uint(suite.signature_len()));
     }
 
     #[test]
@@ -938,9 +942,9 @@ mod tests {
         let rc = unsafe {
             soranet_mldsa_parameters(
                 0xFF,
-                &mut public_key_len,
-                &mut secret_key_len,
-                &mut signature_len,
+                &raw mut public_key_len,
+                &raw mut secret_key_len,
+                &raw mut signature_len,
             )
         };
         assert_eq!(rc, ERR_INVALID_SUITE);
@@ -949,8 +953,8 @@ mod tests {
             soranet_mldsa_parameters(
                 c_uint::from(MlDsaSuite::MlDsa44.suite_id()),
                 ptr::null_mut(),
-                &mut secret_key_len,
-                &mut signature_len,
+                &raw mut secret_key_len,
+                &raw mut signature_len,
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);

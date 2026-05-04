@@ -1,9 +1,10 @@
-//! Regression fixtures for the FASTPQ stage 2 backend artifacts.
+//! Regression fixtures for FASTPQ V1 backend artifacts captured from transition batches.
 
 use std::fs;
 
 use fastpq_prover::{
     ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
+    gadgets::transfer::attach_transfer_smt_witnesses,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
@@ -16,7 +17,7 @@ use iroha_primitives::numeric::Numeric;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
 
-fn synthetic_batch(rows: usize) -> TransitionBatch {
+fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     let mut transcripts = Vec::new();
     let mut row_idx = 0usize;
@@ -47,6 +48,11 @@ fn synthetic_batch(rows: usize) -> TransitionBatch {
             }
         }
     }
+    let (old_root, new_root) = if transcripts.is_empty() {
+        ([0u8; 32], [0u8; 32])
+    } else {
+        attach_transfer_smt_witnesses(&mut transcripts).expect("attach transfer SMT witnesses")
+    };
     if !transcripts.is_empty() {
         batch.metadata.insert(
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
@@ -56,8 +62,8 @@ fn synthetic_batch(rows: usize) -> TransitionBatch {
     batch.sort();
     batch.public_inputs.dsid = [0u8; 16];
     batch.public_inputs.slot = 0;
-    batch.public_inputs.old_root = [0u8; 32];
-    batch.public_inputs.new_root = [0u8; 32];
+    batch.public_inputs.old_root = old_root;
+    batch.public_inputs.new_root = new_root;
     batch.public_inputs.perm_root = [0u8; 32];
     batch.public_inputs.tx_set_hash = [0u8; 32];
     batch
@@ -83,6 +89,8 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
     let from_post = from_pre.saturating_sub(amount);
     let to_pre = 500_000u64 + index as u64;
     let to_post = to_pre.saturating_add(amount);
+    let sender_key = format!("asset/{asset_definition}/{from_account}").into_bytes();
+    let receiver_key = format!("asset/{asset_definition}/{to_account}").into_bytes();
     let delta = TransferDeltaTranscript {
         from_account: from_account.clone(),
         to_account: to_account.clone(),
@@ -92,11 +100,11 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         from_balance_after: Numeric::from(from_post),
         to_balance_before: Numeric::from(to_pre),
         to_balance_after: Numeric::from(to_post),
-        from_merkle_proof: None,
-        to_merkle_proof: None,
+        from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };
     let mut payload = Vec::with_capacity(32);
-    payload.extend_from_slice(b"fastpq-stage2");
+    payload.extend_from_slice(b"fastpq-v1");
     payload.extend_from_slice(&(index as u64).to_le_bytes());
     let batch_hash = Hash::new(payload);
     let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
@@ -107,13 +115,13 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
         poseidon_preimage_digest: Some(digest),
     };
     let sender = StateTransition::new(
-        format!("asset/{asset_definition}/{from_account}").into_bytes(),
+        sender_key,
         from_pre.to_le_bytes().to_vec(),
         from_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,
     );
     let receiver = StateTransition::new(
-        format!("asset/{asset_definition}/{to_account}").into_bytes(),
+        receiver_key,
         to_pre.to_le_bytes().to_vec(),
         to_post.to_le_bytes().to_vec(),
         OperationKind::Transfer,
@@ -122,37 +130,34 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 }
 
 #[test]
-fn stage2_artifact_balanced_1k_matches_fixture() {
+fn v1_artifact_balanced_1k_matches_fixture() {
     let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("prover");
-    let batch = synthetic_batch(1_000);
+    let batch = v1_captured_fixture_batch(1_000);
     let proof = prover.prove(&batch).expect("proof");
-    let expected = include_bytes!("fixtures/stage2_balanced_1k.bin");
+    let expected = include_bytes!("fixtures/v1_balanced_1k.bin");
     let encoded = to_bytes(&proof).expect("encode proof");
     if expected.is_empty() {
-        println!(
-            "generating stage2_balanced_1k.bin ({} bytes)",
-            encoded.len()
-        );
-        fs::write("tests/fixtures/stage2_balanced_1k.bin", &encoded).expect("write fixture");
-        panic!("wrote stage2_balanced_1k.bin fixture; re-run tests");
+        println!("generating v1_balanced_1k.bin ({} bytes)", encoded.len());
+        fs::write("tests/fixtures/v1_balanced_1k.bin", &encoded).expect("write fixture");
+        panic!("wrote v1_balanced_1k.bin fixture; re-run tests");
     }
     if std::env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
-        fs::write("tests/fixtures/stage2_balanced_1k.bin", &encoded).expect("write fixture");
+        fs::write("tests/fixtures/v1_balanced_1k.bin", &encoded).expect("write fixture");
         return;
     }
-    assert_eq!(encoded.as_slice(), expected);
+    assert_fixture_bytes("v1_balanced_1k.bin", &encoded, expected);
 }
 
 #[cfg(feature = "fastpq-gpu")]
 #[test]
-fn stage2_artifact_balanced_cpu_gpu_parity() {
+fn v1_artifact_balanced_cpu_gpu_parity() {
     if !matches!(ExecutionMode::Auto.resolve(), ExecutionMode::Gpu) {
         eprintln!("skipping cpu/gpu parity test; gpu backend unavailable");
         return;
     }
-    let expected = include_bytes!("fixtures/stage2_balanced_1k.bin");
-    let batch = synthetic_batch(1_000);
+    let expected = include_bytes!("fixtures/v1_balanced_1k.bin");
+    let batch = v1_captured_fixture_batch(1_000);
     let cpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("cpu prover");
     let gpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Gpu)
@@ -164,35 +169,43 @@ fn stage2_artifact_balanced_cpu_gpu_parity() {
     assert_eq!(
         cpu_encoded.as_slice(),
         expected,
-        "cpu proof should match canonical stage2 fixture"
+        "cpu proof should match canonical V1 fixture"
     );
     assert_eq!(
         gpu_encoded.as_slice(),
         expected,
-        "gpu proof should match canonical stage2 fixture"
+        "gpu proof should match canonical V1 fixture"
     );
-    assert_eq!(cpu_encoded, gpu_encoded, "stage2 cpu/gpu proofs must match");
+    assert_eq!(cpu_encoded, gpu_encoded, "V1 cpu/gpu proofs must match");
 }
 
 #[test]
-fn stage2_artifact_balanced_5k_matches_fixture() {
+fn v1_artifact_balanced_5k_matches_fixture() {
     let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("prover");
-    let batch = synthetic_batch(5_000);
+    let batch = v1_captured_fixture_batch(5_000);
     let proof = prover.prove(&batch).expect("proof");
-    let expected = include_bytes!("fixtures/stage2_balanced_5k.bin");
+    let expected = include_bytes!("fixtures/v1_balanced_5k.bin");
     let encoded = to_bytes(&proof).expect("encode proof");
     if expected.is_empty() {
-        println!(
-            "generating stage2_balanced_5k.bin ({} bytes)",
-            encoded.len()
-        );
-        fs::write("tests/fixtures/stage2_balanced_5k.bin", &encoded).expect("write fixture");
-        panic!("wrote stage2_balanced_5k.bin fixture; re-run tests");
+        println!("generating v1_balanced_5k.bin ({} bytes)", encoded.len());
+        fs::write("tests/fixtures/v1_balanced_5k.bin", &encoded).expect("write fixture");
+        panic!("wrote v1_balanced_5k.bin fixture; re-run tests");
     }
     if std::env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
-        fs::write("tests/fixtures/stage2_balanced_5k.bin", &encoded).expect("write fixture");
+        fs::write("tests/fixtures/v1_balanced_5k.bin", &encoded).expect("write fixture");
         return;
     }
-    assert_eq!(encoded.as_slice(), expected);
+    assert_fixture_bytes("v1_balanced_5k.bin", &encoded, expected);
+}
+
+fn assert_fixture_bytes(name: &str, actual: &[u8], expected: &[u8]) {
+    assert!(
+        actual == expected,
+        "{name} fixture mismatch: actual_len={} expected_len={} actual_hash={} expected_hash={}",
+        actual.len(),
+        expected.len(),
+        Hash::new(actual),
+        Hash::new(expected)
+    );
 }

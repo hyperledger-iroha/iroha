@@ -1,5 +1,6 @@
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
+using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Sdk.IntegrationTests;
 
@@ -203,11 +204,15 @@ public sealed class ToriiIntegrationSmokeTests
                     CanonicalRequestCredentials = canonicalCredentials,
                 });
 
-            var session = await signedClient.CreateVpnSessionAsync();
-            Assert.False(string.IsNullOrWhiteSpace(session.SessionId));
-
-            var deleted = await signedClient.DeleteVpnSessionAsync(session.SessionId);
-            Assert.Equal(session.SessionId, deleted.SessionId);
+            var meteringPublicKeyHex = Convert.ToHexString(
+                Ed25519Signer.GetPublicKey(canonicalCredentials.PrivateKeySeed)).ToLowerInvariant();
+            var quote = await signedClient.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
+            {
+                MeteringPublicKeyHex = meteringPublicKeyHex,
+            });
+            Assert.False(string.IsNullOrWhiteSpace(quote.QuoteId));
+            Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction?.WireId);
+            Assert.NotEmpty(quote.TxInstructions);
         }
     }
 

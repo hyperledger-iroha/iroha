@@ -34,6 +34,7 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 
+#[allow(clippy::items_after_statements, clippy::too_many_lines)]
 fn validate_schema(map: &MetaMap) {
     let known: HashSet<_> = map.iter().map(|(id, _)| *id).collect();
 
@@ -138,7 +139,7 @@ fn validate_schema(map: &MetaMap) {
                     bitmap_meta.repr,
                 );
             }
-            Metadata::Int(_) | Metadata::String | Metadata::Bool => {}
+            Metadata::Int(_) | Metadata::Float(_) | Metadata::String | Metadata::Bool => {}
         }
     }
 }

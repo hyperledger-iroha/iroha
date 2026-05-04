@@ -100,7 +100,10 @@ fn has_pattern_window_pred_adv(seq: &[PayloadKind], pattern: &[Pred]) -> bool {
                 }
                 pred => {
                     if seq_idx >= seq.len()
-                        || !has_pattern_window_pred(&seq[seq_idx..=seq_idx], &[pred.clone()])
+                        || !has_pattern_window_pred(
+                            &seq[seq_idx..=seq_idx],
+                            std::slice::from_ref(pred),
+                        )
                     {
                         break;
                     }

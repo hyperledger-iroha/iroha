@@ -1,4 +1,5 @@
 //! Split contract deploy helper for oversized public deploy envelopes.
+#![allow(clippy::too_many_lines)]
 
 use std::{
     fs,

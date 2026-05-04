@@ -1102,11 +1102,11 @@ pub mod isi {
                 ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
             }
 
-            if let Some((owned_domain_id, _)) = state_transaction
+            if let Some(owned_domain_id) = state_transaction
                 .world
-                .domains
-                .iter()
-                .find(|(_, domain)| domain.owned_by() == &account_id)
+                .domains_by_owner
+                .get(&account_id)
+                .and_then(|domains| domains.iter().next())
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -1116,11 +1116,11 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((owned_definition_id, _)) = state_transaction
+            if let Some(owned_definition_id) = state_transaction
                 .world
-                .asset_definitions
-                .iter()
-                .find(|(_, definition)| definition.owned_by() == &account_id)
+                .asset_definitions_by_owner
+                .get(&account_id)
+                .and_then(|definitions| definitions.iter().next())
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -1904,17 +1904,15 @@ pub mod isi {
 
             let remove_nfts: Vec<NftId> = state_transaction
                 .world
-                .nfts
-                .iter()
-                .filter(|(_, nft)| nft.owned_by == account_id)
-                .map(|(id, _)| id.clone())
+                .nfts_in_account_iter(&account_id)
+                .map(|nft| nft.id().clone())
                 .collect();
             for nft_id in remove_nfts {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
                     state_transaction,
                     &nft_id,
                 );
-                state_transaction.world.nfts.remove(nft_id.clone());
+                state_transaction.world.remove_nft_entry(&nft_id);
                 state_transaction
                     .world
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
@@ -2005,11 +2003,7 @@ pub mod isi {
             stored_definition.alias = None;
             state_transaction
                 .world
-                .asset_definitions
-                .insert(asset_definition_id.clone(), stored_definition);
-            state_transaction
-                .world
-                .track_asset_definition_domain(&asset_definition_id);
+                .insert_asset_definition_entry(asset_definition_id.clone(), stored_definition);
             if let Some(alias) = asset_definition.alias().as_ref().cloned() {
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();
                 state_transaction.world.bind_asset_definition_alias(
@@ -2272,15 +2266,11 @@ pub mod isi {
 
             if state_transaction
                 .world
-                .asset_definitions
-                .remove(asset_definition_id.clone())
+                .remove_asset_definition_entry(&asset_definition_id)
                 .is_none()
             {
                 return Err(FindError::AssetDefinition(asset_definition_id).into());
             }
-            state_transaction
-                .world
-                .untrack_asset_definition_domain(&asset_definition_id);
             state_transaction
                 .world
                 .clear_asset_definition_alias(&asset_definition_id);
@@ -3073,15 +3063,21 @@ pub mod isi {
                 ));
             }
 
-            let domain = state_transaction.world.domain_mut(&object)?;
+            {
+                let domain = state_transaction.world.domain_mut(&object)?;
 
-            if domain.owned_by() != &source {
-                return Err(Error::InvariantViolation(
-                    format!("Can't transfer domain {domain} since {source} doesn't own it",).into(),
-                ));
+                if domain.owned_by() != &source {
+                    return Err(Error::InvariantViolation(
+                        format!("Can't transfer domain {domain} since {source} doesn't own it",)
+                            .into(),
+                    ));
+                }
+
+                domain.set_owned_by(destination.clone());
             }
-
-            domain.set_owned_by(destination.clone());
+            state_transaction
+                .world
+                .replace_domain_owner_index(&object, &source, &destination);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::OwnerChanged(DomainOwnerChanged {
@@ -3224,19 +3220,219 @@ pub mod isi {
 
 /// Implementations for domain queries.
 pub mod query {
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         domain::Domain,
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail,
+            json::PredicateJson,
         },
     };
+    use norito::json::Value;
 
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::StateReadOnly,
+        state::{StateReadOnly, WorldReadOnly},
     };
+
+    #[derive(Debug, Default)]
+    struct DomainPredicateView {
+        ids: BTreeSet<DomainId>,
+        owners: BTreeSet<AccountId>,
+    }
+
+    impl DomainPredicateView {
+        fn from_predicate(predicate: &CompoundPredicate<Domain>) -> Self {
+            let mut view = Self::default();
+            let Some(raw) = predicate.json_payload() else {
+                return view;
+            };
+            let Ok(predicate) = norito::json::from_str::<PredicateJson>(raw) else {
+                return view;
+            };
+
+            for condition in predicate.equals {
+                view.push_field_value(&condition.field, &condition.value);
+            }
+            for membership in predicate.r#in {
+                for value in membership.values {
+                    view.push_field_value(&membership.field, &value);
+                }
+            }
+
+            view
+        }
+
+        fn push_field_value(&mut self, field: &str, value: &Value) {
+            let Value::String(raw) = value else {
+                return;
+            };
+
+            match field {
+                "id" | "domain" | "domain_id" => {
+                    if let Some(domain_id) = parse_domain_predicate_value(raw) {
+                        self.ids.insert(domain_id);
+                    }
+                }
+                "owner" | "owned_by" | "account" | "account_id" => {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    {
+                        self.owners.insert(account_id.subject_id());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn plan(&self) -> DomainQueryPlan {
+            let mut ids = self.ids.iter().cloned().collect::<Vec<_>>();
+            ids.sort();
+            let mut owners = self.owners.iter().cloned().collect::<Vec<_>>();
+            owners.sort();
+
+            if !ids.is_empty() {
+                return DomainQueryPlan::Ids(ids);
+            }
+            if !owners.is_empty() {
+                return DomainQueryPlan::Owners(owners);
+            }
+            DomainQueryPlan::Full
+        }
+    }
+
+    #[derive(Debug)]
+    enum DomainQueryPlan {
+        Ids(Vec<DomainId>),
+        Owners(Vec<AccountId>),
+        Full,
+    }
+
+    fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
+        DomainId::parse_fully_qualified(raw)
+            .ok()
+            .or_else(|| DomainId::try_new(raw, "universal").ok())
+    }
+
+    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = value;
+        for segment in path.split('.') {
+            if segment.is_empty() {
+                return None;
+            }
+            match current {
+                Value::Object(map) => current = map.get(segment)?,
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
+    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+        matches!(value, Value::String(raw) if raw == expected)
+    }
+
+    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::String(raw) if raw == expected))
+    }
+
+    fn domain_alias_values(domain: &Domain, field: &str) -> Vec<String> {
+        match field {
+            "id" | "domain" | "domain_id" => {
+                let canonical = domain.id().to_string();
+                let shorthand = domain.id().name().to_string();
+                if canonical == shorthand {
+                    vec![canonical]
+                } else {
+                    vec![canonical, shorthand]
+                }
+            }
+            "owner" | "owned_by" | "account" | "account_id" => {
+                vec![domain.owned_by().to_string()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn domain_json_value<'a>(cache: &'a mut Option<Value>, domain: &Domain) -> Option<&'a Value> {
+        if cache.is_none() {
+            *cache = norito::json::to_value(domain).ok();
+        }
+        cache.as_ref()
+    }
+
+    fn predicate_matches_domain(predicate: &PredicateJson, domain: &Domain) -> bool {
+        let mut domain_json = None;
+
+        for cond in &predicate.equals {
+            let aliases = domain_alias_values(domain, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = domain_json_value(&mut domain_json, domain) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let aliases = domain_alias_values(domain, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = domain_json_value(&mut domain_json, domain) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if !domain_alias_values(domain, field).is_empty() {
+                continue;
+            }
+            let Some(value) = domain_json_value(&mut domain_json, domain) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
 
     impl ValidSingularQuery for FindDomainById {
         #[metrics(+"find_domain_by_id")]
@@ -3259,11 +3455,35 @@ pub mod query {
             filter: CompoundPredicate<Domain>,
             state_ro: &impl StateReadOnly,
         ) -> std::result::Result<impl Iterator<Item = Domain>, QueryExecutionFail> {
-            Ok(state_ro
-                .world()
-                .domains_iter()
-                .filter(move |&v| filter.applies(v))
-                .cloned())
+            let world = state_ro.world();
+            let predicate_view = DomainPredicateView::from_predicate(&filter);
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+
+            let iter: Box<dyn Iterator<Item = Domain> + '_> = match predicate_view.plan() {
+                DomainQueryPlan::Ids(ids) => Box::new(
+                    ids.into_iter()
+                        .filter_map(move |domain_id| world.domain(&domain_id).ok().cloned()),
+                ),
+                DomainQueryPlan::Owners(owners) => {
+                    Box::new(owners.into_iter().flat_map(move |owner| {
+                        world
+                            .domains_owned_by_iter(&owner)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                DomainQueryPlan::Full => Box::new(world.domains_iter().cloned()),
+            };
+
+            Ok(iter.filter(move |domain| {
+                if let Some(predicate) = predicate_json.as_ref() {
+                    predicate_matches_domain(predicate, domain)
+                } else {
+                    filter.applies(domain)
+                }
+            }))
         }
     }
 
@@ -3277,11 +3497,14 @@ pub mod query {
             let account_id = self.account_id().clone();
             state_ro.world().account(&account_id)?;
 
-            Ok(state_ro
+            let domains = state_ro
                 .world()
-                .domains_iter()
-                .filter(move |domain| domain.owned_by() == &account_id && filter.applies(domain))
-                .cloned())
+                .domains_owned_by_iter(&account_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            Ok(domains
+                .into_iter()
+                .filter(move |domain| filter.applies(domain)))
         }
     }
 }
@@ -3338,7 +3561,7 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::State,
+        state::{State, WorldReadOnly},
     };
 
     fn test_state() -> State {
@@ -3355,6 +3578,15 @@ mod tests {
             owned_by: owner.clone(),
         };
         state.world.domains.insert(domain_id.clone(), domain);
+        let mut domains = state
+            .world
+            .domains_by_owner
+            .view()
+            .get(owner)
+            .cloned()
+            .unwrap_or_default();
+        domains.insert(domain_id.clone());
+        state.world.domains_by_owner.insert(owner.clone(), domains);
     }
 
     fn seed_account(state: &mut State, account_id: &AccountId, domain_id: &DomainId) {
@@ -3418,6 +3650,93 @@ mod tests {
         assert_eq!(
             domains.into_iter().collect::<BTreeSet<_>>(),
             BTreeSet::from([owner_domain, alice_owned])
+        );
+    }
+
+    #[test]
+    fn find_domains_filters_owner_with_owner_index() {
+        use std::collections::BTreeSet;
+
+        let mut state = test_state();
+        let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
+        let alice_owned_two = DomainId::try_new("cards", "universal").expect("domain id");
+        let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
+        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        seed_domain(&mut state, &alice_owned, &ALICE_ID);
+        seed_domain(&mut state, &alice_owned_two, &ALICE_ID);
+        seed_domain(&mut state, &bob_owned, &bob_id);
+
+        let view = state.view();
+        assert_eq!(
+            view.world()
+                .domains_owned_by_iter(&ALICE_ID)
+                .map(|domain| domain.id().clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([alice_owned.clone(), alice_owned_two.clone()]),
+            "fixture should populate the owner index used by the query planner",
+        );
+
+        let predicate =
+            CompoundPredicate::<Domain>::build(|p| p.equals("owned_by", ALICE_ID.to_string()));
+        let domains: Vec<_> = FindDomains
+            .execute(predicate, &view)
+            .unwrap()
+            .map(|domain| domain.id().clone())
+            .collect();
+
+        assert_eq!(
+            domains.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([alice_owned, alice_owned_two])
+        );
+    }
+
+    #[test]
+    fn domain_owner_index_tracks_insert_transfer_and_remove() {
+        let state = test_state();
+        let owner = (*ALICE_ID).clone();
+        let new_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id = DomainId::try_new("indexed", "universal").expect("domain id");
+        let domain = Domain {
+            id: domain_id.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: owner.clone(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        tx.world.insert_domain_entry(domain_id.clone(), domain);
+        let owned = tx
+            .world
+            .domains_owned_by_iter(&owner)
+            .map(|domain| domain.id().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(owned, vec![domain_id.clone()]);
+
+        {
+            let domain = tx.world.domain_mut(&domain_id).expect("domain exists");
+            domain.set_owned_by(new_owner.clone());
+        }
+        tx.world
+            .replace_domain_owner_index(&domain_id, &owner, &new_owner);
+        assert!(
+            tx.world.domains_owned_by_iter(&owner).next().is_none(),
+            "owner index should remove transferred domain from previous owner",
+        );
+        let owned_by_new_owner = tx
+            .world
+            .domains_owned_by_iter(&new_owner)
+            .map(|domain| domain.id().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(owned_by_new_owner, vec![domain_id.clone()]);
+
+        tx.world.remove_domain_entry(&domain_id);
+        assert!(
+            tx.world.domains_owned_by_iter(&new_owner).next().is_none(),
+            "owner index should remove unregistered domain",
         );
     }
 
@@ -5754,6 +6073,8 @@ mod tests {
             .asset_definition_mut(&asset_def_id)
             .expect("definition exists")
             .set_owned_by(account_id.clone());
+        tx.world
+            .replace_asset_definition_owner_index(&asset_def_id, &authority, &account_id);
 
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
@@ -7866,7 +8187,7 @@ mod tests {
         let mut tx = block.transaction();
         let bpng = DataSpaceId::new(7);
         install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
-        tx.world.asset_definitions.insert(
+        tx.world.insert_asset_definition_entry(
             definition_id.clone(),
             AssetDefinition::numeric(definition_id.clone())
                 .with_name("pgk".to_owned())

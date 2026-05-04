@@ -97,7 +97,7 @@ pub struct ContractViewEntrypointDto {
     norito::derive::NoritoDeserialize,
 )]
 pub struct ContractViewSyscallDto {
-    pub number: u8,
+    pub number: u32,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub count: u64,
@@ -544,7 +544,7 @@ fn render_program_syscalls(analysis: &ProgramAnalysis) -> String {
         .syscalls
         .iter()
         .map(|entry| {
-            let name = ivm::syscalls::syscall_name(entry.number.into()).unwrap_or("UNKNOWN");
+            let name = ivm::syscalls::syscall_name(entry.number).unwrap_or("UNKNOWN");
             format!("{name} x{}", entry.count)
         })
         .collect::<Vec<_>>()
@@ -740,7 +740,7 @@ fn to_analysis_dto(analysis: &ProgramAnalysis) -> ContractViewAnalysisDto {
             .iter()
             .map(|entry| ContractViewSyscallDto {
                 number: entry.number,
-                name: ivm::syscalls::syscall_name(entry.number.into()).map(ToOwned::to_owned),
+                name: ivm::syscalls::syscall_name(entry.number).map(ToOwned::to_owned),
                 count: entry.count,
             })
             .collect(),
@@ -772,11 +772,22 @@ fn locate_instruction_box(
         };
         if let Some(block) = state.block_by_height(nonzero_height) {
             let block_ref = block.as_ref();
-            let external_total = block_ref.external_transactions().len();
-            for tx in block_ref.external_transactions().take(external_total) {
-                if tx.hash_as_entrypoint() != target {
+            for (entrypoint_index, entrypoint, _) in block_ref.entrypoint_results() {
+                if entrypoint_index >= block_ref.external_entrypoint_count() {
+                    break;
+                }
+                if entrypoint.hash() != target {
                     continue;
                 }
+                let tx = match entrypoint {
+                    TransactionEntrypoint::External(tx) => tx,
+                    TransactionEntrypoint::SealedReveal(reveal) => {
+                        reveal.signed_transaction().clone()
+                    }
+                    TransactionEntrypoint::SealedCommitment(_)
+                    | TransactionEntrypoint::PrivateKaigi(_)
+                    | TransactionEntrypoint::Time(_) => return Err(not_found()),
+                };
                 let Executable::Instructions(instructions) = tx.instructions() else {
                     return Err(not_found());
                 };

@@ -77,7 +77,7 @@ impl<T> From<T> for MinMaxExt<T> {
 /// fields.
 #[macro_export]
 macro_rules! impl_as_dyn_key {
-    (target: $ty:ident, key: $key:ty, trait: $trait:ident) => {
+    (target: $ty:ty, key: $key:ty, trait: $trait:ident) => {
         /// Trait to key from type
         pub trait $trait {
             /// Extract key

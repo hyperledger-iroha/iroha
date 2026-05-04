@@ -96,7 +96,7 @@ fn syscall_sm3_hash_returns_digest_blob() {
 
 fn run_sm3_with_host<H>(host: H, message: &[u8]) -> Vec<u8>
 where
-    H: ivm::host::IVMHost + Send + 'static,
+    H: ivm::host::IVMHost + Send + Sync + 'static,
 {
     use ivm::IVM;
 
@@ -348,6 +348,61 @@ fn syscall_sm2_verify_success() {
     vm.run().expect("vm run");
 
     assert_eq!(vm.register(10), 1, "SM2 verification should succeed");
+}
+
+#[test]
+fn syscall_sm2_verify_charges_input_bytes() {
+    use ivm::{
+        IVM,
+        host::{DefaultHost, IVMHost},
+    };
+
+    let secret = [0x33u8; 32];
+    let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("construct key");
+    let public = private.public_key();
+    let message = b"ivm-sm2-gas";
+    let signature = private.sign(message);
+    let signature_bytes = signature.to_bytes();
+    let public_key_bytes = public.to_sec1_bytes(false);
+
+    let mut host = DefaultHost::new().with_sm_enabled(true);
+    let mut vm = IVM::new(10_000);
+    let mut offset = 0u64;
+    let p_msg = preload_blob(&mut vm, &mut offset, message);
+    let p_sig = preload_blob(&mut vm, &mut offset, signature_bytes.as_ref());
+    let p_pk = preload_blob(&mut vm, &mut offset, &public_key_bytes);
+    vm.set_register(10, p_msg);
+    vm.set_register(11, p_sig);
+    vm.set_register(12, p_pk);
+    vm.set_register(13, 0);
+
+    let expected_gas =
+        64 + message.len() as u64 + signature_bytes.len() as u64 + public_key_bytes.len() as u64;
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_SM2_VERIFY, &mut vm),
+        Ok(expected_gas)
+    );
+    assert_eq!(vm.register(10), 1);
+
+    let mut bad_sig = signature_bytes.as_ref().to_vec();
+    bad_sig.truncate(Sm2Signature::LENGTH - 1);
+    let mut vm = IVM::new(10_000);
+    let mut offset = 0u64;
+    let p_msg = preload_blob(&mut vm, &mut offset, message);
+    let p_sig = preload_blob(&mut vm, &mut offset, &bad_sig);
+    let p_pk = preload_blob(&mut vm, &mut offset, &public_key_bytes);
+    vm.set_register(10, p_msg);
+    vm.set_register(11, p_sig);
+    vm.set_register(12, p_pk);
+    vm.set_register(13, 0);
+
+    let expected_bad_gas =
+        64 + message.len() as u64 + bad_sig.len() as u64 + public_key_bytes.len() as u64;
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_SM2_VERIFY, &mut vm),
+        Ok(expected_bad_gas)
+    );
+    assert_eq!(vm.register(10), 0);
 }
 
 #[test]
@@ -1164,6 +1219,42 @@ fn wsv_host_sm4_gcm_seal_matches_vector_when_enabled() {
         expected_cipher.as_slice()
     );
     assert_eq!(&payload[expected_cipher.len()..], expected_tag.as_slice());
+}
+
+#[test]
+fn wsv_host_sm4_gcm_seal_returns_byte_counted_gas_when_enabled() {
+    use ivm::{IVM, host::IVMHost};
+
+    let key = [0x11u8; 16];
+    let nonce = [0x22u8; 12];
+    let aad = b"aad";
+    let plaintext = b"plaintext";
+
+    let caller: AccountId = test_caller_account();
+    let mut accounts: HashMap<u64, AccountId> = HashMap::new();
+    accounts.insert(1, caller.clone());
+    let assets: HashMap<u64, AssetDefinitionId> = HashMap::new();
+    let mut host = wsv_host_with_subject_map(caller, accounts, assets).with_sm_enabled(true);
+
+    let mut vm = IVM::new(10_000);
+    let mut offset = 0u64;
+    let p_key = preload_blob(&mut vm, &mut offset, &key);
+    let p_nonce = preload_blob(&mut vm, &mut offset, &nonce);
+    let p_aad = preload_blob(&mut vm, &mut offset, aad);
+    let p_pt = preload_blob(&mut vm, &mut offset, plaintext);
+
+    vm.set_register(10, p_key);
+    vm.set_register(11, p_nonce);
+    vm.set_register(12, p_aad);
+    vm.set_register(13, p_pt);
+
+    assert_eq!(
+        IVMHost::syscall(&mut host, ivm::syscalls::SYSCALL_SM4_GCM_SEAL, &mut vm),
+        Ok(64 + u64::try_from(aad.len() + plaintext.len()).expect("test length"))
+    );
+    let out = vm.memory.validate_tlv(vm.register(10)).expect("sealed tlv");
+    assert_eq!(out.type_id, PointerType::Blob);
+    assert_eq!(out.payload.len(), plaintext.len() + 16);
 }
 
 #[test]

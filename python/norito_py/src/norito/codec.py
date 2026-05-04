@@ -38,7 +38,6 @@ E = TypeVar("E")
 
 _decode_flags_stack: List[int] = []
 _decode_flags_hint_stack: List[int] = []
-_last_encode_flags: Optional[int] = None
 _decode_root_stack: List[bytes] = []
 _decode_context_stack: List[Tuple[int, int]] = []
 
@@ -636,18 +635,6 @@ def _apply_adaptive_flags(flags: int, payload_len: int) -> int:
     return flags
 
 
-def _record_encode_flags(flags: Optional[int]) -> None:
-    global _last_encode_flags
-    _last_encode_flags = flags if flags is None else flags & 0xFF
-
-
-def take_last_encode_flags() -> Optional[int]:
-    global _last_encode_flags
-    value = _last_encode_flags
-    _last_encode_flags = None
-    return value
-
-
 def encode(
     value: Any,
     schema: SchemaDescriptor,
@@ -697,7 +684,6 @@ def encode(
         compression=compression_byte,
     )
     encoded = norito_header.encode() + payload_bytes
-    _record_encode_flags(flags)
     return encoded
 
 
@@ -710,7 +696,6 @@ def encode_adaptive(value: Any, adapter: TypeAdapter[Any], *, flags: int = DEFAU
         encoder = NoritoEncoder(final_flags)
         adapter.encode(encoder, value)
         payload = encoder.finish()
-    _record_encode_flags(final_flags)
     return payload
 
 
@@ -718,9 +703,7 @@ def encode_with_header_flags(
     value: Any, adapter: TypeAdapter[Any], *, flags: int = DEFAULT_FLAGS
 ) -> Tuple[bytes, int]:
     payload = encode_adaptive(value, adapter, flags=flags)
-    final_flags = take_last_encode_flags()
-    if final_flags is None:
-        raise RuntimeError("encode_adaptive did not record layout flags")
+    final_flags = _apply_adaptive_flags(flags, len(payload))
     return payload, final_flags
 
 
@@ -756,7 +739,6 @@ class DecodeFlagsGuard:
 def reset_decode_state() -> None:
     _decode_flags_stack.clear()
     _decode_flags_hint_stack.clear()
-    _record_encode_flags(None)
     _decode_root_stack.clear()
     _decode_context_stack.clear()
 
@@ -982,6 +964,5 @@ __all__ = [
     "StructField",
     "DecodeFlagsGuard",
     "reset_decode_state",
-    "take_last_encode_flags",
     "DEFAULT_FLAGS",
 ]

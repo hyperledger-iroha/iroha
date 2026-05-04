@@ -17,6 +17,9 @@ mod axt_binding;
 mod backend;
 mod batch;
 mod bn254;
+mod bn254_poseidon;
+#[cfg(feature = "fastpq-gpu")]
+mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
 mod error;
@@ -43,8 +46,10 @@ mod gpu;
 mod fft;
 
 pub use axt_binding::{
-    AXT_FASTPQ_BINDING_METADATA_KEY, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER,
-    batch_manifest_sha256, build_batch_from_binding, canonicalize_binding,
+    AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY, AxtFastpqProofPayload,
+    AxtVerifiedProof, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, batch_manifest_sha256,
+    bind_axt_batch, canonicalize_binding, encode_axt_fastpq_payload, transition_batch_from_model,
+    transition_batch_to_model, verify_axt_proof_envelope,
 };
 pub use backend::{
     Backend, BackendConfig, ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
@@ -55,6 +60,10 @@ pub use backend::{
     compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
 };
 pub use batch::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
+pub use bn254_poseidon::{
+    Bn254PoseidonBatchSlice, PendingBn254PoseidonWordBatch, preflight_bn254_poseidon_word_batches,
+    try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
+};
 pub use digest::trace_commitment;
 pub use error::{Error, Result};
 pub use fastpq_cuda::{
@@ -77,6 +86,8 @@ pub use metal_config::{FftTuning, PoseidonTuning};
 pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
 pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
+#[cfg(feature = "fastpq-gpu")]
+pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
 pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use trace::{

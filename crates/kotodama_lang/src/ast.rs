@@ -91,7 +91,7 @@ pub enum ContractFeature {
 pub struct ContractMeta {
     /// ABI version to encode into the IVM header.
     pub abi_version: Option<u8>,
-    /// Vector length hint to encode in the IVM header (0 = max).
+    /// Vector length hint to encode in the IVM header; 0 selects the runtime default.
     pub vector_length: Option<u8>,
     /// Maximum cycles to encode in the IVM header (0 = none).
     pub max_cycles: Option<u64>,

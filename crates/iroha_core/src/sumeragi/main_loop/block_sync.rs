@@ -21,6 +21,50 @@ fn allow_uncertified_block_sync_roster(
     requested_missing_block || block_height == local_height.saturating_add(1)
 }
 
+pub(super) fn block_sync_qc_aggregate_fallback_ok(
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+) -> bool {
+    if qc.phase != crate::sumeragi::consensus::Phase::Commit {
+        return false;
+    }
+    if qc.highest_qc.is_some() {
+        return false;
+    }
+    if !super::qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
+        return false;
+    }
+    let roster_len = topology.as_ref().len();
+    let Ok(parsed) = super::qc_signer_indices(qc, roster_len, roster_len) else {
+        return false;
+    };
+    match consensus_mode {
+        ConsensusMode::Permissioned => {
+            parsed.voting.len() >= topology.min_votes_for_commit().max(1)
+        }
+        ConsensusMode::Npos => {
+            let Some(snapshot) = stake_snapshot else {
+                return false;
+            };
+            let Ok(signer_peers) = super::signer_peers_for_topology(&parsed.voting, topology)
+            else {
+                return false;
+            };
+            super::stake_snapshot::stake_quorum_reached_for_snapshot(
+                snapshot,
+                topology.as_ref(),
+                &signer_peers,
+            )
+            .unwrap_or(false)
+        }
+    }
+}
+
 impl Actor {
     fn should_defer_canonical_committed_fetch_response(
         &self,
@@ -3227,73 +3271,24 @@ impl Actor {
         let qc_fallback_ms = if incoming_qc.is_none() && had_incoming_qc {
             let qc_fallback_start = Instant::now();
             if let Some(qc) = original_candidate_qc {
-                let aggregate_ok = super::qc_aggregate_consistent(
+                if block_sync_qc_aggregate_fallback_ok(
                     &qc,
                     &topology,
                     &self.roster_validation_cache.pops,
                     &self.common_config.chain,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
                     mode_tag,
-                );
-                if aggregate_ok {
-                    let stake_quorum_ok = match consensus_mode {
-                        ConsensusMode::Permissioned => true,
-                        ConsensusMode::Npos => {
-                            let mut ok = false;
-                            if let Some(snapshot) = stake_snapshot.as_ref() {
-                                let roster_len = topology.as_ref().len();
-                                match super::qc_signer_indices(&qc, roster_len, roster_len) {
-                                    Ok(parsed) => match super::signer_peers_for_topology(
-                                        &parsed.voting,
-                                        &topology,
-                                    ) {
-                                        Ok(signer_peers) => {
-                                            ok = super::stake_snapshot::stake_quorum_reached_for_snapshot(
-                                                snapshot,
-                                                topology.as_ref(),
-                                                &signer_peers,
-                                            )
-                                            .unwrap_or(false);
-                                        }
-                                        Err(_) => {
-                                            warn!(
-                                                height = block_height,
-                                                view = block_view,
-                                                block = %block_hash,
-                                                "dropping block sync QC: signer mapping failed"
-                                            );
-                                        }
-                                    },
-                                    Err(_) => {
-                                        warn!(
-                                            height = block_height,
-                                            view = block_view,
-                                            block = %block_hash,
-                                            "dropping block sync QC: invalid signer bitmap"
-                                        );
-                                    }
-                                }
-                            } else {
-                                warn!(
-                                    height = block_height,
-                                    view = block_view,
-                                    block = %block_hash,
-                                    "dropping block sync QC: missing stake snapshot"
-                                );
-                            }
-                            ok
-                        }
-                    };
-                    if stake_quorum_ok {
-                        let qc_signers = qc_signer_count(&qc);
-                        info!(
-                            hash = %block_hash,
-                            height = block_height,
-                            view = block_view,
-                            qc_signers,
-                            "accepting block sync QC validated from aggregate signature despite local validation failure"
-                        );
-                        incoming_qc = Some(qc);
-                    }
+                ) {
+                    let qc_signers = qc_signer_count(&qc);
+                    info!(
+                        hash = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        qc_signers,
+                        "accepting block sync QC validated from aggregate signature despite local validation failure"
+                    );
+                    incoming_qc = Some(qc);
                 }
             }
             u64::try_from(qc_fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX)

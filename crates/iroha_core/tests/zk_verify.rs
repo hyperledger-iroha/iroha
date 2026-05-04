@@ -459,7 +459,7 @@ fn preverify_rejects_proof_too_big() {
 }
 
 #[test]
-fn verifyproof_rejects_via_debug_backend() {
+fn verifyproof_rejects_unsupported_backend() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -470,11 +470,11 @@ fn verifyproof_rejects_via_debug_backend() {
     let mut stx = block.transaction();
     let exec = Executor::default();
 
-    // Inline VK and proof on a debug backend that forces rejection
+    // Inline VK and proof on an unsupported real backend that rejects.
     let attachment = iroha_data_model::proof::ProofAttachment::new_inline(
-        "debug/reject".into(),
-        iroha_data_model::proof::ProofBox::new("debug/reject".into(), vec![0xaa]),
-        iroha_data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![0xbb]),
+        "groth16/bn254".into(),
+        iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0xaa]),
+        iroha_data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![0xbb]),
     );
     let verify: InstructionBox =
         iroha_data_model::isi::zk::VerifyProof::new(attachment.clone()).into();

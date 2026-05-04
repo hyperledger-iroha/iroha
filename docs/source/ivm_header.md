@@ -20,13 +20,13 @@ Mode bits
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
-- `vector_length`: logical vector length for vector ops (0 → unset).
+- `vector_length`: logical vector length for vector ops (0 selects the runtime default).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
 
 Notes
 - Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
 - A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
-- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
+- Hardware acceleration (SIMD/Metal/CUDA) is enabled by default when compiled and available. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation, and backend status only reports parity as OK after policy, hardware detection, and golden self-tests all pass.
 - Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
   calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
   NEON while keeping deterministic fallbacks.
@@ -39,8 +39,12 @@ Durable state helpers and ABI surface
 Validation
 - Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
 - Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- If a `LTLB` literal table is present after the fixed header or `CNTR` section,
+  its post-table padding must be canonical for the section offset: at most three
+  zero bytes, exactly the alignment length implied by the literal header,
+  entries, and data.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
-- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
+- `vector_length` is `0` or `1..=64`; `0` selects the runtime default and the field may be non-zero even if the `VECTOR` bit is not set.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
 ### Policy (generated)
@@ -53,7 +57,7 @@ The following policy summary is generated from the implementation and should not
 | version_minor | 1 |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
+| vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
 ### ABI Hashes (generated)
@@ -62,7 +66,7 @@ The following table is generated from the implementation and lists canonical `ab
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 6e26a7b44f773a856e45e91baa9aebbc975d47bb452f12962cd4b03fecfe27b3 |
+| ABI v1 | 73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d |
 <!-- END GENERATED ABI HASHES -->
 
 - Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.

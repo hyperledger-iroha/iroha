@@ -14,7 +14,7 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 | Magic | 4 | ASCII `NRT0` |
 | Major | 1 | `VERSION_MAJOR = 0` |
 | Minor | 1 | `VERSION_MINOR = 0x00` |
-| Schema hash | 16 | FNV-1a hash of fully qualified type name (v1) |
+| Schema hash | 16 | First 16 bytes of a domain-separated SHA-256 schema digest |
 | Compression | 1 | `0 = None`, `1 = Zstd` |
 | Payload length | 8 | Uncompressed payload length (u64, little-endian) |
 | CRC64 | 8 | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload |
@@ -71,13 +71,62 @@ encoding:
   - If not set: fixed 8-byte little-endian u64.
 - Sequence length headers are fixed 8-byte little-endian u64 in v1.
 - `Vec<u8>` is encoded as a fixed-size sequence: `[len_u64][raw-bytes]` (no per-element
-  length prefixes), regardless of `PACKED_SEQ`. Decoders must also accept the legacy
-  per-element length-prefixed representation for compatibility.
+  length prefixes), regardless of `PACKED_SEQ`. Decoders reject per-element
+  length-prefixed byte vectors.
 - Packed-sequence offsets are always `(len + 1)` u64 offsets, monotonic with the
   first offset 0.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
+
+## Binary Sequence Span Planning
+
+Norito implementations may plan binary sequence payload spans before semantic
+decode. The planner is an internal optimization and does not change the wire
+layout:
+
+- Length-prefixed sequences are planned from `[count_u64][len][payload]...`,
+  honoring the header's `COMPACT_LEN` flag for each element length.
+- Packed sequences are planned from `[count_u64][(count + 1) u64 offsets]`
+  followed by concatenated element payloads. Offsets must start at `0`, be
+  monotonic, and the final offset must fit inside the available payload bytes.
+- The plan returns element byte ranges in original sequence order and the total
+  bytes consumed from the sequence payload. Semantic decode and validation still
+  happen on CPU and must report failures in original index order.
+- Optional Metal/CUDA helpers may compute the spans for large payloads, but
+  helper results are self-tested and validated against the scalar planner before
+  use. An unavailable backend falls back to the scalar planner for that call.
+  Helper errors, malformed span output, or scalar mismatches fall back and
+  disable that helper for the process. GPU-named helper exports report
+  unavailable or backend failure instead of silently substituting CPU work; the
+  Norito caller owns deterministic scalar fallback.
+- Helper use is performance-only: decoded values, rejection class, ordering,
+  hashes, and emitted bytes must remain identical. Native helper waits are
+  bounded before CPU fallback.
+
+## Hardware Acceleration Validation
+
+Norito hardware acceleration is performance-only. Accelerated paths must either
+produce the same semantic result as the scalar path or fall back:
+
+- GPU CRC64 helpers must pass startup self-tests that include large payloads and
+  chunk-boundary sizes. Sampled production calls compare the GPU checksum to the
+  portable CRC64-XZ fallback; any mismatch marks the helper unavailable and the
+  call is recomputed on CPU.
+- CPU SIMD CRC64 candidates are selected only after startup parity checks against
+  the portable fallback. Targets with a broken local SIMD routine use
+  `crc64fast`'s runtime-selected implementation instead.
+- GPU zstd compression is validated by requiring sampled GPU output to be a
+  single zstd frame, decoding it on CPU, and comparing the uncompressed bytes to
+  the original payload. GPU helpers may emit different valid single-frame zstd
+  byte streams from CPU zstd; the canonical Norito payload remains the decoded
+  bytes plus the header `Payload length` and CRC64. A sampled frame-shape or
+  decode mismatch disables the GPU backend and falls back to CPU compression.
+  Consensus-critical code must not hash or sign public Norito compressed bytes
+  unless that callsite fixes its own compression implementation.
+- JSON Stage-1 and binary sequence helper output is validated against scalar
+  results before use so quote/string state, element ranges, and error ordering
+  remain hardware-independent.
 
 ## String Encoding
 
@@ -175,13 +224,14 @@ chosen algorithm is recorded in the header; there is no on-wire negotiation.
 
 ## Schema Hash Details
 
-The 16-byte schema hash is computed as:
+The 16-byte schema hash is computed as the first 16 bytes of SHA-256 over a
+domain prefix followed by canonical schema bytes:
 
-- Default: FNV-1a 64-bit hash of the fully qualified type name (Rust
-  `core::any::type_name::<T>()`), duplicated to fill 16 bytes.
-- With `schema-structural`: canonical JSON schema produced by
-  `iroha_schema::IntoSchema`, serialized with Norito’s JSON writer and hashed
-  with the same FNV-1a routine.
+- Default: `SHA-256("norito:v1:type-name\0" || fully-qualified type name)`.
+  Rust uses `core::any::type_name::<T>()` for the type-name bytes.
+- With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" ||
+  canonical JSON schema)`, where the schema is produced by
+  `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
 
 Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum NoritoCompression: UInt8 { case none = 0 }
 
@@ -7,6 +8,13 @@ public struct NoritoHeader {
     public static let versionMajor: UInt8 = 0
     public static let versionMinor: UInt8 = 0
     public static let encodedLength = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
+    public static let packedSeq: UInt8 = 0x01
+    public static let compactLen: UInt8 = 0x02
+    public static let packedStruct: UInt8 = 0x04
+    public static let varintOffsets: UInt8 = 0x08
+    public static let compactSeqLen: UInt8 = 0x10
+    public static let fieldBitset: UInt8 = 0x20
+    public static let supportedFlags: UInt8 = packedSeq | compactLen | packedStruct | fieldBitset
 
     public let schema: [UInt8] // 16 bytes
     public let compression: NoritoCompression
@@ -15,6 +23,7 @@ public struct NoritoHeader {
     public let flags: UInt8
 
     public func encode() -> Data {
+        precondition(NoritoHeader.isSupported(flags: flags), "Unsupported Norito layout flags")
         var out = Data()
         out.append(NoritoHeader.magic)
         out.append(contentsOf: [NoritoHeader.versionMajor, NoritoHeader.versionMinor])
@@ -25,6 +34,17 @@ public struct NoritoHeader {
         out.append(flags)
         return out
     }
+
+    public static func isSupported(flags: UInt8) -> Bool {
+        if (flags & ~supportedFlags) != 0 {
+            return false
+        }
+        if (flags & fieldBitset) != 0 {
+            let required = packedStruct | compactLen
+            return (flags & required) == required
+        }
+        return true
+    }
 }
 
 struct NoritoFrame {
@@ -33,14 +53,11 @@ struct NoritoFrame {
     let paddingLength: Int
 }
 
-// FNV-1a 64-bit (little-endian duplication to 16 bytes)
+// Domain-separated SHA-256 truncated to 16 bytes.
 public func noritoSchemaHash(forTypeName name: String) -> [UInt8] {
-    let FNV_OFFSET: UInt64 = 0xcbf29ce484222325
-    let FNV_PRIME: UInt64 = 0x100000001b3
-    var hash = FNV_OFFSET
-    for b in name.utf8 { hash ^= UInt64(b); hash = hash &* FNV_PRIME }
-    let part = withUnsafeBytes(of: hash.littleEndian, Array.init)
-    return part + part
+    var input = Data("norito:v1:type-name\u{0000}".utf8)
+    input.append(contentsOf: name.utf8)
+    return Array(SHA256.hash(data: input).prefix(16))
 }
 
 // CRC64 (reflected, init/xor = all-ones) to match Rust crc64fast output.
@@ -105,6 +122,9 @@ func noritoDecodeFrame(_ data: Data) -> NoritoFrame? {
         return nil
     }
     let flags = data[39]
+    guard NoritoHeader.isSupported(flags: flags) else {
+        return nil
+    }
     guard payloadLength <= UInt64(Int.max) else { return nil }
     let payloadLen = Int(payloadLength)
     let payloadStart = data.count - payloadLen

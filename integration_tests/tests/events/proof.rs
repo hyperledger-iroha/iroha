@@ -143,9 +143,9 @@ async fn proof_event_scenarios() -> Result<()> {
         .await?;
 
         let rejected_attachment = iroha::data_model::proof::ProofAttachment::new_inline(
-            "debug/reject".into(),
-            iroha::data_model::proof::ProofBox::new("debug/reject".into(), vec![0xaa]),
-            iroha::data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![0xbb]),
+            "groth16/bn254".into(),
+            iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0xaa]),
+            iroha::data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![0xbb]),
         );
         verify_proof_emits_event(
             &network,

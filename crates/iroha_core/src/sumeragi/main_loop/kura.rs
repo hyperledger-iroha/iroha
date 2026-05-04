@@ -109,7 +109,7 @@ impl Actor {
             telemetry.inc_kura_store_failure("retry");
         }
         let decision = pending.note_kura_failure(now, retry_interval, retry_max_attempts);
-        pending.block = committed_block;
+        pending.set_block(committed_block);
         match decision {
             KuraRetryDecision::Retry {
                 attempt,

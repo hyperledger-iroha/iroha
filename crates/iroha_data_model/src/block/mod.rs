@@ -112,12 +112,17 @@ impl SignedBlock {
         header: BlockHeader,
         transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
+        let external_entrypoints = transactions
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
                 transactions,
-                external_entrypoints: Vec::new(),
+                external_entrypoints,
                 execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
@@ -139,12 +144,17 @@ impl SignedBlock {
         transactions: Vec<SignedTransaction>,
         da_commitments: Option<DaCommitmentBundle>,
     ) -> SignedBlock {
+        let external_entrypoints = transactions
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
                 transactions,
-                external_entrypoints: Vec::new(),
+                external_entrypoints,
                 execution_context: None,
                 da_commitments,
                 da_proof_policies: None,
@@ -222,7 +232,7 @@ impl SignedBlock {
         let axt_policy_snapshot =
             axt_policy_snapshot.map(crate::nexus::AxtPolicySnapshot::with_computed_version);
         self.result = Some(BlockResult {
-            external_entrypoints,
+            external_entrypoints: Vec::new(),
             time_triggers,
             merkle,
             result_merkle,
@@ -269,15 +279,23 @@ impl SignedBlock {
             .find(|(_, hash)| hash == entry_hash)?;
         let idx_u32: u32 = idx.try_into().ok()?;
 
-        let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
-        let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
-
         let external_count = self.external_entrypoint_count();
-        let entry_root = if idx < external_count {
-            self.payload.header.merkle_root?
+        let (entry_root, entry_merkle_proof) = if idx < external_count {
+            let external_merkle: MerkleTree<TransactionEntrypoint> = self
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect();
+            (
+                self.payload.header.merkle_root?,
+                external_merkle.get_proof(idx_u32)?,
+            )
         } else {
-            self.full_entry_merkle_root()?
+            (
+                self.full_entry_merkle_root()?,
+                result_state.merkle.get_proof(idx_u32)?,
+            )
         };
+        let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
 
         let result_root = self.payload.header.result_merkle_root;
         let result_proof = if result_root.is_some() {
@@ -479,7 +497,7 @@ impl SignedBlock {
         };
 
         let result = BlockResult {
-            external_entrypoints,
+            external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             merkle: entry_merkle,
             result_merkle,
@@ -910,9 +928,10 @@ impl fmt::Display for error::BlockRejectionReason {
     }
 }
 
-/// Prefix versioned [`SignedBlock`] bytes with a Norito header using the default
-/// framing flags. The returned buffer contains the original version byte
-/// followed by the framed payload.
+/// Prefix versioned [`SignedBlock`] bytes with a Norito header using the layout
+/// flags recorded by the encoder, falling back to the default framing flags.
+/// The returned buffer contains the original version byte followed by the
+/// framed payload.
 ///
 /// # Errors
 ///
@@ -1053,7 +1072,7 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
             default_encode_flags()
         );
     }
-    let encode_flags = default_encode_flags();
+    let encode_flags = norito::codec::take_last_encode_flags().unwrap_or_else(default_encode_flags);
     #[cfg(debug_assertions)]
     if norito::debug_trace_enabled() {
         eprintln!("write_signed_block_header flags=0x{encode_flags:02x}");
@@ -1117,10 +1136,7 @@ fn validate_signed_block_header(payload: &[u8]) -> Result<(), NoritoFrameError> 
         return Err(NoritoFrameError::ChecksumMismatch);
     }
     let flags = payload[header_size - 1];
-    let expected_flags = default_encode_flags();
-    if flags != expected_flags {
-        return Err(NoritoFrameError::UnsupportedFeature("layout flag"));
-    }
+    norito::core::validate_header_flags(flags)?;
     Ok(())
 }
 
@@ -1170,7 +1186,11 @@ pub fn decode_versioned_signed_block(
     let deframed = deframe_versioned_signed_block_bytes(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
 
-    decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
+    decode_framed_versioned_signed_block_inner(
+        deframed.bytes.as_ref(),
+        deframed.bare_versioned.as_ref(),
+        bytes,
+    )
 }
 
 /// Decode a Norito-framed [`SignedBlock`] payload, validating the header before
@@ -1193,7 +1213,11 @@ pub fn decode_framed_signed_block(
     let deframed = deframe_versioned_signed_block_bytes(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
 
-    decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
+    decode_framed_versioned_signed_block_inner(
+        deframed.bytes.as_ref(),
+        deframed.bare_versioned.as_ref(),
+        bytes,
+    )
 }
 
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
@@ -1208,6 +1232,30 @@ fn decode_versioned_signed_block_inner(
     iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)
 }
 
+fn decode_framed_versioned_signed_block_inner(
+    framed_versioned: &[u8],
+    bare_versioned: &[u8],
+    raw_for_error: &[u8],
+) -> Result<SignedBlock, iroha_version::error::Error> {
+    use iroha_version::{RawVersioned, UnsupportedVersion, error::Error as VersionError};
+
+    let Some((&version, _payload)) = bare_versioned.split_first() else {
+        return Err(VersionError::NotVersioned);
+    };
+
+    if !SignedBlock::supported_versions().contains(&version) {
+        return Err(VersionError::UnsupportedVersion(Box::new(
+            UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
+        )));
+    }
+
+    let framed_payload = framed_versioned
+        .get(1..)
+        .ok_or(VersionError::NotVersioned)?;
+    let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
+    view.decode::<SignedBlock>().map_err(VersionError::from)
+}
+
 pub mod prelude {
     //! For glob-import
     pub use super::{BlockHeader, BlockSignature, SignedBlock, error::BlockRejectionReason};
@@ -1217,29 +1265,32 @@ pub mod prelude {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf, Signature};
+    use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-    use norito::codec::Encode;
+    use norito::codec::{DecodeAll as _, Encode};
 
     use super::*;
+    use crate::consensus::PreviousRosterEvidence;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
     #[cfg(feature = "transparent_api")]
-    use crate::transaction::signed::{TransactionEntrypoint, TransactionResultInner};
+    use crate::transaction::signed::TransactionResultInner;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::DataTriggerSequence;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::TimeTriggerEntrypoint;
     use crate::{
+        ChainId,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
-        nexus::LaneId,
+        nexus::{DataSpaceId, LaneId},
         query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
         sorafs::pin_registry::ManifestDigest,
+        transaction::{TransactionBuilder, signed::TransactionEntrypoint},
     };
 
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
@@ -1264,6 +1315,34 @@ mod tests {
     }
 
     #[test]
+    fn block_payload_ordering_includes_execution_context() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let payload = BlockPayload {
+            header,
+            transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
+            execution_context: None,
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            previous_roster_evidence: None,
+        };
+        let mut with_context = payload.clone();
+        with_context.execution_context = Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                    [0xC7; Hash::LENGTH],
+                )),
+                LaneId::new(1),
+                DataSpaceId::new(2),
+            ),
+        ]));
+
+        assert_ne!(payload, with_context);
+        assert_ne!(payload.cmp(&with_context), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
     fn signed_block_is_empty_without_entrypoints_or_artifacts() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let block = SignedBlock {
@@ -1282,6 +1361,93 @@ mod tests {
         };
 
         assert!(block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_wire_skips_runtime_transaction_caches() {
+        let key_pair = KeyPair::random();
+        let authority = crate::account::AccountId::new(key_pair.public_key().clone());
+        let chain: ChainId = "cache-test-chain".parse().expect("chain id");
+        let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
+        let entrypoint = TransactionEntrypoint::from(tx.clone());
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+
+        let mut block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: vec![tx.clone()],
+                external_entrypoints: vec![entrypoint.clone()],
+                execution_context: None,
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+            },
+            result: Some(BlockResult {
+                external_entrypoints: vec![entrypoint.clone()],
+                ..BlockResult::default()
+            }),
+        };
+        let encoded = block.encode_versioned();
+
+        block.payload.transactions.clear();
+        assert_eq!(
+            encoded,
+            block.encode_versioned(),
+            "legacy signed-transaction cache must not be serialized"
+        );
+
+        block.result.as_mut().unwrap().external_entrypoints.clear();
+        assert_eq!(
+            encoded,
+            block.encode_versioned(),
+            "legacy result entrypoint cache must not be serialized"
+        );
+
+        let decoded = SignedBlock::decode_all_versioned(&encoded).expect("decode versioned block");
+        assert!(decoded.transactions_vec().is_empty());
+        assert_eq!(
+            decoded.external_entrypoints_cloned().collect::<Vec<_>>(),
+            vec![entrypoint]
+        );
+        assert_eq!(decoded.external_transactions().next(), Some(&tx));
+    }
+
+    #[test]
+    fn block_payload_decodes_legacy_payload_without_execution_context() {
+        #[derive(norito::codec::Encode)]
+        struct LegacyBlockPayload {
+            header: BlockHeader,
+            external_entrypoints: Vec<TransactionEntrypoint>,
+            da_commitments: Option<DaCommitmentBundle>,
+            da_proof_policies: Option<DaProofPolicyBundle>,
+            da_pin_intents: Option<DaPinIntentBundle>,
+            previous_roster_evidence: Option<PreviousRosterEvidence>,
+        }
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
+        let legacy = LegacyBlockPayload {
+            header,
+            external_entrypoints: Vec::new(),
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            previous_roster_evidence: None,
+        };
+        let bytes = legacy.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded =
+            BlockPayload::decode_all(&mut cursor).expect("decode legacy BlockPayload payload");
+
+        assert_eq!(decoded.header, header);
+        assert!(decoded.transactions.is_empty());
+        assert!(decoded.external_entrypoints.is_empty());
+        assert_eq!(decoded.execution_context, None);
+        assert_eq!(decoded.da_commitments, None);
+        assert_eq!(decoded.da_proof_policies, None);
+        assert_eq!(decoded.da_pin_intents, None);
+        assert_eq!(decoded.previous_roster_evidence, None);
     }
 
     #[test]
@@ -1568,8 +1734,8 @@ mod tests {
 
         for decoded in [&decoded_versioned, &decoded_framed] {
             let tx = decoded
-                .transactions_vec()
-                .first()
+                .external_transactions()
+                .next()
                 .expect("block must contain one transaction");
             let Executable::Instructions(actual) = tx.instructions() else {
                 panic!("expected instruction executable after block roundtrip");
@@ -1889,7 +2055,7 @@ mod tests {
     }
 
     #[test]
-    fn framed_signed_block_uses_default_flags() {
+    fn framed_signed_block_preserves_recorded_layout_flags() {
         use nonzero_ext::nonzero;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -1908,12 +2074,15 @@ mod tests {
             result: None,
         };
 
-        let versioned = block.encode_versioned();
+        let (payload, expected_flags) = norito::codec::encode_with_header_flags(&block);
+        let mut versioned = Vec::with_capacity(1 + payload.len());
+        versioned.push(block.version());
+        versioned.extend_from_slice(&payload);
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame payload");
 
         let header_size = norito::core::Header::SIZE;
         let flags = framed[1 + header_size - 1];
-        assert_eq!(flags, norito::core::default_encode_flags());
+        assert_eq!(flags, expected_flags);
     }
 
     #[test]
@@ -2214,8 +2383,8 @@ mod tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: crate::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: crate::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0xAA; Hash::LENGTH]);
         let transcript = TransferTranscript {
@@ -2286,8 +2455,8 @@ mod tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: crate::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: crate::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0xBB; Hash::LENGTH]);
         let transcript = TransferTranscript {
@@ -2496,6 +2665,72 @@ mod tests {
         let result_proof = proofs.result_proof.expect("result proof");
         assert!(result_proof.verify(&result_root));
         assert_eq!(result_root, expected_result_root);
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn proofs_for_external_entry_with_time_trigger_use_consensus_root() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_primitives::const_vec::ConstVec;
+
+        use crate::{
+            ChainId,
+            account::AccountId,
+            transaction::{
+                ExecutionStep,
+                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
+            },
+            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+        };
+
+        let keypair = KeyPair::random();
+        let chain: ChainId = "external-proof-block".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+
+        let tx =
+            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let time_trigger = TimeTriggerEntrypoint {
+            id: "cleanup".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority,
+        };
+
+        let external_hash = tx.hash_as_entrypoint();
+        let time_hash = time_trigger.hash_as_entrypoint();
+        let entry_hashes = vec![external_hash, time_hash];
+        let results_inner = vec![
+            TransactionResultInner::Ok(DataTriggerSequence::default()),
+            TransactionResultInner::Ok(DataTriggerSequence::default()),
+        ];
+        let expected_result_root = {
+            let result_hashes = results_inner.iter().map(TransactionResult::hash_from_inner);
+            let tree: MerkleTree<TransactionResult> = result_hashes.collect();
+            tree.root().expect("result root")
+        };
+
+        let header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block.set_transaction_results(vec![time_trigger], &entry_hashes, results_inner);
+
+        let proofs = block
+            .proofs_for_entry_hash(&external_hash)
+            .expect("external proof exists");
+        let consensus_root = block.header().merkle_root().expect("consensus root");
+        let full_root = block.full_entry_merkle_root().expect("full root");
+        assert_ne!(consensus_root, full_root);
+        assert_eq!(proofs.entry_root, consensus_root);
+        assert!(proofs.entry_proof.verify(&proofs.entry_root));
+
+        let result_root = proofs.result_root.expect("result root");
+        assert_eq!(result_root, expected_result_root);
+        let result_proof = proofs.result_proof.expect("result proof");
+        assert!(result_proof.verify(&result_root));
     }
 
     #[cfg(feature = "transparent_api")]

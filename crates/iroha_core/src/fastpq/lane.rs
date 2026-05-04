@@ -8,29 +8,43 @@ use std::{
 
 use fastpq_prover::{
     ExecutionMode as ProverExecutionMode, MetalOverrides,
-    PoseidonExecutionMode as ProverPoseidonMode, Prover, apply_metal_overrides,
+    PoseidonExecutionMode as ProverPoseidonMode, Prover, TransitionBatch, apply_metal_overrides,
     set_metal_queue_policy,
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
-#[cfg(test)]
-use iroha_crypto::Hash;
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, consensus::ExecWitness};
 use iroha_logger::{debug, info, warn};
 use tokio::sync::mpsc;
 
 use crate::fastpq::{
-    ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, batches_from_exec_witness,
+    ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
+    TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
 };
 
 /// Handle used to submit FASTPQ prover jobs.
 #[derive(Clone)]
-pub struct FastpqLaneHandle(mpsc::Sender<FastpqWitnessJob>);
+pub struct FastpqLaneHandle {
+    tx: mpsc::Sender<FastpqWitnessJob>,
+    backpressure: Option<crate::queue::BackpressureHandle>,
+}
 
 impl FastpqLaneHandle {
     /// Submit a prover job to the lane.
     pub fn submit(&self, job: FastpqWitnessJob) -> bool {
-        self.0.try_send(job).is_ok()
+        if self
+            .backpressure
+            .as_ref()
+            .is_some_and(|handle| handle.snapshot().is_saturated())
+        {
+            debug!(
+                height = job.height,
+                view = job.view,
+                "fastpq lane: deferring background prover job while queue is saturated"
+            );
+            return false;
+        }
+        self.tx.try_send(job).is_ok()
     }
 }
 
@@ -45,6 +59,17 @@ pub struct FastpqWitnessJob {
     pub view: u64,
     /// Execution witness carrying FASTPQ transcripts/batches.
     pub witness: ExecWitness,
+    /// Local-only batch construction context captured outside the witness wire payload.
+    pub(crate) context: FastpqWitnessContext,
+}
+
+/// Proof bytes and digest produced by the FASTPQ lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FastpqProofOutput {
+    /// Norito-encoded FASTPQ proof payload.
+    pub proof_bytes: Vec<u8>,
+    /// Stable digest of `proof_bytes` for relay metadata and telemetry.
+    pub proof_digest: Hash,
 }
 
 /// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
@@ -53,7 +78,10 @@ pub trait FastpqProofEngine: Send + Sync + 'static {
     ///
     /// # Errors
     /// Returns an error when the prover backend fails to generate a proof.
-    fn prove(&self, batch: &fastpq_prover::TransitionBatch) -> fastpq_prover::Result<()>;
+    fn prove(
+        &self,
+        batch: &fastpq_prover::TransitionBatch,
+    ) -> fastpq_prover::Result<FastpqProofOutput>;
 }
 
 struct RealProofEngine {
@@ -61,8 +89,17 @@ struct RealProofEngine {
 }
 
 impl FastpqProofEngine for RealProofEngine {
-    fn prove(&self, batch: &fastpq_prover::TransitionBatch) -> fastpq_prover::Result<()> {
-        self.prover.prove(batch).map(|_| ())
+    fn prove(
+        &self,
+        batch: &fastpq_prover::TransitionBatch,
+    ) -> fastpq_prover::Result<FastpqProofOutput> {
+        let proof = self.prover.prove(batch)?;
+        let proof_bytes = norito::to_bytes(&proof)?;
+        let proof_digest = Hash::new(&proof_bytes);
+        Ok(FastpqProofOutput {
+            proof_bytes,
+            proof_digest,
+        })
     }
 }
 
@@ -73,6 +110,15 @@ static TEST_ENGINE: OnceLock<Arc<dyn FastpqProofEngine>> = OnceLock::new();
 
 /// Start the FASTPQ prover lane. Returns the handle and the spawned task when successful.
 pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
+    start_with_backpressure(cfg, None)
+}
+
+/// Start the FASTPQ prover lane with an optional queue backpressure observer.
+pub fn start_with_backpressure(
+    cfg: &Fastpq,
+    backpressure: Option<crate::queue::BackpressureHandle>,
+) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
+    crate::fastpq::configure_poseidon_digest_acceleration(cfg);
     if let Some(existing) = GLOBAL_SENDER.get() {
         return Some((existing.clone(), tokio::spawn(async {})));
     }
@@ -83,7 +129,10 @@ pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<
         return None;
     };
     let (tx, mut rx) = mpsc::channel::<FastpqWitnessJob>(32);
-    let handle = FastpqLaneHandle(tx.clone());
+    let handle = FastpqLaneHandle {
+        tx: tx.clone(),
+        backpressure,
+    };
     if GLOBAL_SENDER.set(handle.clone()).is_err() {
         return Some((GLOBAL_SENDER.get().unwrap().clone(), tokio::spawn(async {})));
     }
@@ -119,6 +168,10 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     }
     let mode = map_execution_mode(cfg.execution_mode);
     let poseidon_mode = map_poseidon_mode(cfg.poseidon_mode);
+    #[cfg(feature = "fastpq-gpu")]
+    if should_preflight_poseidon(mode, poseidon_mode) {
+        let _ = fastpq_prover::preflight_poseidon_gpu_backend();
+    }
     match Prover::canonical_with_modes(FASTPQ_CANONICAL_PARAMETER_SET, mode, poseidon_mode) {
         Ok(prover) => Some(Arc::new(RealProofEngine { prover })),
         Err(err) => {
@@ -154,6 +207,13 @@ fn map_poseidon_mode(mode: FastpqPoseidonMode) -> ProverPoseidonMode {
     }
 }
 
+#[cfg(feature = "fastpq-gpu")]
+fn should_preflight_poseidon(mode: ProverExecutionMode, poseidon_mode: ProverPoseidonMode) -> bool {
+    matches!(poseidon_mode, ProverPoseidonMode::Gpu)
+        || (matches!(poseidon_mode, ProverPoseidonMode::Auto)
+            && !matches!(mode, ProverExecutionMode::Cpu))
+}
+
 fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
     if job.witness.fastpq_transcripts.is_empty() && job.witness.fastpq_batches.is_empty() {
         debug!(
@@ -163,7 +223,7 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
         );
         return;
     }
-    let batches = match batches_from_exec_witness(&job.witness) {
+    let batches = match batches_for_job(job) {
         Ok(batches) => batches,
         Err(err) => {
             warn!(
@@ -193,13 +253,15 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
         transition_count = transition_count.saturating_add(batch.transitions.len());
         let started = Instant::now();
         match engine.prove(&batch) {
-            Ok(()) => {
+            Ok(output) => {
                 proved = proved.saturating_add(1);
                 debug!(
                     height = job.height,
                     view = job.view,
                     entry_hash,
                     transitions = batch.transitions.len(),
+                    proof_bytes = output.proof_bytes.len(),
+                    proof_digest = ?output.proof_digest,
                     elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
                     "fastpq lane: generated proof"
                 );
@@ -253,6 +315,8 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
@@ -315,6 +379,7 @@ mod tests {
             height: 42,
             view: 7,
             witness,
+            context: FastpqWitnessContext::default(),
         };
         assert!(try_submit(job));
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -330,16 +395,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn job_context_builds_batches_for_transcript_only_witness() {
+        let bundle = sample_bundle();
+        let template = FastpqPublicInputsTemplate {
+            dsid: [0u8; 16],
+            slot: 123,
+            old_root: [0x11; 32],
+            new_root: [0x22; 32],
+            perm_root: [0x33; 32],
+        };
+        let tx_set_hash = [0x44; 32];
+        let dsid = [0x55; 16];
+        let mut entry_dataspaces = BTreeMap::new();
+        entry_dataspaces.insert(bundle.entry_hash, dsid);
+        let witness = ExecWitness {
+            reads: Vec::new(),
+            writes: Vec::new(),
+            fastpq_transcripts: vec![bundle],
+            fastpq_batches: Vec::new(),
+        };
+        let job = FastpqWitnessJob {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            height: 42,
+            view: 7,
+            witness,
+            context: FastpqWitnessContext {
+                public_inputs: Some(template),
+                tx_set_hash: Some(tx_set_hash),
+                entry_dataspaces,
+            },
+        };
+
+        let batches = batches_for_job(&job).expect("context builds batches");
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].public_inputs.dsid, dsid);
+        assert_eq!(batches[0].public_inputs.tx_set_hash, tx_set_hash);
+        assert_eq!(batches[0].public_inputs.perm_root, template.perm_root);
+    }
+
     #[derive(Clone)]
     struct MockEngine {
         calls: Arc<std::sync::Mutex<usize>>,
     }
 
     impl FastpqProofEngine for MockEngine {
-        fn prove(&self, batch: &fastpq_prover::TransitionBatch) -> fastpq_prover::Result<()> {
+        fn prove(
+            &self,
+            batch: &fastpq_prover::TransitionBatch,
+        ) -> fastpq_prover::Result<FastpqProofOutput> {
             *self.calls.lock().unwrap() += 1;
             let _ = &batch.parameter;
-            Ok(())
+            let proof_bytes = b"mock-fastpq-proof".to_vec();
+            Ok(FastpqProofOutput {
+                proof_digest: Hash::new(&proof_bytes),
+                proof_bytes,
+            })
         }
     }
 
@@ -360,8 +472,8 @@ mod tests {
                     from_balance_after: Numeric::from(90u32),
                     to_balance_before: Numeric::from(5u32),
                     to_balance_after: Numeric::from(15u32),
-                    from_merkle_proof: None,
-                    to_merkle_proof: None,
+                    from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+                    to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
                 }],
                 authority_digest: authority_digest(&ALICE_ID),
                 poseidon_preimage_digest: None,
@@ -393,4 +505,41 @@ mod tests {
         assert!(overrides.debug_enum);
         assert!(overrides.debug_fused);
     }
+}
+
+fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
+    match batches_from_exec_witness(&job.witness) {
+        Ok(batches) => return Ok(batches),
+        Err(TranscriptBatchError::MissingFastpqBatches) => {}
+        Err(err) => return Err(err),
+    }
+
+    if job.witness.fastpq_transcripts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some(public_inputs) = job.context.public_inputs else {
+        return Err(TranscriptBatchError::MissingFastpqBatches);
+    };
+    let Some(tx_set_hash) = job.context.tx_set_hash else {
+        return Err(TranscriptBatchError::MissingFastpqBatches);
+    };
+
+    let mut batches = batches_from_bundles(
+        FASTPQ_CANONICAL_PARAMETER_SET,
+        public_inputs,
+        tx_set_hash,
+        job.witness.fastpq_transcripts.iter(),
+    )?;
+    for (bundle, batch) in job
+        .witness
+        .fastpq_transcripts
+        .iter()
+        .zip(batches.iter_mut())
+    {
+        if let Some(dsid) = job.context.entry_dataspaces.get(&bundle.entry_hash) {
+            batch.public_inputs.dsid = *dsid;
+        }
+    }
+    Ok(batches)
 }

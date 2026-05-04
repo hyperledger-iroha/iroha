@@ -1,7 +1,7 @@
 # Lookup Grand-Product Example
 
 This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
+`fastpq_plan.md`.  In the V1 pipeline the prover evaluates the selector
 (`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
 domain, updates a running grand product `Z_i`, and finally commits the entire
 sequence with Poseidon.  The hashed accumulator is appended to the transcript
@@ -61,6 +61,6 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 ```
 
 The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
+field elements when generating automated tests.  V1 fixtures additionally
 record the Poseidon hash of the running accumulator but keep the same JSON shape,
 so the example can double as a template for future test vectors.

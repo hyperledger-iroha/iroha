@@ -56,6 +56,11 @@ type TriggerContractStoreBlock<'set> = StorageBlock<'set, HashOf<IvmBytecode>, I
 type TriggerContractStoreTransaction<'block, 'set> =
     StorageTransaction<'block, 'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type TriggerContractStoreView<'set> = StorageView<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
+type ActiveTriggerIdStore = Storage<TriggerId, ()>;
+type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
+type ActiveTriggerIdStoreTransaction<'block, 'set> =
+    StorageTransaction<'block, 'set, TriggerId, ()>;
+type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
 
 /// Specialized structure that maps event filters to Triggers.
 // NB: `Set` has custom `Serialize` and `DeserializeSeed` implementations
@@ -72,6 +77,14 @@ pub struct Set {
     by_call_triggers: Storage<TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: Storage<TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStore,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStore,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStore,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStore,
     /// [`IvmBytecode`]s map by contract blob hash.
     /// This map serves multiple purposes:
     /// 1. Querying original contract blob of trigger
@@ -79,7 +92,18 @@ pub struct Set {
     contracts: TriggerContractStore,
 }
 
-impl Set {}
+impl Set {
+    fn collect_active_ids<F: mv::Value>(
+        triggers: &Storage<TriggerId, LoadedAction<F>>,
+    ) -> ActiveTriggerIdStore {
+        triggers
+            .view()
+            .iter()
+            .filter(|(_, action)| !action.repeats.is_depleted())
+            .map(|(id, _)| (id.clone(), ()))
+            .collect()
+    }
+}
 
 impl json::JsonDeserialize for Set {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -134,6 +158,10 @@ impl json::JsonDeserialize for Set {
             by_call_triggers.ok_or_else(|| json::MapVisitor::missing_field("by_call_triggers"))?;
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
+        let active_data_trigger_ids = Self::collect_active_ids(&data_triggers);
+        let active_pipeline_trigger_ids = Self::collect_active_ids(&pipeline_triggers);
+        let active_time_trigger_ids = Self::collect_active_ids(&time_triggers);
+        let active_by_call_trigger_ids = Self::collect_active_ids(&by_call_triggers);
 
         Ok(Self {
             data_triggers,
@@ -141,6 +169,10 @@ impl json::JsonDeserialize for Set {
             time_triggers,
             by_call_triggers,
             ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
             contracts,
         })
     }
@@ -195,6 +227,14 @@ pub struct SetBlock<'set> {
     by_call_triggers: StorageBlock<'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: StorageBlock<'set, TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreBlock<'set>,
 }
@@ -213,6 +253,14 @@ pub struct SetTransaction<'block, 'set> {
         StorageTransaction<'block, 'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: StorageTransaction<'block, 'set, TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreTransaction<'block, 'set>,
 }
@@ -229,6 +277,14 @@ pub struct SetView<'set> {
     by_call_triggers: StorageView<'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: StorageView<'set, TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStoreView<'set>,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreView<'set>,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStoreView<'set>,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStoreView<'set>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreView<'set>,
 }
@@ -397,6 +453,14 @@ pub trait SetReadOnly {
     ) -> &impl StorageReadOnly<TriggerId, LoadedAction<ExecuteTriggerEventFilter>>;
     /// Trigger type registry.
     fn ids(&self) -> &impl StorageReadOnly<TriggerId, TriggeringEventType>;
+    /// Active data trigger id registry.
+    fn active_data_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
+    /// Active pipeline trigger id registry.
+    fn active_pipeline_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
+    /// Active time trigger id registry.
+    fn active_time_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
+    /// Active by-call trigger id registry.
+    fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
     /// Mapping from code hash to bytecode entry.
     fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry>;
 
@@ -456,30 +520,14 @@ pub trait SetReadOnly {
         self.ids().iter().map(|(trigger_id, _)| trigger_id)
     }
 
-    /// Iterate active trigger ids directly from the typed trigger stores.
+    /// Iterate active trigger ids from id-only registries maintained on writes.
     fn active_trigger_ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
-        self.data_triggers()
+        self.active_data_trigger_ids()
             .iter()
-            .filter(|(_, action)| !action.repeats().is_depleted())
             .map(|(id, _)| id)
-            .chain(
-                self.pipeline_triggers()
-                    .iter()
-                    .filter(|(_, action)| !action.repeats().is_depleted())
-                    .map(|(id, _)| id),
-            )
-            .chain(
-                self.time_triggers()
-                    .iter()
-                    .filter(|(_, action)| !action.repeats().is_depleted())
-                    .map(|(id, _)| id),
-            )
-            .chain(
-                self.by_call_triggers()
-                    .iter()
-                    .filter(|(_, action)| !action.repeats().is_depleted())
-                    .map(|(id, _)| id),
-            )
+            .chain(self.active_pipeline_trigger_ids().iter().map(|(id, _)| id))
+            .chain(self.active_time_trigger_ids().iter().map(|(id, _)| id))
+            .chain(self.active_by_call_trigger_ids().iter().map(|(id, _)| id))
     }
 
     /// Iterate triggers directly from the typed trigger stores.
@@ -734,6 +782,18 @@ macro_rules! impl_set_ro {
             fn ids(&self) -> &impl StorageReadOnly<TriggerId, TriggeringEventType> {
                 &self.ids
             }
+            fn active_data_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_data_trigger_ids
+            }
+            fn active_pipeline_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_pipeline_trigger_ids
+            }
+            fn active_time_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_time_trigger_ids
+            }
+            fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_by_call_trigger_ids
+            }
             fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry> {
                 &self.contracts
             }
@@ -754,6 +814,10 @@ impl Set {
             time_triggers: self.time_triggers.block(),
             by_call_triggers: self.by_call_triggers.block(),
             ids: self.ids.block(),
+            active_data_trigger_ids: self.active_data_trigger_ids.block(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.block(),
+            active_time_trigger_ids: self.active_time_trigger_ids.block(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.block(),
             contracts: self.contracts.block(),
         }
     }
@@ -766,6 +830,10 @@ impl Set {
             time_triggers: self.time_triggers.block_and_revert(),
             by_call_triggers: self.by_call_triggers.block_and_revert(),
             ids: self.ids.block_and_revert(),
+            active_data_trigger_ids: self.active_data_trigger_ids.block_and_revert(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.block_and_revert(),
+            active_time_trigger_ids: self.active_time_trigger_ids.block_and_revert(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.block_and_revert(),
             contracts: self.contracts.block_and_revert(),
         }
     }
@@ -778,6 +846,10 @@ impl Set {
             time_triggers: self.time_triggers.view(),
             by_call_triggers: self.by_call_triggers.view(),
             ids: self.ids.view(),
+            active_data_trigger_ids: self.active_data_trigger_ids.view(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.view(),
+            active_time_trigger_ids: self.active_time_trigger_ids.view(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.view(),
             contracts: self.contracts.view(),
         }
     }
@@ -803,6 +875,10 @@ impl<'set> SetBlock<'set> {
             time_triggers: self.time_triggers.transaction(),
             by_call_triggers: self.by_call_triggers.transaction(),
             ids: self.ids.transaction(),
+            active_data_trigger_ids: self.active_data_trigger_ids.transaction(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.transaction(),
+            active_time_trigger_ids: self.active_time_trigger_ids.transaction(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.transaction(),
             contracts: self.contracts.transaction(),
         }
     }
@@ -811,6 +887,10 @@ impl<'set> SetBlock<'set> {
     pub fn commit(self) {
         // NOTE: commit in reverse order
         self.contracts.commit();
+        self.active_by_call_trigger_ids.commit();
+        self.active_time_trigger_ids.commit();
+        self.active_pipeline_trigger_ids.commit();
+        self.active_data_trigger_ids.commit();
         self.ids.commit();
         self.by_call_triggers.commit();
         self.time_triggers.commit();
@@ -841,10 +921,48 @@ impl TriggeringEventFilter for TimeEventFilter {}
 impl TriggeringEventFilter for ExecuteTriggerEventFilter {}
 
 impl<'block, 'set> SetTransaction<'block, 'set> {
+    fn set_active_id(
+        active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
+        id: &TriggerId,
+        active: bool,
+    ) {
+        if active {
+            active_ids.insert(id.clone(), ());
+        } else {
+            active_ids.remove(id.clone());
+        }
+    }
+
+    fn set_active_id_by_event_type(
+        &mut self,
+        event_type: TriggeringEventType,
+        id: &TriggerId,
+        active: bool,
+    ) {
+        match event_type {
+            TriggeringEventType::Data => {
+                Self::set_active_id(&mut self.active_data_trigger_ids, id, active);
+            }
+            TriggeringEventType::Pipeline => {
+                Self::set_active_id(&mut self.active_pipeline_trigger_ids, id, active);
+            }
+            TriggeringEventType::Time => {
+                Self::set_active_id(&mut self.active_time_trigger_ids, id, active);
+            }
+            TriggeringEventType::ExecuteTrigger => {
+                Self::set_active_id(&mut self.active_by_call_trigger_ids, id, active);
+            }
+        }
+    }
+
     /// Apply transaction's changes
     pub fn apply(self) {
         // NOTE: apply in reverse order
         self.contracts.apply();
+        self.active_by_call_trigger_ids.apply();
+        self.active_time_trigger_ids.apply();
+        self.active_pipeline_trigger_ids.apply();
+        self.active_data_trigger_ids.apply();
         self.ids.apply();
         self.by_call_triggers.apply();
         self.time_triggers.apply();
@@ -989,6 +1107,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         if self.ids.get(&trigger_id).is_some() {
             return false;
         }
+        let active = !repeats.is_depleted();
 
         let loaded_executable = match executable {
             Executable::Ivm(bytes) => {
@@ -1045,7 +1164,8 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 metadata,
             },
         );
-        self.ids.insert(trigger_id, event_type);
+        self.ids.insert(trigger_id.clone(), event_type);
+        self.set_active_id_by_event_type(event_type, &trigger_id, active);
         true
     }
 
@@ -1058,16 +1178,32 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     {
         let event_type = self.ids.get(id).copied()?;
 
+        let mut active = None;
         let result = match event_type {
-            TriggeringEventType::Data => self.data_triggers.get_mut(id).map(|entry| f(entry)),
-            TriggeringEventType::Pipeline => {
-                self.pipeline_triggers.get_mut(id).map(|entry| f(entry))
-            }
-            TriggeringEventType::Time => self.time_triggers.get_mut(id).map(|entry| f(entry)),
-            TriggeringEventType::ExecuteTrigger => {
-                self.by_call_triggers.get_mut(id).map(|entry| f(entry))
-            }
+            TriggeringEventType::Data => self.data_triggers.get_mut(id).map(|entry| {
+                let result = f(entry);
+                active = Some(!entry.repeats().is_depleted());
+                result
+            }),
+            TriggeringEventType::Pipeline => self.pipeline_triggers.get_mut(id).map(|entry| {
+                let result = f(entry);
+                active = Some(!entry.repeats().is_depleted());
+                result
+            }),
+            TriggeringEventType::Time => self.time_triggers.get_mut(id).map(|entry| {
+                let result = f(entry);
+                active = Some(!entry.repeats().is_depleted());
+                result
+            }),
+            TriggeringEventType::ExecuteTrigger => self.by_call_triggers.get_mut(id).map(|entry| {
+                let result = f(entry);
+                active = Some(!entry.repeats().is_depleted());
+                result
+            }),
         };
+        if let Some(active) = active {
+            self.set_active_id_by_event_type(event_type, id, active);
+        }
         if result.is_none() {
             warn!(
                 trigger_id = %id,
@@ -1086,6 +1222,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         let Some(event_type) = self.ids.remove(id.clone()) else {
             return false;
         };
+        self.set_active_id_by_event_type(event_type, id, false);
 
         let removed = match event_type {
             TriggeringEventType::Data => {
@@ -1201,13 +1338,41 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             time_triggers,
             by_call_triggers,
             ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
             contracts,
             ..
         } = self;
-        Self::remove_zeros(&mut removed, ids, contracts, data_triggers);
-        Self::remove_zeros(&mut removed, ids, contracts, pipeline_triggers);
-        Self::remove_zeros(&mut removed, ids, contracts, time_triggers);
-        Self::remove_zeros(&mut removed, ids, contracts, by_call_triggers);
+        Self::remove_zeros(
+            &mut removed,
+            ids,
+            active_data_trigger_ids,
+            contracts,
+            data_triggers,
+        );
+        Self::remove_zeros(
+            &mut removed,
+            ids,
+            active_pipeline_trigger_ids,
+            contracts,
+            pipeline_triggers,
+        );
+        Self::remove_zeros(
+            &mut removed,
+            ids,
+            active_time_trigger_ids,
+            contracts,
+            time_triggers,
+        );
+        Self::remove_zeros(
+            &mut removed,
+            ids,
+            active_by_call_trigger_ids,
+            contracts,
+            by_call_triggers,
+        );
 
         removed
     }
@@ -1230,6 +1395,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     fn remove_zeros<F: mv::Value + EventFilter>(
         removed: &mut Vec<TriggerId>,
         ids: &mut StorageTransaction<'block, 'set, TriggerId, TriggeringEventType>,
+        active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
         contracts: &mut TriggerContractStoreTransaction<'block, 'set>,
         triggers: &mut StorageTransaction<'block, 'set, TriggerId, LoadedAction<F>>,
     ) {
@@ -1241,6 +1407,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 
         for id in &to_remove {
             let removed_id = ids.remove(id.clone()).is_some();
+            active_ids.remove(id.clone());
             let removed_trigger = Self::remove_from(contracts, triggers, id.clone());
             if !removed_id || !removed_trigger {
                 warn!(
@@ -1420,6 +1587,77 @@ mod tests {
 
         let found = tx.inspect_by_id_mut(&trigger_id, |_| ());
         assert!(found.is_none(), "missing trigger should return None");
+    }
+
+    #[test]
+    fn active_trigger_id_index_tracks_mutations_and_removal() {
+        let set = Set::default();
+        let trigger_id: TriggerId = "call_active_index".parse().expect("valid trigger id");
+        let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
+        let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
+        let action = SpecializedAction::new(
+            executable,
+            Repeats::Exactly(1),
+            sample_authority(),
+            ExecuteTriggerEventFilter::new(),
+        );
+
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            assert!(
+                tx.add_by_call_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
+                    .expect("add trigger")
+            );
+            tx.apply();
+            block.commit();
+        }
+
+        let view = set.view();
+        let mut active_ids = view.active_trigger_ids_iter().cloned();
+        assert_eq!(active_ids.next(), Some(trigger_id.clone()));
+        assert_eq!(active_ids.next(), None);
+
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            tx.inspect_by_id_mut(&trigger_id, |action| {
+                action.set_repeats(Repeats::Exactly(0));
+            })
+            .expect("trigger present");
+            assert!(
+                tx.active_trigger_ids_iter().all(|id| id != &trigger_id),
+                "depleted trigger should be removed from the active-id index"
+            );
+            tx.apply();
+            block.commit();
+        }
+        assert!(
+            set.view()
+                .active_trigger_ids_iter()
+                .all(|id| id != &trigger_id),
+            "committed view should keep depleted trigger out of the active-id index"
+        );
+
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            tx.inspect_by_id_mut(&trigger_id, |action| {
+                action.set_repeats(Repeats::Exactly(1));
+            })
+            .expect("trigger present");
+            assert!(
+                tx.active_trigger_ids_iter().any(|id| id == &trigger_id),
+                "reactivated trigger should be restored to the active-id index"
+            );
+            assert!(tx.remove(&trigger_id), "trigger should be removed");
+            assert!(
+                tx.active_trigger_ids_iter().all(|id| id != &trigger_id),
+                "removed trigger should be dropped from the active-id index"
+            );
+            tx.apply();
+            block.commit();
+        }
     }
 
     #[test]
@@ -1748,6 +1986,10 @@ impl From<&Set> for SetDto {
             time_triggers: set.time_triggers.view(),
             by_call_triggers: set.by_call_triggers.view(),
             ids: set.ids.view(),
+            active_data_trigger_ids: set.active_data_trigger_ids.view(),
+            active_pipeline_trigger_ids: set.active_pipeline_trigger_ids.view(),
+            active_time_trigger_ids: set.active_time_trigger_ids.view(),
+            active_by_call_trigger_ids: set.active_by_call_trigger_ids.view(),
             contracts: set.contracts.view(),
         };
         let data: Vec<(TriggerId, LoadedActionDto<DataEventFilter>)> = view
@@ -1976,15 +2218,27 @@ impl TryFrom<SetDto> for Set {
             let mut block = set.block();
             let mut tx = block.transaction();
             for (k, v) in data {
+                if !v.repeats.is_depleted() {
+                    tx.active_data_trigger_ids.insert(k.clone(), ());
+                }
                 tx.data_triggers.insert(k, v);
             }
             for (k, v) in pipeline {
+                if !v.repeats.is_depleted() {
+                    tx.active_pipeline_trigger_ids.insert(k.clone(), ());
+                }
                 tx.pipeline_triggers.insert(k, v);
             }
             for (k, v) in time {
+                if !v.repeats.is_depleted() {
+                    tx.active_time_trigger_ids.insert(k.clone(), ());
+                }
                 tx.time_triggers.insert(k, v);
             }
             for (k, v) in by_call {
+                if !v.repeats.is_depleted() {
+                    tx.active_by_call_trigger_ids.insert(k.clone(), ());
+                }
                 tx.by_call_triggers.insert(k, v);
             }
             for (k, v) in ids {
@@ -2103,6 +2357,12 @@ mod dto_tests {
         set
     }
 
+    fn active_trigger_ids(set: &Set) -> Vec<dm::TriggerId> {
+        let mut ids: Vec<_> = set.view().active_trigger_ids_iter().cloned().collect();
+        ids.sort();
+        ids
+    }
+
     fn assert_loaded_action_dto_equivalent<F>(left: &LoadedActionDto<F>, right: &LoadedActionDto<F>)
     where
         F: PartialEq + core::fmt::Debug,
@@ -2187,6 +2447,53 @@ mod dto_tests {
         assert_eq!(dto3.by_call.len(), 1);
         assert_eq!(dto3.ids.len(), 4);
         assert_eq!(dto3.contracts.len(), 1);
+    }
+
+    #[test]
+    fn set_roundtrips_rebuild_active_trigger_ids() {
+        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let active_id: dm::TriggerId = "active_roundtrip".parse().unwrap();
+        let depleted_id: dm::TriggerId = "depleted_roundtrip".parse().unwrap();
+        let set = Set::default();
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            let empty_exec =
+                dm::Executable::Instructions(ConstVec::from(Vec::<dm::InstructionBox>::new()));
+            let active_action = SpecializedAction::new(
+                empty_exec.clone(),
+                dm::Repeats::Exactly(1),
+                authority.clone(),
+                dm::ExecuteTriggerEventFilter::new(),
+            );
+            let depleted_action = SpecializedAction::new(
+                empty_exec,
+                dm::Repeats::Exactly(0),
+                authority,
+                dm::TimeEventFilter(dm::ExecutionTime::PreCommit),
+            );
+
+            tx.add_by_call_trigger(SpecializedTrigger::new(active_id.clone(), active_action))
+                .expect("add active by-call trigger");
+            tx.add_time_trigger(SpecializedTrigger::new(
+                depleted_id.clone(),
+                depleted_action,
+            ))
+            .expect("add depleted time trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        assert_eq!(active_trigger_ids(&set), vec![active_id.clone()]);
+
+        let dto_bytes = SetDto::from(&set).encode().expect("encode set dto");
+        let dto_restored = Set::try_from(SetDto::decode(&dto_bytes).expect("decode set dto"))
+            .expect("restore dto");
+        assert_eq!(active_trigger_ids(&dto_restored), vec![active_id.clone()]);
+
+        let json_repr = json::to_json(&set).expect("serialize set json");
+        let json_restored: Set = json::from_json(&json_repr).expect("restore set json");
+        assert_eq!(active_trigger_ids(&json_restored), vec![active_id]);
     }
 
     #[test]

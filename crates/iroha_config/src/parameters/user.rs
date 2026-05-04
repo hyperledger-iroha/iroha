@@ -168,7 +168,8 @@ fn validate_asset_definition_selector_literal(value: &str) -> core::result::Resu
 fn validate_nexus_fee_asset_selector_literal(value: &str) -> core::result::Result<String, String> {
     let value = validate_asset_definition_selector_literal(value)?;
     let is_xor_selector = value == defaults::nexus::fees::fee_asset_id()
-        || value.eq_ignore_ascii_case("xor#universal");
+        || value.eq_ignore_ascii_case("xor#universal")
+        || value.eq_ignore_ascii_case("xor#universal.universal");
     if !is_xor_selector {
         return Err(
             "Nexus fees must be charged in XOR; use xor#universal or the canonical XOR asset definition id"
@@ -851,6 +852,9 @@ pub enum ParseError {
     /// Concurrency configuration contained invalid values.
     #[error("Invalid concurrency configuration")]
     InvalidConcurrencyConfig,
+    /// Torii configuration contained invalid or incomplete values.
+    #[error("Invalid Torii configuration")]
+    InvalidToriiConfig,
     /// Common address-related configuration contained invalid values.
     #[error("Invalid common configuration")]
     InvalidCommonConfig,
@@ -1030,7 +1034,7 @@ impl Root {
             sorafs_gateway,
             sorafs_por,
         ) = self.sorafs.parse();
-        let (mut torii, live_query_store) = self.torii.parse();
+        let (mut torii, live_query_store) = self.torii.parse(&mut emitter);
         let soracloud_runtime = self.soracloud_runtime.parse();
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = if self.telemetry_enabled {
@@ -4166,48 +4170,12 @@ impl Default for Banner {
 
 /// Norito codec configuration (user view).
 ///
-/// Runtime overrides are ignored by the codec; these values exist to surface
-/// the canonical profile in configuration files. Nodes that require different
-/// heuristics must rebuild Norito with a custom profile.
+/// The Norito wire layout and compression thresholds are canonical for this
+/// release and are not configurable at runtime. This section only contains
+/// operational limits and hardware-offload gates that affect local execution.
 /// User-level configuration container for `Norito`.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Norito {
-    /// Minimum payload size (bytes) to attempt CPU zstd.
-    #[config(
-        env = "NORITO_MIN_COMPRESS_BYTES_CPU",
-        default = "defaults::norito::MIN_COMPRESS_BYTES_CPU"
-    )]
-    pub min_compress_bytes_cpu: usize,
-    /// Minimum payload size (bytes) to attempt GPU zstd when available.
-    #[config(
-        env = "NORITO_MIN_COMPRESS_BYTES_GPU",
-        default = "defaults::norito::MIN_COMPRESS_BYTES_GPU"
-    )]
-    pub min_compress_bytes_gpu: usize,
-    /// zstd level for medium-size payloads.
-    #[config(
-        env = "NORITO_ZSTD_LEVEL_SMALL",
-        default = "defaults::norito::ZSTD_LEVEL_SMALL"
-    )]
-    pub zstd_level_small: i32,
-    /// zstd level for large payloads.
-    #[config(
-        env = "NORITO_ZSTD_LEVEL_LARGE",
-        default = "defaults::norito::ZSTD_LEVEL_LARGE"
-    )]
-    pub zstd_level_large: i32,
-    /// GPU zstd level.
-    #[config(
-        env = "NORITO_ZSTD_LEVEL_GPU",
-        default = "defaults::norito::ZSTD_LEVEL_GPU"
-    )]
-    pub zstd_level_gpu: i32,
-    /// Size threshold distinguishing small vs large for CPU zstd level.
-    #[config(
-        env = "NORITO_LARGE_THRESHOLD",
-        default = "defaults::norito::LARGE_THRESHOLD"
-    )]
-    pub large_threshold: usize,
     /// Allow GPU compression offload when compiled and available.
     #[config(
         env = "NORITO_ALLOW_GPU_COMPRESSION",
@@ -4220,26 +4188,13 @@ pub struct Norito {
         default = "defaults::norito::MAX_ARCHIVE_LEN"
     )]
     pub max_archive_len: u64,
-    /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
-    #[config(
-        env = "NORITO_AOS_NCB_SMALL_N",
-        default = "defaults::norito::AOS_NCB_SMALL_N"
-    )]
-    pub aos_ncb_small_n: usize,
 }
 
 impl Norito {
     fn parse(self) -> actual::Norito {
         actual::Norito {
-            min_compress_bytes_cpu: self.min_compress_bytes_cpu,
-            min_compress_bytes_gpu: self.min_compress_bytes_gpu,
-            zstd_level_small: self.zstd_level_small,
-            zstd_level_large: self.zstd_level_large,
-            zstd_level_gpu: self.zstd_level_gpu,
-            large_threshold: self.large_threshold,
             allow_gpu_compression: self.allow_gpu_compression,
             max_archive_len: self.max_archive_len,
-            aos_ncb_small_n: self.aos_ncb_small_n,
         }
     }
 }
@@ -8613,6 +8568,32 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret (hex) used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret_hex: Option<String>,
+    /// XOR asset definition used for escrowed VPN fees.
+    #[config(default = "defaults::soranet::vpn::fee_asset_id()")]
+    pub fee_asset_id: String,
+    /// Account that receives escrowed VPN lease fees.
+    #[config(default = "defaults::soranet::vpn::escrow_account_id()")]
+    pub escrow_account_id: String,
+    /// Relay operator account eligible for receipt settlement.
+    #[config(default = "defaults::soranet::vpn::operator_account_id()")]
+    pub operator_account_id: String,
+    /// Fixed prepaid lease fee in nano-XOR.
+    #[config(default = "defaults::soranet::vpn::LEASE_FEE_NANOS")]
+    pub lease_fee_nanos: u64,
+    /// Grace window after disconnect before unearned escrow can be refunded.
+    #[config(default = "defaults::soranet::vpn::SETTLEMENT_GRACE_SECS")]
+    pub settlement_grace_secs: u64,
+    /// Routes pushed to VPN clients.
+    #[config(default = "defaults::soranet::vpn::route_pushes()")]
+    pub route_pushes: Vec<String>,
+    /// Routes explicitly excluded from the VPN tunnel.
+    #[config(default = "defaults::soranet::vpn::excluded_routes()")]
+    pub excluded_routes: Vec<String>,
+    /// DNS servers pushed to VPN clients.
+    #[config(default = "defaults::soranet::vpn::dns_servers()")]
+    pub dns_servers: Vec<String>,
+    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
+    pub relay_tls_spki_sha256_hex: Option<String>,
 }
 
 impl Default for SoranetVpn {
@@ -8632,6 +8613,15 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret_hex: None,
+            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
+            escrow_account_id: defaults::soranet::vpn::escrow_account_id(),
+            operator_account_id: defaults::soranet::vpn::operator_account_id(),
+            lease_fee_nanos: defaults::soranet::vpn::LEASE_FEE_NANOS,
+            settlement_grace_secs: defaults::soranet::vpn::SETTLEMENT_GRACE_SECS,
+            route_pushes: defaults::soranet::vpn::route_pushes(),
+            excluded_routes: defaults::soranet::vpn::excluded_routes(),
+            dns_servers: defaults::soranet::vpn::dns_servers(),
+            relay_tls_spki_sha256_hex: None,
         }
     }
 }
@@ -8653,6 +8643,15 @@ impl SoranetVpn {
             exit_class,
             meter_family,
             helper_ticket_secret_hex,
+            fee_asset_id,
+            escrow_account_id,
+            operator_account_id,
+            lease_fee_nanos,
+            settlement_grace_secs,
+            route_pushes,
+            excluded_routes,
+            dns_servers,
+            relay_tls_spki_sha256_hex,
         } = self;
 
         let default_cell_size = defaults::soranet::vpn::CELL_SIZE_BYTES;
@@ -8661,8 +8660,12 @@ impl SoranetVpn {
             value if value == default_cell_size => value,
             _ => panic!("network.soranet_vpn.cell_size_bytes must equal {default_cell_size}"),
         };
-        VpnFlowLabelV1::max_value_for_bits(flow_label_bits)
-            .expect("flow_label_bits must be between 1 and 24");
+        if flow_label_bits != VpnFlowLabelV1::MAX_BITS {
+            panic!(
+                "network.soranet_vpn.flow_label_bits must be {} for the v1 helper/relay flow-label derivation",
+                VpnFlowLabelV1::MAX_BITS
+            );
+        }
         let cover_to_data_per_mille = cover_to_data_per_mille.min(1_000);
         let max_cover_burst = max_cover_burst.max(1);
         let heartbeat_ms = heartbeat_ms.max(1);
@@ -8690,6 +8693,51 @@ impl SoranetVpn {
                 });
                 bytes
             });
+        if enabled && helper_ticket_secret.is_none() {
+            panic!("network.soranet_vpn.helper_ticket_secret_hex must be set when VPN is enabled");
+        }
+        let fee_asset_id =
+            validate_nexus_fee_asset_selector_literal(&fee_asset_id).unwrap_or_else(|err| {
+                panic!("invalid network.soranet_vpn.fee_asset_id `{fee_asset_id}`: {err}")
+            });
+        let escrow_account_id = parse_account_id_literal(
+            &escrow_account_id,
+            "invalid network.soranet_vpn.escrow_account_id",
+        );
+        let operator_account_id = parse_account_id_literal(
+            &operator_account_id,
+            "invalid network.soranet_vpn.operator_account_id",
+        );
+        if enabled && route_pushes.is_empty() {
+            panic!("network.soranet_vpn.route_pushes must not be empty when VPN is enabled");
+        }
+        if enabled && dns_servers.is_empty() {
+            panic!("network.soranet_vpn.dns_servers must not be empty when VPN is enabled");
+        }
+        let relay_tls_spki_sha256_hex = relay_tls_spki_sha256_hex
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                let normalized = value
+                    .trim_start_matches("0x")
+                    .trim_start_matches("0X")
+                    .to_ascii_lowercase();
+                let decoded = hex::decode(&normalized).unwrap_or_else(|err| {
+                    panic!("network.soranet_vpn.relay_tls_spki_sha256_hex must be valid hex: {err}")
+                });
+                if decoded.len() != 32 {
+                    panic!("network.soranet_vpn.relay_tls_spki_sha256_hex must decode to 32 bytes");
+                }
+                normalized
+            });
+        if enabled && relay_tls_spki_sha256_hex.is_none() {
+            panic!("network.soranet_vpn.relay_tls_spki_sha256_hex must be set when VPN is enabled");
+        }
+        if enabled && escrow_account_id == operator_account_id {
+            panic!(
+                "network.soranet_vpn.escrow_account_id and operator_account_id must be different when VPN is enabled"
+            );
+        }
 
         actual::SoranetVpn {
             enabled,
@@ -8706,6 +8754,15 @@ impl SoranetVpn {
             exit_class,
             meter_family,
             helper_ticket_secret,
+            fee_asset_id,
+            escrow_account_id,
+            operator_account_id,
+            lease_fee_nanos,
+            settlement_grace: Duration::from_secs(settlement_grace_secs.max(1)),
+            route_pushes,
+            excluded_routes,
+            dns_servers,
+            relay_tls_spki_sha256_hex,
         }
     }
 }
@@ -8715,10 +8772,10 @@ mod soranet_vpn_tests {
     use super::*;
 
     #[test]
-    #[should_panic(expected = "flow_label_bits must be between 1 and 24")]
+    #[should_panic(expected = "network.soranet_vpn.flow_label_bits must be 24")]
     fn soranet_vpn_rejects_invalid_flow_label_bits() {
         let cfg = SoranetVpn {
-            flow_label_bits: 0,
+            flow_label_bits: 23,
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
@@ -8764,6 +8821,59 @@ mod soranet_vpn_tests {
         };
         let parsed = cfg.parse();
         assert_eq!(Some([0xAB; 32]), parsed.helper_ticket_secret);
+    }
+
+    #[test]
+    fn soranet_vpn_defaults_to_disabled() {
+        let parsed = SoranetVpn::default().parse();
+        assert!(!parsed.enabled);
+        assert_eq!(parsed.fee_asset_id, defaults::soranet::vpn::fee_asset_id());
+        assert_eq!(parsed.route_pushes, defaults::soranet::vpn::route_pushes());
+        assert_eq!(parsed.dns_servers, defaults::soranet::vpn::dns_servers());
+    }
+
+    #[test]
+    #[should_panic(expected = "helper_ticket_secret_hex must be set when VPN is enabled")]
+    fn soranet_vpn_enabled_requires_helper_ticket_secret() {
+        let cfg = SoranetVpn {
+            enabled: true,
+            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "VPN is enabled")]
+    fn soranet_vpn_enabled_requires_relay_tls_pin() {
+        let cfg = SoranetVpn {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "escrow_account_id and operator_account_id must be different")]
+    fn soranet_vpn_enabled_requires_non_operator_escrow() {
+        let cfg = SoranetVpn {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "must be charged in XOR")]
+    fn soranet_vpn_rejects_non_xor_fee_asset() {
+        let cfg = SoranetVpn {
+            fee_asset_id: "pkr#paynet".to_owned(),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
     }
 
     #[test]
@@ -14751,6 +14861,9 @@ pub struct Torii {
     /// Maximum concurrent public Soracloud local-read executions.
     #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT")]
     pub soracloud_public_max_inflight: NonZeroUsize,
+    /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
+    #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES")]
+    pub soracloud_public_max_response_bytes: Bytes<u64>,
     /// Signed Soracloud mutation rate per account+origin (tokens/sec). None disables.
     pub soracloud_mutation_rate_per_account_origin_per_sec: Option<u32>,
     /// Signed Soracloud mutation burst per account+origin (tokens). None disables.
@@ -14994,6 +15107,9 @@ pub struct Torii {
     /// Native MCP endpoint configuration.
     #[config(nested)]
     pub mcp: ToriiMcp,
+    /// Cross-origin browser access policy.
+    #[config(nested)]
+    pub cors: ToriiCors,
     /// Webhook delivery/backpressure configuration.
     #[config(nested)]
     pub webhook: Webhook,
@@ -15228,7 +15344,7 @@ impl Torii {
         }
     }
 
-    fn parse(self) -> (actual::Torii, actual::LiveQueryStore) {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> (actual::Torii, actual::LiveQueryStore) {
         let configured_versions = if self.api_versions.is_empty() {
             super::defaults::torii::api_supported_versions()
         } else {
@@ -15354,6 +15470,7 @@ impl Torii {
                 .or(super::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP)
                 .and_then(std::num::NonZeroU32::new),
             soracloud_public_max_inflight: self.soracloud_public_max_inflight,
+            soracloud_public_max_response_bytes: self.soracloud_public_max_response_bytes,
             soracloud_mutation_rate_per_account_origin_per_sec: self
                 .soracloud_mutation_rate_per_account_origin_per_sec
                 .or(super::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC)
@@ -15473,6 +15590,7 @@ impl Torii {
             sorafs_por,
             transport: self.transport.into(),
             mcp: self.mcp.into(),
+            cors: self.cors.parse(emitter),
             webhook,
             webhook_security,
             push,
@@ -15961,6 +16079,273 @@ pub struct ToriiMcp {
     /// Maximum asynchronous MCP jobs retained in memory.
     #[config(default = "defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES")]
     pub async_job_max_entries: usize,
+}
+
+/// CORS response-header policy for Torii.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiCors {
+    /// Enable CORS response headers.
+    #[config(default = "defaults::torii::cors::ENABLED")]
+    pub enabled: bool,
+    /// Browser origins allowed to make cross-origin requests.
+    #[config(default = "defaults::torii::cors::allowed_origins()")]
+    pub allowed_origins: Vec<String>,
+    /// HTTP methods allowed in CORS preflight responses.
+    #[config(default = "defaults::torii::cors::allowed_methods()")]
+    pub allowed_methods: Vec<String>,
+    /// Request headers allowed in CORS preflight responses.
+    #[config(default = "defaults::torii::cors::allowed_headers()")]
+    pub allowed_headers: Vec<String>,
+    /// Response headers exposed to browser clients.
+    #[config(default = "defaults::torii::cors::exposed_headers()")]
+    pub exposed_headers: Vec<String>,
+    /// Maximum preflight cache age in seconds.
+    #[config(default = "defaults::torii::cors::MAX_AGE_SECS")]
+    pub max_age_secs: u64,
+}
+
+impl Default for ToriiCors {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::cors::ENABLED,
+            allowed_origins: defaults::torii::cors::allowed_origins(),
+            allowed_methods: defaults::torii::cors::allowed_methods(),
+            allowed_headers: defaults::torii::cors::allowed_headers(),
+            exposed_headers: defaults::torii::cors::exposed_headers(),
+            max_age_secs: defaults::torii::cors::MAX_AGE_SECS,
+        }
+    }
+}
+
+impl ToriiCors {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiCors {
+        let allowed_origins = normalize_cors_values(self.allowed_origins);
+        let allowed_methods = normalize_cors_methods(self.allowed_methods, emitter);
+        let allowed_headers =
+            normalize_cors_headers("torii.cors.allowed_headers", self.allowed_headers, emitter);
+        let exposed_headers =
+            normalize_cors_headers("torii.cors.exposed_headers", self.exposed_headers, emitter);
+
+        if self.enabled {
+            require_non_empty_cors_list("torii.cors.allowed_origins", &allowed_origins, emitter);
+            require_non_empty_cors_list("torii.cors.allowed_methods", &allowed_methods, emitter);
+            require_non_empty_cors_list("torii.cors.allowed_headers", &allowed_headers, emitter);
+        }
+
+        for origin in &allowed_origins {
+            validate_cors_origin(origin, emitter);
+        }
+
+        actual::ToriiCors {
+            enabled: self.enabled,
+            allowed_origins,
+            allowed_methods,
+            allowed_headers,
+            exposed_headers,
+            max_age_secs: self.max_age_secs,
+        }
+    }
+}
+
+fn normalize_cors_values(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn normalize_cors_methods(values: Vec<String>, emitter: &mut Emitter<ParseError>) -> Vec<String> {
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let normalized = value.trim().to_ascii_uppercase();
+            if normalized.is_empty() {
+                return None;
+            }
+            if !matches!(
+                normalized.as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD"
+            ) {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid torii.cors.allowed_methods entry `{}`; expected a standard HTTP method",
+                        value.trim()
+                    ),
+                );
+            }
+            Some(normalized)
+        })
+        .collect()
+}
+
+fn normalize_cors_headers(
+    config_path: &str,
+    values: Vec<String>,
+    emitter: &mut Emitter<ParseError>,
+) -> Vec<String> {
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return None;
+            }
+            if !is_http_token(&normalized) {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid {config_path} entry `{}`; expected an HTTP header name",
+                        value.trim()
+                    ),
+                );
+            }
+            Some(normalized)
+        })
+        .collect()
+}
+
+fn require_non_empty_cors_list(
+    config_path: &str,
+    values: &[String],
+    emitter: &mut Emitter<ParseError>,
+) {
+    if values.is_empty() {
+        emit_torii_config_error(
+            emitter,
+            format!("torii.cors.enabled=true requires at least one {config_path} entry"),
+        );
+    }
+}
+
+fn validate_cors_origin(origin: &str, emitter: &mut Emitter<ParseError>) {
+    if origin == "*" {
+        emit_torii_config_error(
+            emitter,
+            "invalid torii.cors.allowed_origins entry `*`; configure explicit origins",
+        );
+        return;
+    }
+
+    let parsed = match url::Url::parse(origin) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            emit_torii_config_error(
+                emitter,
+                format!("invalid torii.cors.allowed_origins entry `{origin}`: {err}"),
+            );
+            return;
+        }
+    };
+
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        emit_torii_config_error(
+            emitter,
+            format!(
+                "invalid torii.cors.allowed_origins entry `{origin}`; expected http(s)://host[:port]"
+            ),
+        );
+    }
+    if parsed.origin().ascii_serialization() != origin {
+        emit_torii_config_error(
+            emitter,
+            format!(
+                "invalid torii.cors.allowed_origins entry `{origin}`; configure origins without paths, queries, fragments, or credentials"
+            ),
+        );
+    }
+}
+
+fn is_http_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn emit_torii_config_error(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+}
+
+#[cfg(test)]
+mod torii_cors_tests {
+    use super::*;
+
+    #[test]
+    fn torii_cors_parse_requires_explicit_lists_when_enabled() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let parsed = ToriiCors {
+            enabled: true,
+            ..ToriiCors::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(parsed.allowed_origins.is_empty());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn torii_cors_parse_rejects_wildcards_and_invalid_headers() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let _parsed = ToriiCors {
+            enabled: true,
+            allowed_origins: vec!["*".to_owned()],
+            allowed_methods: vec!["POST".to_owned()],
+            allowed_headers: vec!["not a header".to_owned()],
+            exposed_headers: Vec::new(),
+            max_age_secs: 60,
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn torii_cors_parse_normalizes_valid_explicit_config() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let parsed = ToriiCors {
+            enabled: true,
+            allowed_origins: vec![" https://wallet.example ".to_owned()],
+            allowed_methods: vec!["post".to_owned(), "GET".to_owned()],
+            allowed_headers: vec!["Content-Type".to_owned(), "X-Iroha-Account".to_owned()],
+            exposed_headers: vec!["X-Iroha-Tx-Hash".to_owned()],
+            max_age_secs: 60,
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(
+            parsed.allowed_origins,
+            vec!["https://wallet.example".to_owned()]
+        );
+        assert_eq!(
+            parsed.allowed_methods,
+            vec!["POST".to_owned(), "GET".to_owned()]
+        );
+        assert_eq!(
+            parsed.allowed_headers,
+            vec!["content-type".to_owned(), "x-iroha-account".to_owned()]
+        );
+        assert_eq!(parsed.exposed_headers, vec!["x-iroha-tx-hash".to_owned()]);
+    }
 }
 
 impl Default for ToriiMcp {
@@ -19730,7 +20115,7 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             .as_table_mut()
             .expect("soracloud_runtime table");
         let removed_field = ["native", "process"].join("_");
-        runtime.insert(removed_field.into(), Value::Table(Table::new()));
+        runtime.insert(removed_field, Value::Table(Table::new()));
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("removed legacy runtime section must not parse");

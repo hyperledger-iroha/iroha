@@ -877,7 +877,8 @@ async fn wait_for_tx_applied(
     let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
-        .append_pair("hash", tx_hash_hex);
+        .append_pair("hash", tx_hash_hex)
+        .append_pair("scope", "auto");
     let deadline = Instant::now() + timeout;
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
@@ -953,7 +954,8 @@ async fn wait_for_tx_rejected(
     let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
-        .append_pair("hash", tx_hash_hex);
+        .append_pair("hash", tx_hash_hex)
+        .append_pair("scope", "auto");
     let deadline = Instant::now() + timeout;
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();

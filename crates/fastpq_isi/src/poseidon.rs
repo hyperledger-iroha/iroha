@@ -429,15 +429,23 @@ fn pow5(x: u64) -> u64 {
 }
 
 fn apply_mds(state: &mut [u64; STATE_WIDTH]) {
-    let mut new_state = [0u64; STATE_WIDTH];
-    for (out_word, row) in new_state.iter_mut().zip(MDS.iter()) {
-        let mut acc = 0u64;
-        for (&coef, &value) in row.iter().zip(state.iter()) {
-            acc = add(acc, mul(coef, value));
-        }
-        *out_word = acc;
-    }
-    *state = new_state;
+    let s0 = state[0];
+    let s1 = state[1];
+    let s2 = state[2];
+    *state = [
+        add(
+            add(mul(MDS[0][0], s0), mul(MDS[0][1], s1)),
+            mul(MDS[0][2], s2),
+        ),
+        add(
+            add(mul(MDS[1][0], s0), mul(MDS[1][1], s1)),
+            mul(MDS[1][2], s2),
+        ),
+        add(
+            add(mul(MDS[2][0], s0), mul(MDS[2][1], s1)),
+            mul(MDS[2][2], s2),
+        ),
+    ];
 }
 
 fn full_round(state: &mut [u64; STATE_WIDTH], rc: &[u64; STATE_WIDTH]) {

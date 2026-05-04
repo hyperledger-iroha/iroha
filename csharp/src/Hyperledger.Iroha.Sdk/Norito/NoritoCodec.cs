@@ -1,9 +1,12 @@
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Hyperledger.Iroha.Norito;
 
 public static class NoritoCodec
 {
+    private static readonly byte[] TypeNameSchemaHashDomain = Encoding.UTF8.GetBytes("norito:v1:type-name\0");
+
     public static byte[] Encode(string typeName, ReadOnlySpan<byte> payload, byte flags = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(typeName);
@@ -21,20 +24,12 @@ public static class NoritoCodec
 
     public static byte[] SchemaHash(string typeName)
     {
-        const ulong fnvOffset = 0xcbf29ce484222325UL;
-        const ulong fnvPrime = 0x100000001b3UL;
+        ArgumentException.ThrowIfNullOrWhiteSpace(typeName);
 
-        ulong hash = fnvOffset;
-        foreach (var value in Encoding.UTF8.GetBytes(typeName))
-        {
-            hash ^= value;
-            hash *= fnvPrime;
-        }
-
-        var bytes = new byte[16];
-        var low = BitConverter.GetBytes(hash);
-        low.CopyTo(bytes, 0);
-        low.CopyTo(bytes, 8);
-        return bytes;
+        var typeNameBytes = Encoding.UTF8.GetBytes(typeName);
+        var input = new byte[TypeNameSchemaHashDomain.Length + typeNameBytes.Length];
+        TypeNameSchemaHashDomain.CopyTo(input, 0);
+        typeNameBytes.CopyTo(input, TypeNameSchemaHashDomain.Length);
+        return SHA256.HashData(input)[..16];
     }
 }

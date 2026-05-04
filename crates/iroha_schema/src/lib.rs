@@ -150,6 +150,8 @@ pub enum Metadata {
     Enum(EnumMeta),
     /// Integer
     Int(IntMode),
+    /// Floating-point number
+    Float(FloatMode),
     /// String
     String,
     /// Bool
@@ -262,6 +264,15 @@ pub enum IntMode {
     Compact,
 }
 
+/// Floating-point width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FloatMode {
+    /// IEEE 754 binary32 (`f32`)
+    Binary32,
+    /// IEEE 754 binary64 (`f64`)
+    Binary64,
+}
+
 /// Bitmap metadata
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapMeta {
@@ -338,6 +349,30 @@ macro_rules! impl_schema_int {
     )*};
 }
 impl_schema_int!(u128, u64, u32, u16, u8, i128, i64, i32, i16, i8);
+
+macro_rules! impl_schema_float {
+    ($($t:ty => $mode:ident),*) => {$(
+        impl TypeId for $t {
+            fn id() -> String {
+                stringify!($t).to_owned()
+            }
+        }
+
+        impl IntoSchema for $t {
+            fn type_name() -> String {
+                stringify!($t).to_owned()
+            }
+
+            fn update_schema_map(map: &mut MetaMap) {
+                if !map.contains_key::<Self>() {
+                    map.insert::<Self>(Metadata::Float(FloatMode::$mode));
+                }
+            }
+        }
+    )*};
+}
+
+impl_schema_float!(f32 => Binary32, f64 => Binary64);
 
 macro_rules! impl_schema_non_zero_int {
     ($($src:ty => $dst:ty),*) => {$(

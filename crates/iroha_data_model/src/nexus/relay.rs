@@ -20,7 +20,6 @@ use crate::{
     prelude::Metadata,
 };
 
-const FASTPQ_PROOF_DIGEST_DOMAIN: &[u8] = b"iroha:nexus:lane-relay:fastpq-proof:v1";
 /// Prefix for contract-visible verified relay state keys.
 pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
 
@@ -121,6 +120,11 @@ pub struct VerifiedLaneRelayRecord {
     pub relay_envelope: LaneRelayEnvelope,
     /// Deterministic hash of the proof payload used during registration.
     pub proof_payload_hash: Hash,
+    /// `FastPQ` statement digest verified during registration.
+    #[norito(default)]
+    pub fastpq_statement_digest: [u8; 32],
+    /// Deterministic digest of the embedded `FastPQ` proof payload.
+    pub fastpq_proof_digest: Hash,
     /// Block height where the relay proof was verified and persisted.
     pub verified_at_height: u64,
     /// Manifest root enforced during registration.
@@ -138,9 +142,8 @@ pub struct VerifiedLaneRelayRecord {
 pub struct LaneFastpqProofMaterial {
     /// Deterministic digest of the proof payload.
     pub proof_digest: Hash,
-    /// Optional block height where the proof was verified.
-    #[norito(default)]
-    pub verified_at_height: Option<u64>,
+    /// Block height where the proof was verified.
+    pub verified_at_height: u64,
 }
 
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
@@ -431,37 +434,10 @@ impl LaneRelayEnvelope {
         if is_zero_like {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
-        if material
-            .verified_at_height
-            .is_some_and(|verified_height| verified_height < self.block_height)
-        {
-            return Err(LaneRelayError::InvalidFastpqProof);
-        }
-        if material.proof_digest != self.expected_fastpq_proof_digest(material.verified_at_height) {
+        if material.verified_at_height < self.block_height {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
         Ok(())
-    }
-
-    /// Compute the canonical `FastPQ` proof digest expected for this envelope.
-    #[must_use]
-    pub fn expected_fastpq_proof_digest(&self, verified_at_height: Option<u64>) -> Hash {
-        let mut payload = Vec::with_capacity(
-            FASTPQ_PROOF_DIGEST_DOMAIN.len() + (core::mem::size_of::<u64>() * 3) + 96,
-        );
-        payload.extend_from_slice(FASTPQ_PROOF_DIGEST_DOMAIN);
-        payload.extend_from_slice(&self.lane_id.as_u32().to_be_bytes());
-        payload.extend_from_slice(&self.dataspace_id.as_u64().to_be_bytes());
-        payload.extend_from_slice(&self.block_height.to_be_bytes());
-        payload.extend_from_slice(
-            &verified_at_height
-                .unwrap_or(self.block_height)
-                .to_be_bytes(),
-        );
-        payload.extend_from_slice(self.block_header.hash().as_ref());
-        payload.extend_from_slice(self.settlement_hash.as_ref());
-        payload.extend_from_slice(self.manifest_root.unwrap_or([0; 32]).as_ref());
-        Hash::new(payload)
     }
 
     /// Re-compute the settlement hash and ensure it matches the envelope.
@@ -486,6 +462,8 @@ impl VerifiedLaneRelayRecord {
     pub fn new(
         relay_envelope: LaneRelayEnvelope,
         proof_payload_hash: Hash,
+        fastpq_statement_digest: [u8; 32],
+        fastpq_proof_digest: Hash,
         verified_at_height: u64,
         manifest_root: [u8; 32],
         fastpq_binding: AxtFastpqBinding,
@@ -494,6 +472,8 @@ impl VerifiedLaneRelayRecord {
             relay_ref: relay_envelope.relay_ref(),
             relay_envelope,
             proof_payload_hash,
+            fastpq_statement_digest,
+            fastpq_proof_digest,
             verified_at_height,
             manifest_root,
             fastpq_binding,
@@ -918,6 +898,33 @@ mod tests {
             .verify_with_quorum(quorum)
             .expect_err("zero signature");
         assert_eq!(err, LaneRelayError::AggregateSignatureInvalid);
+    }
+
+    #[test]
+    fn fastpq_proof_material_accepts_external_digest() {
+        let envelope =
+            build_envelope(8, None).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+                proof_digest: Hash::new(b"external-fastpq-proof-payload"),
+                verified_at_height: 8,
+            }));
+
+        envelope
+            .verify_fastpq_proof_material()
+            .expect("external proof digest should be accepted");
+    }
+
+    #[test]
+    fn fastpq_proof_material_rejects_stale_verified_height() {
+        let envelope =
+            build_envelope(8, None).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+                proof_digest: Hash::new(b"external-fastpq-proof-payload"),
+                verified_at_height: 7,
+            }));
+
+        let err = envelope
+            .verify_fastpq_proof_material()
+            .expect_err("stale verification height must be rejected");
+        assert_eq!(err, LaneRelayError::InvalidFastpqProof);
     }
 
     #[test]

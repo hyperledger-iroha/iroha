@@ -88,8 +88,8 @@ fn bench_aesenc_cuda_batch(c: &mut Criterion) {
     let (_state, rk) = data();
     let blocks = 16384usize; // 16k blocks per launch
     let mut states = vec![[0u8; 16]; blocks];
-    for i in 0..blocks {
-        states[i][0] = (i & 0xff) as u8;
+    for (i, state) in states.iter_mut().enumerate().take(blocks) {
+        state[0] = (i & 0xff) as u8;
     }
     c.bench_function("aesenc_cuda_batch_round", |b| {
         b.iter(|| {
@@ -118,8 +118,8 @@ fn bench_aesdec_cuda_batch(c: &mut Criterion) {
     let (_state, rk) = data();
     let blocks = 16384usize;
     let mut states = vec![[0u8; 16]; blocks];
-    for i in 0..blocks {
-        states[i][0] = (i & 0xff) as u8;
+    for (i, state) in states.iter_mut().enumerate().take(blocks) {
+        state[0] = (i & 0xff) as u8;
     }
     // Pre-encode once via CUDA to simulate decode input
     let enc = ivm::aesenc_batch_cuda(&states, rk).expect("cuda batch enc");

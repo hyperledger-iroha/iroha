@@ -76,15 +76,15 @@ use iroha_core::{
         ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
     },
     tx::{
-        AcceptTransactionFail, SIGNATURE_LIMIT_REASON_PREFIX, SignatureRejectionCode,
-        SignatureVerificationFail,
+        AcceptTransactionFail, DecodedVersionedSignedTransaction, SIGNATURE_LIMIT_REASON_PREFIX,
+        SignatureRejectionCode, SignatureVerificationFail,
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
-    block::{BlockHeader, consensus::EvidenceRecord},
+    block::{BlockHeader, SignedBlock, consensus::EvidenceRecord},
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
@@ -2007,6 +2007,14 @@ fn kaigi_signal_from_transaction(
             reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
             u64::try_from(signed.creation_time().as_millis()).ok(),
         ),
+        TransactionEntrypoint::SealedCommitment(_) => return None,
+        TransactionEntrypoint::SealedReveal(reveal) => (
+            reveal.signed_transaction().metadata(),
+            reveal_authorities.then(|| {
+                crate::account_literal::display_literal(reveal.signed_transaction().authority())
+            }),
+            u64::try_from(reveal.signed_transaction().creation_time().as_millis()).ok(),
+        ),
         TransactionEntrypoint::PrivateKaigi(private) => {
             (&private.metadata, None, Some(private.creation_time_ms))
         }
@@ -2535,7 +2543,6 @@ pub struct RamLfeExecuteResponseDto {
     pub program_id: String,
     pub opaque_hash: String,
     pub receipt_hash: String,
-    pub output_hex: String,
     pub output_hash: String,
     pub associated_data_hash: String,
     pub executed_at_ms: u64,
@@ -10101,11 +10108,13 @@ mod evidence_submit_tests {
 }
 
 fn reject_direct_multisig_signing(
-    world: &impl WorldReadOnly,
+    state: &CoreState,
     tx: &SignedTransaction,
 ) -> Option<AcceptTransactionFail> {
-    let _account = world.accounts().get(tx.authority())?;
     if tx.authority().controller().multisig_policy().is_none() {
+        return None;
+    }
+    if !state.has_account(tx.authority()) {
         return None;
     }
 
@@ -10171,8 +10180,7 @@ mod multisig_guard_tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .sign(signer_keypair.private_key());
 
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        let rejection = reject_direct_multisig_signing(&state, &tx);
         match rejection {
             Some(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::UnsupportedAuthority);
@@ -10204,8 +10212,7 @@ mod multisig_guard_tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .sign(signer.private_key());
 
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        let rejection = reject_direct_multisig_signing(&state, &tx);
         assert!(
             rejection.is_none(),
             "single-signature signatories with multisig role must pass admission guard"
@@ -10237,8 +10244,7 @@ mod multisig_guard_tests {
             .with_executable(Executable::Instructions(vec![custom].into()))
             .sign(signer_keypair.private_key());
 
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        let rejection = reject_direct_multisig_signing(&state, &tx);
         assert!(
             rejection.is_none(),
             "multisig custom instruction envelopes must pass admission guard"
@@ -10270,17 +10276,9 @@ pub fn accept_transaction_for_ingress(
     #[cfg(feature = "telemetry")]
     let verify_started = std::time::Instant::now();
 
-    let (max_clock_drift, tx_limits, state_view) = {
-        let state_view = state.world.view();
-        let params = state_view.parameters();
-        (
-            params.sumeragi().max_clock_drift(),
-            params.transaction(),
-            state_view,
-        )
-    };
+    let (max_clock_drift, tx_limits) = state.transaction_admission_limits();
     if let TransactionEntrypoint::External(signed) = &tx
-        && let Some(rejection) = reject_direct_multisig_signing(&state_view, signed)
+        && let Some(rejection) = reject_direct_multisig_signing(state.as_ref(), signed)
     {
         iroha_logger::warn!(
             authority = %signed.authority(),
@@ -10307,10 +10305,24 @@ pub fn accept_transaction_for_ingress(
         );
         return Err(Error::AcceptTransaction(rejection));
     }
-    drop(state_view);
     #[cfg(feature = "telemetry")]
     let (signature_count, signature_limit, authority_label) = match &tx {
         TransactionEntrypoint::External(signed) => {
+            let authority_label = match signed.authority().controller() {
+                iroha_data_model::account::AccountController::Single(_) => "single",
+                iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+            };
+            (
+                signed.signature_count() as u64,
+                tx_limits.max_signatures().get(),
+                authority_label,
+            )
+        }
+        TransactionEntrypoint::SealedCommitment(_) => {
+            (1, tx_limits.max_signatures().get(), "sealed_commitment")
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            let signed = reveal.signed_transaction();
             let authority_label = match signed.authority().controller() {
                 iroha_data_model::account::AccountController::Single(_) => "single",
                 iroha_data_model::account::AccountController::Multisig(_) => "multisig",
@@ -10375,6 +10387,140 @@ pub fn accept_transaction_for_ingress(
     }
 }
 
+/// Validate an already decoded signed transaction at Torii ingress.
+pub fn accept_decoded_signed_transaction_for_ingress(
+    chain_id: Arc<ChainId>,
+    state: Arc<CoreState>,
+    tx: DecodedVersionedSignedTransaction,
+    telemetry: &MaybeTelemetry,
+) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    accept_decoded_signed_transaction_for_ingress_with_precheck(
+        chain_id, state, tx, telemetry, false, None,
+    )
+}
+
+/// Validate an already decoded signed transaction at Torii ingress after Ed25519 precheck.
+pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
+    chain_id: Arc<ChainId>,
+    state: Arc<CoreState>,
+    tx: DecodedVersionedSignedTransaction,
+    telemetry: &MaybeTelemetry,
+    single_ed25519_prechecked: bool,
+    precheck_rejection: Option<AcceptTransactionFail>,
+) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = telemetry;
+    #[cfg(feature = "telemetry")]
+    let decode_started = std::time::Instant::now();
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        telemetry,
+        "transaction",
+        "decode_or_build",
+        "ok",
+        decode_started.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
+    let verify_started = std::time::Instant::now();
+
+    let (max_clock_drift, tx_limits) = state.transaction_admission_limits();
+    if let Some(rejection) = reject_direct_multisig_signing(state.as_ref(), tx.signed()) {
+        iroha_logger::warn!(
+            authority = %tx.authority(),
+            "rejecting transaction directly signed by multisig account"
+        );
+        #[cfg(feature = "telemetry")]
+        telemetry.with_metrics(|tel| {
+            tel.inc_torii_multisig_direct_sign_reject();
+            let signature_count = tx.signed().signature_count() as u64;
+            let signature_limit = tx_limits.max_signatures().get();
+            let authority_label = match tx.authority().controller() {
+                iroha_data_model::account::AccountController::Single(_) => "single",
+                iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+            };
+            tel.inc_torii_signature_limit_reject(signature_count, signature_limit, authority_label);
+        });
+        #[cfg(feature = "telemetry")]
+        observe_route_stage_latency(
+            telemetry,
+            "transaction",
+            "verify",
+            "error",
+            verify_started.elapsed(),
+        );
+        return Err(Error::AcceptTransaction(rejection));
+    }
+
+    #[cfg(feature = "telemetry")]
+    let (signature_count, signature_limit, authority_label) = {
+        let authority_label = match tx.authority().controller() {
+            iroha_data_model::account::AccountController::Single(_) => "single",
+            iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+        };
+        (
+            tx.signed().signature_count() as u64,
+            tx_limits.max_signatures().get(),
+            authority_label,
+        )
+    };
+
+    let crypto_cfg = state.crypto();
+    let accepted = if let Some(err) = precheck_rejection {
+        Err(err)
+    } else if single_ed25519_prechecked {
+        tx.into_accepted_after_single_ed25519_precheck(
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+    } else {
+        tx.into_accepted(&chain_id, max_clock_drift, tx_limits, crypto_cfg.as_ref())
+    };
+
+    match accepted {
+        Ok(tx) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "ok",
+                verify_started.elapsed(),
+            );
+            Ok(tx)
+        }
+        Err(err) => {
+            iroha_logger::warn!(?err, "transaction rejected during admission");
+            #[cfg(feature = "telemetry")]
+            telemetry.with_metrics(|tel| {
+                if let AcceptTransactionFail::TransactionLimit(limit) = &err {
+                    if limit.reason.starts_with(SIGNATURE_LIMIT_REASON_PREFIX) {
+                        tel.inc_torii_signature_limit_reject(
+                            signature_count,
+                            signature_limit,
+                            authority_label,
+                        );
+                    }
+                }
+                if matches!(err, AcceptTransactionFail::NetworkTimeUnhealthy { .. }) {
+                    tel.inc_torii_nts_unhealthy_reject();
+                }
+            });
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "error",
+                verify_started.elapsed(),
+            );
+            Err(Error::AcceptTransaction(err))
+        }
+    }
+}
+
 pub(crate) fn push_accepted_transaction_for_ingress(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -10390,12 +10536,7 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
     routing_decision: Option<RoutingDecision>,
 ) -> Result<RoutingDecision> {
     let pressure = {
-        let state_view = state.view();
-        let block_time = state_view
-            .world()
-            .parameters()
-            .sumeragi()
-            .effective_block_time();
+        let block_time = state.sumeragi_effective_block_time();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
@@ -10405,7 +10546,7 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
             tracked = pressure.tracked_tx_count,
             capacity = pressure.capacity.get(),
             oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "accepting transaction ingress while local queue is latency-saturated"
+            "local queue is latency-saturated; keeping ingress open until capacity is exhausted"
         );
     }
 
@@ -24320,8 +24461,8 @@ async fn submit_contract_deploy_request(
     };
     let mut instructions = Vec::with_capacity(8);
     instructions.extend(register_authority_if_missing(&state, &authority));
-    instructions.push(dm::InstructionBox::from(isi_code));
     instructions.push(dm::InstructionBox::from(isi_bytes));
+    instructions.push(dm::InstructionBox::from(isi_code));
     if let Some(previous_contract_address) = previous_contract_address.clone() {
         instructions.push(dm::InstructionBox::from(SetContractAlias::clear(
             previous_contract_address.clone(),
@@ -30816,6 +30957,12 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(_) => {
                 "external".to_owned()
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(_) => {
+                "sealed_commitment".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(_) => {
+                "sealed_reveal".to_owned()
+            }
             iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
                 "private_kaigi".to_owned()
             }
@@ -30830,6 +30977,12 @@ fn tx_field_value(
                 // transparent_api feature. The response projection still controls visibility.
                 Some(signed.payload().authority.to_string())
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(
+                commitment,
+            ) => Some(commitment.authority().to_string()),
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(reveal.signed_transaction().authority().to_string())
+            }
             iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => None,
             _ => None,
         },
@@ -30838,6 +30991,15 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                 // Use API method to avoid relying on internal payload field names
                 Some(format!("{}", signed.creation_time().as_millis()))
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(_) => {
+                None
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(format!(
+                    "{}",
+                    reveal.signed_transaction().creation_time().as_millis()
+                ))
             }
             iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
                 Some(tx.creation_time_ms.to_string())
@@ -30862,6 +31024,16 @@ fn tx_field_value(
                 iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                     signed.metadata().get(&name).map(|json| json.get().clone())
                 }
+                iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(
+                    _,
+                ) => None,
+                iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(
+                    reveal,
+                ) => reveal
+                    .signed_transaction()
+                    .metadata()
+                    .get(&name)
+                    .map(|json| json.get().clone()),
                 iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
                     tx.metadata.get(&name).map(|json| json.get().clone())
                 }
@@ -31262,6 +31434,12 @@ fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::SealedCommitment(commitment) => commitment.authority() == expected,
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            let signed = reveal.signed_transaction();
+            signed.authority() == expected
+                || executable_contains_account_id(signed.instructions(), expected)
+        }
         TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
@@ -31278,6 +31456,10 @@ fn tx_references_domain_id(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             executable_contains_domain_id(signed.instructions(), expected)
+        }
+        TransactionEntrypoint::SealedCommitment(_) => false,
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            executable_contains_domain_id(reveal.signed_transaction().instructions(), expected)
         }
         TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
             iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
@@ -31439,6 +31621,16 @@ fn tx_collect_asset_ids(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             if let Executable::Instructions(instructions) = signed.instructions() {
+                for instr in instructions.iter() {
+                    visit_instruction(instr);
+                }
+            }
+        }
+        TransactionEntrypoint::SealedCommitment(_) => {}
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            if let Executable::Instructions(instructions) =
+                reveal.signed_transaction().instructions()
+            {
                 for instr in instructions.iter() {
                     visit_instruction(instr);
                 }
@@ -32064,6 +32256,12 @@ fn tx_matches_account_history_subject(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             signed.authority().controller() == account_id.controller()
+        }
+        TransactionEntrypoint::SealedCommitment(commitment) => {
+            commitment.authority().controller() == account_id.controller()
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            reveal.signed_transaction().authority().controller() == account_id.controller()
         }
         TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(_) => false,
@@ -33650,8 +33848,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                     .as_ref()
                     .is_none_or(|expected| tx_matches_asset_selector(tx, expected))
             })
-            .map(tx_to_query_row)
-            .collect::<Vec<_>>();
+            .map(tx_to_query_row);
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ACCOUNT_TRANSACTIONS,
@@ -41595,14 +41792,13 @@ mod query_endpoint_tests {
         use iroha_data_model::proof;
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
-        let backend: Ident = "debug/ok".into();
+        let backend: Ident = "groth16/bn254".into();
         let bytes = b"torii_proof_smoke".to_vec();
         let proof = proof::ProofBox::new(backend.clone(), bytes.clone());
         let attachment = proof::ProofAttachment {
             backend: backend.clone(),
             proof: proof.clone(),
-            // Inline a minimal verifying key so the attachment passes validation
-            // (exact contents are opaque to the debug backend).
+            // Inline a minimal verifying key so the attachment passes validation.
             vk_ref: None,
             vk_inline: Some(proof::VerifyingKeyBox::new(
                 backend.clone(),
@@ -47764,6 +47960,7 @@ pub struct VrfCommitRequestDto {
     pub epoch: u64,
     pub signer: u32,
     pub commitment_hex: String,
+    pub bls_sig_hex: String,
 }
 
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
@@ -47771,6 +47968,7 @@ pub struct VrfRevealRequestDto {
     pub epoch: u64,
     pub signer: u32,
     pub reveal_hex: String,
+    pub bls_sig_hex: String,
 }
 
 fn parse_hex32(value: &str, field: &'static str) -> Result<[u8; 32], Error> {
@@ -47796,15 +47994,38 @@ fn parse_hex32(value: &str, field: &'static str) -> Result<[u8; 32], Error> {
     Ok(out)
 }
 
+fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Error> {
+    let trimmed = value.trim();
+    let body = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(body).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!("{field}: {e}")),
+        ))
+    })?;
+    if bytes.is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "{field}: expected non-empty hex value"
+            )),
+        )));
+    }
+    Ok(bytes)
+}
+
 pub fn handle_post_sumeragi_vrf_commit(
     sumeragi: SumeragiHandle,
     request: VrfCommitRequestDto,
 ) -> Result<axum::response::Response, Error> {
     let commitment = parse_hex32(&request.commitment_hex, "commitment_hex")?;
+    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
     let commit = iroha_data_model::block::consensus::VrfCommit {
         epoch: request.epoch,
         commitment,
         signer: request.signer,
+        bls_sig,
     };
     sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit));
     Ok(StatusCode::ACCEPTED.into_response())
@@ -47815,13 +48036,32 @@ pub fn handle_post_sumeragi_vrf_reveal(
     request: VrfRevealRequestDto,
 ) -> Result<axum::response::Response, Error> {
     let reveal = parse_hex32(&request.reveal_hex, "reveal_hex")?;
+    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
     let msg = iroha_data_model::block::consensus::VrfReveal {
         epoch: request.epoch,
         reveal,
         signer: request.signer,
+        bls_sig,
     };
     sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg));
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+#[cfg(test)]
+mod sumeragi_vrf_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn vrf_signature_hex_parser_accepts_prefixed_payloads() {
+        let parsed = parse_hex_bytes(" 0x0a0B ", "bls_sig_hex").expect("valid signature hex");
+        assert_eq!(parsed, vec![0x0a, 0x0b]);
+    }
+
+    #[test]
+    fn vrf_signature_hex_parser_rejects_empty_payloads() {
+        assert!(parse_hex_bytes("", "bls_sig_hex").is_err());
+        assert!(parse_hex_bytes("0x", "bls_sig_hex").is_err());
+    }
 }
 
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
@@ -49171,7 +49411,7 @@ mod transaction_ingress_overload_tests {
     }
 
     #[tokio::test]
-    async fn transaction_ingress_accepts_latency_saturated_queue_before_capacity() {
+    async fn transaction_ingress_allows_latency_saturated_queue_before_capacity() {
         let state = Arc::new(State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -49208,7 +49448,7 @@ mod transaction_ingress_overload_tests {
             second,
         )
         .await
-        .expect("latency-saturated queue should still accept until capacity");
+        .expect("latency-saturated queue should accept fresh ingress until capacity is exhausted");
 
         let backpressure = queue.current_backpressure();
         assert!(
@@ -53130,13 +53370,10 @@ pub async fn handle_v1_repo_agreements_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if generic_mode {
-        let rows = agreements
-            .into_iter()
-            .map(|agreement| {
-                let projection = RepoAgreementProjection::from_agreement(&agreement);
-                repo_agreement_projection_to_query_row(&projection)
-            })
-            .collect::<Vec<_>>();
+        let rows = agreements.into_iter().map(|agreement| {
+            let projection = RepoAgreementProjection::from_agreement(&agreement);
+            repo_agreement_projection_to_query_row(&projection)
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_REPO_AGREEMENTS,
@@ -53638,14 +53875,11 @@ pub async fn handle_v1_domains_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if generic_mode {
-        let rows = domains
-            .into_iter()
-            .map(|dom| {
-                let mut row = Map::new();
-                row.insert("id".into(), Value::from(dom.id().to_string()));
-                row
-            })
-            .collect::<Vec<_>>();
+        let rows = domains.into_iter().map(|dom| {
+            let mut row = Map::new();
+            row.insert("id".into(), Value::from(dom.id().to_string()));
+            row
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_DOMAINS,
@@ -54448,6 +54682,22 @@ fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     Ok(UniversalAccountId::from_hash(hash))
 }
 
+#[cfg(feature = "app_api")]
+fn canonicalize_identity_commitment_hex(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() != Hash::LENGTH * 2 {
+        return Err(onboarding_invalid_request(
+            "identity_commitment_hex must be a 64-character hex digest",
+        ));
+    }
+    if !trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Err(onboarding_invalid_request(
+            "identity_commitment_hex must contain only hex characters",
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod uaid_parsing_tests {
     use core::str::FromStr;
@@ -54491,6 +54741,19 @@ mod uaid_parsing_tests {
         assert!(parse_uaid_literal("uaid:1234").is_err());
         let invalid_hex = format!("{}g", "0".repeat(63));
         assert!(parse_uaid_literal(&invalid_hex).is_err());
+        assert!(parse_uaid_literal(&"0".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn identity_commitment_hex_is_digest_only_and_canonical() {
+        let canonical = canonicalize_identity_commitment_hex(
+            "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  ",
+        )
+        .expect("canonical identity commitment");
+        assert_eq!(canonical, "a".repeat(64));
+        assert!(canonicalize_identity_commitment_hex("abcd").is_err());
+        let invalid_hex = format!("{}g", "0".repeat(63));
+        assert!(canonicalize_identity_commitment_hex(&invalid_hex).is_err());
     }
 }
 
@@ -54504,6 +54767,8 @@ pub struct AccountOnboardingRequestDto {
     pub public_key_hex: Option<String>,
     #[norito(default)]
     pub identity: Option<Map>,
+    #[norito(default)]
+    pub identity_commitment_hex: Option<String>,
     #[norito(default)]
     pub uaid: Option<String>,
     #[norito(default)]
@@ -54723,6 +54988,35 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
         (
             "alias_dataspace_not_registered",
             Some("Register the alias dataspace before accepting public onboarding requests."),
+        )
+    } else if normalized.contains("uaid is required") {
+        (
+            "missing_uaid",
+            Some("Provide an explicit canonical UAID literal (`uaid:<hex>` or raw 64-hex)."),
+        )
+    } else if normalized.contains("invalid uaid") || normalized.contains("uaid literal") {
+        (
+            "invalid_uaid",
+            Some(
+                "Provide a 64-hex UAID digest with the canonical low bit set, optionally prefixed by `uaid:`.",
+            ),
+        )
+    } else if normalized.contains("raw identity metadata") {
+        (
+            "raw_identity_not_allowed",
+            Some(
+                "Do not submit raw identity metadata; submit only `identity_commitment_hex` when an audit commitment is needed.",
+            ),
+        )
+    } else if normalized.contains("identity_commitment_hex") {
+        (
+            "invalid_identity_commitment",
+            Some("Provide `identity_commitment_hex` as a plain 64-character hex digest."),
+        )
+    } else if normalized.contains("exactly one of account_id or public_key_hex") {
+        (
+            "ambiguous_account_material",
+            Some("Provide exactly one of `account_id` or `public_key_hex`."),
         )
     } else if normalized.contains("public key hex") {
         (
@@ -55098,6 +55392,14 @@ mod faucet_pow_tests {
     }
 
     #[test]
+    fn onboarding_error_metadata_classifies_ambiguous_account_material() {
+        let (code, hint) =
+            super::onboarding_error_metadata("provide exactly one of account_id or public_key_hex");
+        assert_eq!(code, "ambiguous_account_material");
+        assert!(hint.is_some());
+    }
+
+    #[test]
     fn onboarding_invalid_request_preserves_structured_code() {
         let err = super::onboarding_invalid_request("account already exists");
         match err {
@@ -55295,10 +55597,7 @@ pub async fn handle_v1_confidential_notes(
             };
             if let Some(block) = state.block_by_height(nonzero_height) {
                 let block_ref = block.as_ref();
-                let external_total = block_ref.external_transactions().len();
-                for (tx, result) in block_ref
-                    .external_transactions()
-                    .zip(block_ref.results().take(external_total))
+                for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref)
                 {
                     if result.as_ref().is_err() {
                         continue;
@@ -55315,7 +55614,7 @@ pub async fn handle_v1_confidential_notes(
                     if confidential_instructions.is_empty() {
                         continue;
                     }
-                    let tx_hash = tx.hash_as_entrypoint().to_string();
+                    let tx_hash = entrypoint_hash.to_string();
                     items.push(ConfidentialNoteRecordDto {
                         entrypoint_hash: tx_hash.clone(),
                         transaction_hash: tx_hash,
@@ -55420,23 +55719,6 @@ mod confidential_notes_tests {
         assert_eq!(confidential_notes_cursor(Some("42")).unwrap(), Some(42));
         assert_eq!(confidential_notes_cursor(Some("")).unwrap(), None);
     }
-}
-
-#[cfg(feature = "app_api")]
-fn derive_onboarding_uaid(
-    alias: &str,
-    account_id: &AccountId,
-    identity: Option<&Map>,
-) -> UniversalAccountId {
-    let mut seed = Map::new();
-    seed.insert("alias".into(), Value::String(alias.trim().to_lowercase()));
-    seed.insert("account_id".into(), Value::String(account_id.to_string()));
-    if let Some(extra) = identity {
-        seed.insert("identity".into(), Value::Object(extra.clone()));
-    }
-    let canonical = norito::json::to_string(&Value::Object(seed))
-        .expect("UAID seed serialization should succeed");
-    UniversalAccountId::from_hash(Hash::new(canonical.as_bytes()))
 }
 
 #[cfg(feature = "app_api")]
@@ -55587,6 +55869,7 @@ pub async fn handle_v1_accounts_onboard(
         account_id,
         public_key_hex,
         identity,
+        identity_commitment_hex,
         uaid,
         permissions,
     } = req;
@@ -55605,19 +55888,25 @@ pub async fn handle_v1_accounts_onboard(
         .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let (alias_dataspace, alias_domain) =
         account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
-    let account_id = if let Some(account_literal) = account_id
+    let account_id_literal = account_id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+        .filter(|value| !value.is_empty());
+    let public_key_hex_literal = public_key_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if account_id_literal.is_some() && public_key_hex_literal.is_some() {
+        return Err(onboarding_invalid_request(
+            "provide exactly one of account_id or public_key_hex",
+        ));
+    }
+
+    let account_id = if let Some(account_literal) = account_id_literal {
         AccountId::parse_encoded(account_literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|_| onboarding_invalid_request("invalid account id literal"))?
-    } else if let Some(public_key_hex) = public_key_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    } else if let Some(public_key_hex) = public_key_hex_literal {
         let bytes = hex::decode(public_key_hex)
             .map_err(|_| onboarding_invalid_request("invalid public key hex"))?;
         let public_key =
@@ -55629,6 +55918,25 @@ pub async fn handle_v1_accounts_onboard(
             "either account_id or public_key_hex is required",
         ));
     };
+
+    if identity.is_some() {
+        return Err(onboarding_invalid_request(
+            "raw identity metadata is not allowed; provide identity_commitment_hex",
+        ));
+    }
+    let identity_commitment_hex = identity_commitment_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(canonicalize_identity_commitment_hex)
+        .transpose()?;
+    let uaid_literal = uaid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| onboarding_invalid_request("uaid is required"))?;
+    let uaid = parse_uaid_literal(uaid_literal)
+        .map_err(|_| onboarding_invalid_request("invalid uaid literal"))?;
 
     if app.state.world_view().account(&account_id).is_ok() {
         return Err(onboarding_invalid_request("account already exists"));
@@ -55647,11 +55955,6 @@ pub async fn handle_v1_accounts_onboard(
     )
     .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
 
-    let uaid = if let Some(literal) = uaid {
-        parse_uaid_literal(&literal)?
-    } else {
-        derive_onboarding_uaid(&canonical_alias, &account_id, identity.as_ref())
-    };
     let dataspace = alias_label.dataspace;
     let should_publish_manifest = {
         let world = app.state.world_view();
@@ -55664,12 +55967,9 @@ pub async fn handle_v1_accounts_onboard(
     let mut metadata = Metadata::default();
     let alias_key = Name::from_str("display_name").expect("static metadata key");
     metadata.insert(alias_key, IrohaJson::new(canonical_alias.clone()));
-    if let Some(identity_payload) = identity.clone() {
-        let identity_key = Name::from_str("identity").expect("static metadata key");
-        metadata.insert(
-            identity_key,
-            IrohaJson::from(Value::Object(identity_payload)),
-        );
+    if let Some(commitment_hex) = identity_commitment_hex {
+        let identity_key = Name::from_str("identity_commitment_hex").expect("static metadata key");
+        metadata.insert(identity_key, IrohaJson::new(commitment_hex));
     }
 
     let register_builder = dm::Account::new(account_id.clone());
@@ -56775,20 +57075,18 @@ pub async fn handle_v1_accounts_query(
     let accounts = collect_subject_accounts(&world);
     drop(world);
     if envelope.select.is_some() || envelope.aggregate.is_some() {
-        let rows = accounts
-            .into_iter()
-            .map(|account| {
-                let projected = AccountListItem {
-                    canonical_id: account.id().to_string(),
-                    display_id: crate::account_literal::display_literal(account.id()),
-                    primary_alias: primary_alias_projection_for_account_id(
-                        state.as_ref(),
-                        account.id(),
-                    ),
-                };
-                account_list_item_to_query_row(&projected)
-            })
-            .collect::<Vec<_>>();
+        let state_for_alias = state.clone();
+        let rows = accounts.into_iter().map(move |account| {
+            let projected = AccountListItem {
+                canonical_id: account.id().to_string(),
+                display_id: crate::account_literal::display_literal(account.id()),
+                primary_alias: primary_alias_projection_for_account_id(
+                    state_for_alias.as_ref(),
+                    account.id(),
+                ),
+            };
+            account_list_item_to_query_row(&projected)
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ACCOUNTS,
@@ -56929,13 +57227,13 @@ fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
     asset_id: &AssetId,
 ) {
-    let mut accounts = 0u64;
+    let mut accounts = BTreeSet::new();
     let mut positions = 0u64;
     for dataspace in &mut snapshot.dataspaces {
         for account in &mut dataspace.accounts {
             account.assets.retain(|asset| asset.asset_id == *asset_id);
             if !account.assets.is_empty() {
-                accounts = accounts.saturating_add(1);
+                accounts.insert(account.account_id.clone());
                 positions = positions.saturating_add(account.assets.len() as u64);
             }
         }
@@ -56946,7 +57244,7 @@ fn filter_portfolio_by_asset_id(
     snapshot
         .dataspaces
         .retain(|dataspace| !dataspace.accounts.is_empty());
-    snapshot.totals.accounts = accounts;
+    snapshot.totals.accounts = u64::try_from(accounts.len()).unwrap_or(u64::MAX);
     snapshot.totals.positions = positions;
 }
 
@@ -59873,6 +60171,7 @@ struct ExplorerInstructionFilters {
 impl ExplorerInstructionFilters {
     fn matches_transaction(
         &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
         tx: &SignedTransaction,
         block_height: u64,
         result: &TransactionResult,
@@ -59883,7 +60182,7 @@ impl ExplorerInstructionFilters {
             }
         }
         if let Some(expected_hash) = &self.transaction_hash {
-            if tx.hash_as_entrypoint() != *expected_hash {
+            if entrypoint_hash != *expected_hash {
                 return false;
             }
         }
@@ -60303,6 +60602,34 @@ pub async fn handle_v1_explorer_instruction_detail(
 }
 
 #[cfg(feature = "app_api")]
+fn external_signed_transaction_results(
+    block: &SignedBlock,
+) -> impl Iterator<
+    Item = (
+        HashOf<TransactionEntrypoint>,
+        SignedTransaction,
+        &TransactionResult,
+    ),
+> + '_ {
+    let external_total = block.external_entrypoint_count();
+    block
+        .external_entrypoints_cloned()
+        .take(external_total)
+        .zip(block.results().take(external_total))
+        .filter_map(|(entrypoint, result)| {
+            let entrypoint_hash = entrypoint.hash();
+            let signed = match entrypoint {
+                TransactionEntrypoint::External(signed) => signed,
+                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => return None,
+            };
+            Some((entrypoint_hash, signed, result))
+        })
+}
+
+#[cfg(feature = "app_api")]
 fn collect_transaction_summaries_from_kura(
     kura: &Kura,
     start_height: u64,
@@ -60324,13 +60651,14 @@ fn collect_transaction_summaries_from_kura(
             .get_block(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if filters.matches(tx, height, result) {
-                out.push(crate::explorer::transaction_summary_dto(tx, height, result));
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if filters.matches(&tx, height, result) {
+                out.push(crate::explorer::transaction_summary_dto_with_hash(
+                    &tx,
+                    entrypoint_hash,
+                    height,
+                    result,
+                ));
             }
         }
         if height == lower_bound || height == 1 {
@@ -60365,15 +60693,16 @@ fn collect_latest_transaction_summaries(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches(&tx, height, result) {
                 continue;
             }
-            out.push(crate::explorer::transaction_summary_dto(tx, height, result));
+            out.push(crate::explorer::transaction_summary_dto_with_hash(
+                &tx,
+                entrypoint_hash,
+                height,
+                result,
+            ));
             if (out.len() as u64) >= limit {
                 return Ok(out);
             }
@@ -60440,14 +60769,15 @@ fn collect_transaction_summaries(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if filters.matches(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if filters.matches(&tx, height, result) {
                 if total_items >= start_index && total_items < end_index {
-                    out.push(crate::explorer::transaction_summary_dto(tx, height, result));
+                    out.push(crate::explorer::transaction_summary_dto_with_hash(
+                        &tx,
+                        entrypoint_hash,
+                        height,
+                        result,
+                    ));
                 }
                 total_items = total_items.saturating_add(1);
             }
@@ -60482,12 +60812,8 @@ fn collect_instruction_history_from_kura(
             .get_block(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches_transaction(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
             let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60509,8 +60835,9 @@ fn collect_instruction_history_from_kura(
                     }
                 }
                 let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind(
-                    tx,
+                out.push(crate::explorer::instruction_dto_with_kind_and_hash(
+                    &tx,
+                    entrypoint_hash,
                     height,
                     result,
                     instruction,
@@ -60551,12 +60878,8 @@ fn collect_latest_instruction_history(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches_transaction(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
             let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60578,8 +60901,9 @@ fn collect_latest_instruction_history(
                     }
                 }
                 let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind(
-                    tx,
+                out.push(crate::explorer::instruction_dto_with_kind_and_hash(
+                    &tx,
+                    entrypoint_hash,
                     height,
                     result,
                     instruction,
@@ -60631,12 +60955,8 @@ fn collect_instruction_history(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches_transaction(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
             let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60659,8 +60979,9 @@ fn collect_instruction_history(
                 }
                 if total_items >= start_index && total_items < end_index {
                     let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                    out.push(crate::explorer::instruction_dto_with_kind(
-                        tx,
+                    out.push(crate::explorer::instruction_dto_with_kind_and_hash(
+                        &tx,
+                        entrypoint_hash,
                         height,
                         result,
                         instruction,
@@ -60761,14 +61082,13 @@ fn transaction_detail_at_height(
         return Ok(None);
     };
     let block_ref = block.as_ref();
-    let external_total = block_ref.external_transactions().len();
-    for (tx, result) in block_ref
-        .external_transactions()
-        .zip(block_ref.results().take(external_total))
-    {
-        if tx.hash_as_entrypoint() == target {
-            return Ok(Some(crate::explorer::transaction_detail_dto(
-                tx, height, result,
+    for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+        if entrypoint_hash == target {
+            return Ok(Some(crate::explorer::transaction_detail_dto_with_hash(
+                &tx,
+                entrypoint_hash,
+                height,
+                result,
             )));
         }
     }
@@ -60811,12 +61131,8 @@ fn instruction_detail_at_height(
         return Ok(None);
     };
     let block_ref = block.as_ref();
-    let external_total = block_ref.external_transactions().len();
-    for (tx, result) in block_ref
-        .external_transactions()
-        .zip(block_ref.results().take(external_total))
-    {
-        if tx.hash_as_entrypoint() != target {
+    for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+        if entrypoint_hash != target {
             continue;
         }
         let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60827,8 +61143,9 @@ fn instruction_detail_at_height(
             .ok_or_else(explorer_not_found)?;
         let kind = crate::explorer::instruction_kind(instruction);
         let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
-        return Ok(Some(crate::explorer::instruction_dto_with_kind(
-            tx,
+        return Ok(Some(crate::explorer::instruction_dto_with_kind_and_hash(
+            &tx,
+            entrypoint_hash,
             height,
             result,
             instruction,
@@ -61382,11 +61699,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                 break;
             }
 
-            let external_total = block_ref.external_transactions().len();
-            for (tx, result) in block_ref
-                .external_transactions()
-                .zip(block_ref.results().take(external_total))
-            {
+            for (_, tx, result) in external_signed_transaction_results(block_ref) {
                 // Ignore rejected transactions.
                 if result.as_ref().is_err() {
                     continue;
@@ -64007,7 +64320,7 @@ pub async fn handle_v1_nfts_query(
     }
 
     if generic_mode {
-        let rows = nfts.iter().map(nft_to_query_row).collect::<Vec<_>>();
+        let rows = nfts.iter().map(nft_to_query_row);
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_NFTS,
@@ -64284,14 +64597,11 @@ pub async fn handle_v1_rwas_query(
     }
 
     if generic_mode {
-        let rows = items
-            .iter()
-            .map(|item| {
-                let mut row = Map::new();
-                row.insert("id".into(), Value::from(item.id.clone()));
-                row
-            })
-            .collect::<Vec<_>>();
+        let rows = items.iter().map(|item| {
+            let mut row = Map::new();
+            row.insert("id".into(), Value::from(item.id.clone()));
+            row
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_RWAS,
@@ -67500,8 +67810,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     if generic_mode {
         let rows = projected_assets
             .into_iter()
-            .map(|item| account_asset_item_to_query_row(&item))
-            .collect::<Vec<_>>();
+            .map(|item| account_asset_item_to_query_row(&item));
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ACCOUNT_ASSETS,
@@ -68156,23 +68465,20 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     drop(world);
 
     if generic_mode {
-        let rows = map
-            .into_iter()
-            .map(|((account_id, scope), quantity)| {
-                let canonical_id = account_id.to_string();
-                let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-                let projected = AssetHolderListItem {
-                    account_id,
-                    canonical_id,
-                    asset: def_id.to_string(),
-                    asset_alias: asset_alias.clone(),
-                    scope: asset_balance_scope_literal(&scope),
-                    quantity,
-                    primary_alias,
-                };
-                asset_holder_item_to_query_row(&projected)
-            })
-            .collect::<Vec<_>>();
+        let rows = map.into_iter().map(|((account_id, scope), quantity)| {
+            let canonical_id = account_id.to_string();
+            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
+            let projected = AssetHolderListItem {
+                account_id,
+                canonical_id,
+                asset: def_id.to_string(),
+                asset_alias: asset_alias.clone(),
+                scope: asset_balance_scope_literal(&scope),
+                quantity,
+                primary_alias,
+            };
+            asset_holder_item_to_query_row(&projected)
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ASSET_HOLDERS,
@@ -68783,13 +69089,16 @@ fn generic_query_snapshot(
 }
 
 #[cfg(feature = "app_api")]
-fn execute_generic_resource_query(
+fn execute_generic_resource_query<I>(
     state: &CoreState,
     resource_id: &str,
     envelope: crate::filter::QueryEnvelope,
-    rows: Vec<norito::json::Map>,
+    rows: I,
     query_source: &'static str,
-) -> Result<Response, Error> {
+) -> Result<Response, Error>
+where
+    I: IntoIterator<Item = norito::json::Map>,
+{
     let resource = crate::generic_query::registered_resource(resource_id).ok_or_else(|| {
         Error::AppQueryValidation {
             code: "unsupported_query_resource",
@@ -70034,6 +70343,7 @@ pub async fn handle_schema() -> impl IntoResponse {
     let mut tuples = 0u64;
     let mut enums = 0u64;
     let mut ints = 0u64;
+    let mut floats = 0u64;
     let mut strings = 0u64;
     let mut bools = 0u64;
     let mut fixed_points = 0u64;
@@ -70052,6 +70362,7 @@ pub async fn handle_schema() -> impl IntoResponse {
             Metadata::Tuple(_) => tuples += 1,
             Metadata::Enum(_) => enums += 1,
             Metadata::Int(_) => ints += 1,
+            Metadata::Float(_) => floats += 1,
             Metadata::String => strings += 1,
             Metadata::Bool => bools += 1,
             Metadata::FixedPoint(_) => fixed_points += 1,
@@ -70074,6 +70385,7 @@ pub async fn handle_schema() -> impl IntoResponse {
     m.insert("tuples".into(), norito::json::Value::from(tuples));
     m.insert("enums".into(), norito::json::Value::from(enums));
     m.insert("ints".into(), norito::json::Value::from(ints));
+    m.insert("floats".into(), norito::json::Value::from(floats));
     m.insert("strings".into(), norito::json::Value::from(strings));
     m.insert("bools".into(), norito::json::Value::from(bools));
     m.insert(
@@ -71167,6 +71479,7 @@ mod tests {
             sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
+            execution_context_hash: None,
             confidential_features: None,
         };
         let committed: EventBox = BlockEvent {
@@ -71188,6 +71501,7 @@ mod tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Committed,
@@ -71206,6 +71520,7 @@ mod tests {
             sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
+            execution_context_hash: None,
             confidential_features: None,
         };
         let created: EventBox = BlockEvent {
@@ -71227,6 +71542,7 @@ mod tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Created,

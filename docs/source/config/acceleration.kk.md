@@ -171,12 +171,8 @@ GPU блогының декодтауы сым қосылғанша қолдау
 
 | Өріс | Әдепкі | Мақсаты |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` байт | Бұдан төмен, пайдалы жүктемелер үстеме шығындарды болдырмау үшін zstd толығымен өткізіп жібереді. |
-| `min_compress_bytes_gpu` | `1_048_576` байт (1МиБ) | `norito::core::hw::has_gpu_compression()` шын болғанда, осы шектегі немесе одан жоғары пайдалы жүктемелер GPU zstd параметріне ауысады. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | Сәйкесінше <32KiB және ≥32KiB пайдалы жүктемелер үшін CPU қысу деңгейлері. |
-| `zstd_level_gpu` | `1` | Командалық кезектерді толтыру кезінде кідіріс уақытын тұрақты сақтау үшін консервативті GPU деңгейі. |
-| `large_threshold` | `32_768` байт | «кіші» және «үлкен» CPU zstd деңгейлері арасындағы өлшем шекарасы. |
-| `aos_ncb_small_n` | `64` жолдары | Осы жолдың астындағы адаптивті кодтаушылар ең аз пайдалы жүктемені таңдау үшін AoS және NCB орналасуларын тексереді. |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` жолдары | 1–2 жолдарда бос ұяшықтар болған кезде u32/id дельта кодтауларын қосуды болдырмайды. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Дельталар кем дегенде екі қатар болған кезде ғана енеді. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | Барлық дельта түрлендірулері әдепкі бойынша дұрыс енгізілген енгізулер үшін қосылады. |

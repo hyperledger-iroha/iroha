@@ -175,8 +175,10 @@ mod tests {
         };
         let envelope =
             LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope");
-        let verified_at_height = Some(height);
-        let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+        let verified_at_height = height;
+        let proof_digest = UntypedHash::new(
+            format!("lane-relay-test-proof:{height}:{lane}:{verified_at_height}").as_bytes(),
+        );
         envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest,
             verified_at_height,

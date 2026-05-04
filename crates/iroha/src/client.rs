@@ -4,6 +4,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     str::FromStr,
@@ -6362,7 +6363,7 @@ pub struct PreparedTransactionPayload {
 impl PreparedTransactionPayload {
     /// Return the signed transaction hash associated with this payload.
     pub fn hash(&self) -> HashOf<SignedTransaction> {
-        self.hash.clone()
+        self.hash
     }
 
     /// Return the canonical versioned `SignedTransaction` bytes.
@@ -6806,6 +6807,10 @@ impl Client {
     }
 
     /// Encode and hash a signed transaction once for later submission.
+    #[expect(
+        clippy::unused_self,
+        reason = "preparing a signed transaction is intentionally client-independent and must allow foreign-chain payloads for server-side rejection tests"
+    )]
     pub fn prepare_transaction_payload(
         &self,
         transaction: &SignedTransaction,
@@ -7347,7 +7352,21 @@ impl Client {
                             .await
                         };
                         if let Some(iterator) = event_iterator {
-                            iterator.close().await;
+                            let close_timeout = Self::tx_confirmation_connect_timeout(
+                                client.transaction_status_timeout,
+                            );
+                            if !Self::close_tx_confirmation_stream_with_timeout(
+                                close_timeout,
+                                iterator.close(),
+                            )
+                            .await
+                            {
+                                warn!(
+                                    %hash,
+                                    timeout_ms = %close_timeout.as_millis(),
+                                    "timed out closing tx confirmation stream"
+                                );
+                            }
                         }
                         match result {
                                 Ok(inner) => match inner {
@@ -7440,6 +7459,13 @@ impl Client {
             candidate
         };
         bounded.min(timeout)
+    }
+
+    async fn close_tx_confirmation_stream_with_timeout<F>(close_timeout: Duration, close: F) -> bool
+    where
+        F: Future<Output = ()>,
+    {
+        tokio::time::timeout(close_timeout, close).await.is_ok()
     }
 
     fn tx_confirmation_poll_interval(timeout: Duration) -> Duration {
@@ -7560,7 +7586,11 @@ impl Client {
             crate::data_model::transaction::TransactionEntrypoint::External(entry) => {
                 entry.hash() == target
             }
-            crate::data_model::transaction::TransactionEntrypoint::Time(_)
+            crate::data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                reveal.signed_transaction().hash() == target
+            }
+            crate::data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+            | crate::data_model::transaction::TransactionEntrypoint::Time(_)
             | crate::data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => false,
         }
     }
@@ -9339,31 +9369,18 @@ impl Client {
         Ok((proof, paths))
     }
 
-    fn build_sorafs_pin_register_payload(
-        authority: &iroha_data_model::account::AccountId,
-        private_key: &iroha_crypto::PrivateKey,
-        manifest: &sorafs_manifest::ManifestV1,
-        chunk_digest_sha3_256: [u8; 32],
-        submitted_epoch: u64,
-        alias: Option<SorafsPinAlias<'_>>,
-        successor_of: Option<[u8; 32]>,
-    ) -> Result<norito::json::Value> {
-        let manifest_digest = manifest
-            .digest()
-            .wrap_err("failed to compute manifest digest for pin registration")?;
-        let chunker = &manifest.chunking;
-        let policy = &manifest.pin_policy;
+    fn sorafs_pin_policy_value(policy: &sorafs_manifest::PinPolicy) -> norito::json::Value {
         let storage_class_label = match policy.storage_class {
             sorafs_manifest::StorageClass::Hot => "Hot",
             sorafs_manifest::StorageClass::Warm => "Warm",
             sorafs_manifest::StorageClass::Cold => "Cold",
         };
-
         let mut storage_class_map = norito::json::Map::new();
         storage_class_map.insert(
             "type".into(),
             norito::json::Value::from(storage_class_label),
         );
+
         let mut pin_policy_map = norito::json::Map::new();
         pin_policy_map.insert(
             "min_replicas".into(),
@@ -9377,7 +9394,38 @@ impl Client {
             "retention_epoch".into(),
             norito::json::Value::from(policy.retention_epoch),
         );
+        norito::json::Value::from(pin_policy_map)
+    }
 
+    fn sorafs_pin_alias_value(alias: SorafsPinAlias<'_>) -> norito::json::Value {
+        let mut alias_map = norito::json::Map::new();
+        alias_map.insert(
+            "namespace".into(),
+            norito::json::Value::from(alias.namespace),
+        );
+        alias_map.insert("name".into(), norito::json::Value::from(alias.name));
+        alias_map.insert(
+            "proof_base64".into(),
+            norito::json::Value::from(
+                base64::engine::general_purpose::STANDARD.encode(alias.proof),
+            ),
+        );
+        norito::json::Value::from(alias_map)
+    }
+
+    fn build_sorafs_pin_register_payload(
+        authority: &iroha_data_model::account::AccountId,
+        private_key: &iroha_crypto::PrivateKey,
+        manifest: &sorafs_manifest::ManifestV1,
+        chunk_digest_sha3_256: [u8; 32],
+        submitted_epoch: u64,
+        alias: Option<SorafsPinAlias<'_>>,
+        successor_of: Option<[u8; 32]>,
+    ) -> Result<norito::json::Value> {
+        let manifest_digest = manifest
+            .digest()
+            .wrap_err("failed to compute manifest digest for pin registration")?;
+        let chunker = &manifest.chunking;
         let mut map = norito::json::Map::new();
         map.insert(
             "authority".into(),
@@ -9411,7 +9459,7 @@ impl Client {
         );
         map.insert(
             "pin_policy".into(),
-            norito::json::Value::from(pin_policy_map),
+            Self::sorafs_pin_policy_value(&manifest.pin_policy),
         );
         map.insert(
             "manifest_digest_hex".into(),
@@ -9433,19 +9481,7 @@ impl Client {
         }
 
         if let Some(alias) = alias {
-            let mut alias_map = norito::json::Map::new();
-            alias_map.insert(
-                "namespace".into(),
-                norito::json::Value::from(alias.namespace),
-            );
-            alias_map.insert("name".into(), norito::json::Value::from(alias.name));
-            alias_map.insert(
-                "proof_base64".into(),
-                norito::json::Value::from(
-                    base64::engine::general_purpose::STANDARD.encode(alias.proof),
-                ),
-            );
-            map.insert("alias".into(), norito::json::Value::from(alias_map));
+            map.insert("alias".into(), Self::sorafs_pin_alias_value(alias));
         }
         if let Some(successor) = successor_of {
             map.insert(
@@ -10454,11 +10490,9 @@ impl Client {
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to deploy contract: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
+            return Err(ResponseReport::with_msg("Failed to deploy contract", &resp)
+                .unwrap_or_else(core::convert::identity)
+                .into());
         }
         Ok(norito::json::from_slice(resp.body())?)
     }
@@ -10486,11 +10520,11 @@ impl Client {
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to deploy contract bundle: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
+            return Err(
+                ResponseReport::with_msg("Failed to deploy contract bundle", &resp)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
         }
         Ok(norito::json::from_slice(resp.body())?)
     }
@@ -13026,7 +13060,7 @@ mod tx_hash_tests {
 
 #[cfg(test)]
 mod tx_confirmation_stream_tests {
-    use std::time::Duration;
+    use std::{future, time::Duration};
 
     use eyre::eyre;
     use futures_util::stream;
@@ -13052,6 +13086,26 @@ mod tx_confirmation_stream_tests {
             transaction::error::TransactionRejectionReason,
         },
     };
+
+    #[tokio::test]
+    async fn close_tx_confirmation_stream_timeout_is_bounded() {
+        let closed = super::Client::close_tx_confirmation_stream_with_timeout(
+            Duration::from_millis(1),
+            future::pending::<()>(),
+        )
+        .await;
+        assert!(!closed);
+    }
+
+    #[tokio::test]
+    async fn close_tx_confirmation_stream_reports_completed_close() {
+        let closed = super::Client::close_tx_confirmation_stream_with_timeout(
+            Duration::from_millis(1),
+            future::ready(()),
+        )
+        .await;
+        assert!(closed);
+    }
 
     #[tokio::test]
     async fn queued_timeout_honors_max_duration() {
@@ -13147,6 +13201,7 @@ mod tx_confirmation_stream_tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Committed,
@@ -13164,6 +13219,7 @@ mod tx_confirmation_stream_tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Applied,
@@ -13237,6 +13293,7 @@ mod tx_confirmation_stream_tests {
                     sccp_commitment_root: None,
                     creation_time_ms: 0,
                     view_change_index: 0,
+                    execution_context_hash: None,
                     confidential_features: None,
                 },
                 status: BlockStatus::Committed,
@@ -13266,6 +13323,7 @@ mod tx_confirmation_stream_tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Applied,
@@ -13317,6 +13375,7 @@ mod tx_confirmation_stream_tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             },
             status: BlockStatus::Applied,
@@ -16319,6 +16378,21 @@ mod tests {
             TransactionEntrypoint::decode_all_versioned(prepared.as_bytes()).is_err(),
             "prepared payload must not use internal TransactionEntrypoint envelopes"
         );
+    }
+
+    #[test]
+    fn prepared_transaction_payload_allows_foreign_chain_for_server_rejection_tests() {
+        let client = client_with_base_url(base_url());
+        let (authority, keypair) = gen_account_in("foreign-chain-authority");
+        let tx = TransactionBuilder::new(ChainId::from("foreign-chain"), authority)
+            .with_instructions(Vec::<InstructionBox>::new())
+            .sign(keypair.private_key());
+        let prepared = client.prepare_transaction_payload(&tx);
+
+        assert_eq!(prepared.hash(), tx.hash());
+        let decoded = SignedTransaction::decode_all_versioned(prepared.as_bytes())
+            .expect("prepared payload must decode as the original signed transaction");
+        assert_eq!(decoded.chain(), tx.chain());
     }
 
     #[test]
@@ -19386,6 +19460,7 @@ mod tests {
         (bundle, payload)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
         use iroha_sccp::{
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,

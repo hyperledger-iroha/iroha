@@ -5860,6 +5860,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn transparent_fastpq_open_verify_summary_reports_binding_metadata() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -6960,9 +6961,15 @@ mod tests {
     #[test]
     fn evm_destination_binding_uses_lowercase_hex_key_and_expected_hash() {
         let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
-        let network_id = core::array::from_fn(|idx| idx as u8);
-        let verifier_address = core::array::from_fn(|idx| 0x80u8.saturating_add(idx as u8));
-        let bridge_address = core::array::from_fn(|idx| 0xA0u8.saturating_add(idx as u8));
+        let network_id = core::array::from_fn(|idx| u8::try_from(idx).expect("index fits in u8"));
+        let verifier_address = core::array::from_fn(|idx| {
+            let idx = u8::try_from(idx).expect("index fits in u8");
+            0x80u8.saturating_add(idx)
+        });
+        let bridge_address = core::array::from_fn(|idx| {
+            let idx = u8::try_from(idx).expect("index fits in u8");
+            0xA0u8.saturating_add(idx)
+        });
 
         let binding = build_sccp_evm_destination_binding(
             &manifest,

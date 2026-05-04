@@ -791,6 +791,7 @@ mod tests {
                 api_min_proof_version:
                     iroha_config::parameters::defaults::torii::api_min_proof_version(),
                 api_version_sunset_unix: iroha_torii_shared::API_VERSION_SUNSET_UNIX,
+                cors: iroha_config::parameters::actual::ToriiCors::default(),
                 max_content_len: 1_048_576u64.into(),
                 data_dir: iroha_config::parameters::defaults::torii::data_dir(),
                 receipt_signer: None,
@@ -808,6 +809,8 @@ mod tests {
                         .and_then(std::num::NonZeroU32::new),
                 soracloud_public_max_inflight:
                     iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+                soracloud_public_max_response_bytes:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES,
                 soracloud_mutation_rate_per_account_origin_per_sec:
                     iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
                         .and_then(std::num::NonZeroU32::new),
@@ -1742,18 +1745,9 @@ mod tests {
                 },
             },
             norito: iroha_config::parameters::actual::Norito {
-                min_compress_bytes_cpu:
-                    iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_CPU,
-                min_compress_bytes_gpu:
-                    iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_GPU,
-                zstd_level_small: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_SMALL,
-                zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
-                zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
-                large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
                 allow_gpu_compression:
                     iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
                 max_archive_len: iroha_config::parameters::defaults::norito::MAX_ARCHIVE_LEN,
-                aos_ncb_small_n: iroha_config::parameters::defaults::norito::AOS_NCB_SMALL_N,
             },
             hijiri: Hijiri::new(None),
             fraud_monitoring: FraudMonitoring::new(

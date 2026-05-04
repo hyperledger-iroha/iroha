@@ -14,9 +14,9 @@ public sealed class TransactionBuilderTests
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 761, 1379, "bbefa0a333292f0a8e910363f00cc79554edd579d83a953a4171d2faf1976445")]
-    [InlineData("swift_mint_asset_basic", 651, 1269, "35da74c14f2243f1d4beaac1611911ccfbdf9f5db6252d008be87c971c88da19")]
-    [InlineData("swift_burn_asset_basic", 651, 1269, "3cd19ec99c36fbf38f057a9f7fdddeb003d6838980469d0479b7910e98ca1bb5")]
+    [InlineData("swift_transfer_asset_basic", 761, 1379, "670e42748e47402ec28a9090befd3bcbe0a2e82ef362405a0c237daac3111d65")]
+    [InlineData("swift_mint_asset_basic", 651, 1269, "83de89f2a66af6f3c33658c26aa66d1c88f6903c0e278f11b4bd0b7f4db3d287")]
+    [InlineData("swift_burn_asset_basic", 651, 1269, "fe23070b7c9a3ca13a624d4d9ff7f90c046626e62a07dea68c5137d2104faba7")]
     public void BuildSignedProducesDeterministicGoldenOutputs(
         string fixtureName,
         int expectedPayloadLength,

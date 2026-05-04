@@ -101,6 +101,7 @@ mod tests {
     use crate::{
         OperationKind, Planner, PublicInputs, StateTransition, TransitionBatch,
         backend::{self, ExecutionMode},
+        gadgets::transfer,
         trace::{
             ColumnDigests, RowUsage, TraceColumn, derive_polynomial_data,
             hash_columns_from_coefficients,
@@ -152,6 +153,12 @@ mod tests {
         match name {
             "transfer" => {
                 let transcript = sample_transfer_transcript();
+                let delta = transcript
+                    .deltas
+                    .first()
+                    .expect("transfer fixture has delta");
+                batch.public_inputs.old_root = delta.from_smt_witness.root_before;
+                batch.public_inputs.new_root = delta.to_smt_witness.root_after;
                 for transition in sample_transfer_transitions(&transcript) {
                     batch.push(transition);
                 }
@@ -200,7 +207,7 @@ mod tests {
     }
 
     fn sample_transfer_transcript() -> TransferTranscript {
-        let delta = TransferDeltaTranscript {
+        let mut delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: AssetDefinitionId::new(
@@ -212,9 +219,10 @@ mod tests {
             from_balance_after: Numeric::from(925u32),
             to_balance_before: Numeric::from(75u32),
             to_balance_after: Numeric::from(150u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
+        attach_delta_witnesses(&mut delta);
         let batch_hash = Hash::prehashed([0x11; 32]);
         let digest = crate::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
         TransferTranscript {
@@ -223,6 +231,29 @@ mod tests {
             authority_digest: Hash::new(b"authority"),
             poseidon_preimage_digest: Some(digest),
         }
+    }
+
+    fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
+        let sender_key =
+            format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
+        let receiver_key =
+            format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes();
+        let (from, to) = transfer::build_transfer_smt_witness_pair(
+            &sender_key,
+            numeric_u64(&delta.from_balance_before),
+            numeric_u64(&delta.from_balance_after),
+            &receiver_key,
+            numeric_u64(&delta.to_balance_before),
+            numeric_u64(&delta.to_balance_after),
+        )
+        .expect("transfer witness");
+        delta.from_smt_witness = from;
+        delta.to_smt_witness = to;
+    }
+
+    fn numeric_u64(value: &Numeric) -> u64 {
+        iroha_data_model::fastpq::normalized_numeric_to_u64(value, value.scale())
+            .expect("numeric fits")
     }
 
     fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {

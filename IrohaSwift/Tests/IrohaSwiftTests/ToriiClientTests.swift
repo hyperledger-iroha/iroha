@@ -1201,7 +1201,6 @@ final class ToriiClientTests: XCTestCase {
               "program_id":"identifier_lookup_retail",
               "opaque_hash":"opaque-hash-literal",
               "receipt_hash":"receipt-hash-literal",
-              "output_hex":"c0ffee",
               "output_hash":"output-hash-literal",
               "associated_data_hash":"associated-data-hash-literal",
               "executed_at_ms":42,
@@ -1234,7 +1233,7 @@ final class ToriiClientTests: XCTestCase {
             inputHex: "0xABCD"
         )
         XCTAssertEqual(response?.programId, "identifier_lookup_retail")
-        XCTAssertEqual(response?.outputHex, "c0ffee")
+        XCTAssertEqual(response?.outputHash, "output-hash-literal")
         XCTAssertEqual(response?.verificationMode, "signed")
         if case let .object(receipt)? = response?.receipt["payload"] {
             XCTAssertNotNil(receipt["program_id"])
@@ -1379,7 +1378,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
     }
 
-    func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixture() throws {
+    func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {
         let accountId = "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463"
         let receiptJSON = """
         {
@@ -1411,7 +1410,7 @@ final class ToriiClientTests: XCTestCase {
             from: Data(receiptJSON.utf8)
         )
         let expectedPayloadHex = """
-        0F0605656D61696C070672657461696C90010E0D0C656D61696C5F72657461696C20FE36CEB3996D101200B895FD2A377CCE4426426A473DA9FE08B2DBD2BD8B9375040200000004000000002072DCDEE1435552E943D5E2E1C978D3F728C6A1CE7E6870B50C63568D4876EEA52035B8BC8A30685E7CC5679B6E6A45675539548F5A24326BBEE1D8C20E55918F5508A6B146B29D0100000A0108D62647B29D0100002120FD14CB369E853352D4B9C578745627D154471CE5FD3462C4DB542C104766E9832051BBE55B70E09D4C2BB75D9C31B2CDE46A7BDD5414134F6786255C679A68AC532120471B620A99C608AF1C7A47199F27B3368AE0EA889A497DD774B52A8287A583934C00000000474665643031323030383033323045393534303742453532333445393945434138314137303133453033393930393546323139313845334241344532433839344338383032303834
+        0F0605656D61696C070672657461696C90010E0D0C656D61696C5F72657461696C20FE36CEB3996D101200B895FD2A377CCE4426426A473DA9FE08B2DBD2BD8B9375040200000004000000002072DCDEE1435552E943D5E2E1C978D3F728C6A1CE7E6870B50C63568D4876EEA52035B8BC8A30685E7CC5679B6E6A45675539548F5A24326BBEE1D8C20E55918F5508A6B146B29D0100000A0108D62647B29D0100002120FD14CB369E853352D4B9C578745627D154471CE5FD3462C4DB542C104766E9832051BBE55B70E09D4C2BB75D9C31B2CDE46A7BDD5414134F6786255C679A68AC532120471B620A99C608AF1C7A47199F27B3368AE0EA889A497DD774B52A8287A583934F000000004A2100000000000000010001080103012001E90154010701BE0152013401E9019E01CA018101A70101013E010301990109015F01210191018E013B01A401E201C8019401C8018001200184
         """
         XCTAssertEqual(
             try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload).hexUppercased(),
@@ -1431,7 +1430,7 @@ final class ToriiClientTests: XCTestCase {
             proofVerifier: nil,
             note: nil
         )
-        XCTAssertEqual(try receipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try receipt.verifyAttestation(using: policy), false)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1759,7 +1758,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
         let expected =
-            "4e525430000035a9bf76d68dbb0c35a9bf76d68dbb0c00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000"
+            "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000"
 
         XCTAssertEqual(try policy.encryptInput("ab", seedHex: seedHex), expected)
         let request = try policy.encryptedRequest(input: "ab", seedHex: seedHex)
@@ -1886,6 +1885,44 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(payload?.payload.submittedAtHeight, 2)
         XCTAssertEqual(payload?.payload.signer, "signer")
         XCTAssertEqual(payload?.signature, "deadbeef")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionEntrypointAsync() async throws {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody())
+            case "/transaction/entrypoint":
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(self.bodyData(from: request), Data([0xAA, 0xBB]))
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"entry","submitted_at_ms":3,"submitted_at_height":4,"signer":"entry-signer"},"signature":"feedface"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let payload = try await makeClient().submitTransactionEntrypoint(data: Data([0xAA, 0xBB]))
+        XCTAssertEqual(payload?.hash, "entry")
+        XCTAssertEqual(payload?.payload.submittedAtMs, 3)
+        XCTAssertEqual(payload?.payload.submittedAtHeight, 4)
+        XCTAssertEqual(payload?.payload.signer, "entry-signer")
+        XCTAssertEqual(payload?.signature, "feedface")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2324,6 +2361,239 @@ final class ToriiClientTests: XCTestCase {
         }
         let deleted = try await makeClient().deleteConnectSession(sid: "sid-1", tokenManagement: "token-management")
         XCTAssertFalse(deleted)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetVpnProfileDeserializesNativeLeaseFields() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/vpn/profile")
+            let payload: [String: Any] = [
+                "available": true,
+                "supported_exit_classes": ["standard"],
+                "default_exit_class": "standard",
+                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "lease_secs": "900",
+                "route_pushes": ["0.0.0.0/0"],
+                "excluded_routes": ["10.0.0.0/8"],
+                "dns_servers": ["1.1.1.1"],
+                "tunnel_addresses": ["10.208.0.2/32"],
+                "mtu_bytes": 1280,
+                "meter_family": "vpn-standard",
+                "display_billing_label": "standard vpn",
+                "fee_asset_id": "xor#universal.universal",
+                "escrow_account_id": "vpn_escrow",
+                "operator_account_id": "vpn_operator",
+                "lease_fee_nanos": "1000000",
+                "settlement_grace_secs": 60,
+                "flow_label_bits": 24,
+                "padding_budget_ms": 15,
+                "relay_tls_spki_sha256_hex": String(repeating: "ab", count: 32)
+            ]
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, try JSONSerialization.data(withJSONObject: payload))
+        }
+        let profile = try await makeClient().getVpnProfile()
+        XCTAssertTrue(profile.available)
+        XCTAssertEqual(profile.feeAssetId, "xor#universal.universal")
+        XCTAssertEqual(profile.leaseFeeNanos, 1_000_000)
+        XCTAssertEqual(profile.flowLabelBits, 24)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCreateVpnQuoteSignsAndDeserializesOpenLeaseInstruction() async throws {
+        let meteringKey = String(repeating: "ab", count: 32)
+        let quoteId = String(repeating: "cd", count: 32)
+        let auth = ToriiCanonicalRequestAuth(accountId: "alice",
+                                             privateKey: Data(repeating: 7, count: 32),
+                                             timestampMs: 1_700_000_000_000,
+                                             nonce: "nonce-1")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/vpn/quotes")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), "alice")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs), "1700000000000")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce), "nonce-1")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["exit_class"] as? String, "standard")
+            XCTAssertEqual(body["metering_public_key_hex"] as? String, meteringKey)
+            let payload: [String: Any] = [
+                "quote_id": quoteId,
+                "lease_id_hex": quoteId,
+                "session_id_hex": String(repeating: "ef", count: 16),
+                "payment_reference": quoteId,
+                "account_id": "alice",
+                "exit_class": "standard",
+                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "lease_secs": 900,
+                "quote_expires_at_ms": 1_700_000_900_000,
+                "fee_asset_id": "xor#universal.universal",
+                "escrow_account_id": "vpn_escrow",
+                "operator_account_id": "vpn_operator",
+                "lease_fee_nanos": "1000000",
+                "route_pushes": [],
+                "excluded_routes": [],
+                "dns_servers": ["1.1.1.1"],
+                "tunnel_addresses": ["10.208.0.2/32"],
+                "mtu_bytes": 1280,
+                "meter_family": "vpn-standard",
+                "flow_label_bits": 24,
+                "padding_budget_ms": 15,
+                "relay_tls_spki_sha256_hex": String(repeating: "12", count: 32),
+                "metering_public_key_hex": meteringKey,
+                "open_lease_instruction": [
+                    "wire_id": "OpenVpnLeaseEscrow",
+                    "payload_hex": "abcd"
+                ],
+                "tx_instructions": [
+                    ["wire_id": "OpenVpnLeaseEscrow", "payload_hex": "abcd"]
+                ]
+            ]
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, try JSONSerialization.data(withJSONObject: payload))
+        }
+        let quote = try await makeClient().createVpnQuote(
+            ToriiVpnQuoteCreateRequest(exitClass: "standard", meteringPublicKeyHex: "0x\(meteringKey)"),
+            canonicalAuth: auth
+        )
+        XCTAssertEqual(quote.quoteId, quoteId)
+        XCTAssertEqual(quote.openLeaseInstruction?.wireId, "OpenVpnLeaseEscrow")
+        XCTAssertEqual(quote.txInstructions.count, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCreateAndGetVpnSessionUseQuotePaymentAndMeteringKey() async throws {
+        let quoteId = String(repeating: "11", count: 32)
+        let paymentHash = String(repeating: "22", count: 32)
+        let meteringKey = String(repeating: "33", count: 32)
+        var callCount = 0
+        StubURLProtocol.handler = { request in
+            callCount += 1
+            if callCount == 1 {
+                XCTAssertEqual(request.url?.path, "/v1/vpn/sessions")
+                XCTAssertEqual(request.httpMethod, "POST")
+                let body = self.bodyJSON(from: request)
+                XCTAssertEqual(body["quote_id"] as? String, quoteId)
+                XCTAssertEqual(body["payment_tx_hash"] as? String, paymentHash)
+                XCTAssertEqual(body["metering_public_key_hex"] as? String, meteringKey)
+            } else {
+                XCTAssertEqual(request.url?.path, "/v1/vpn/sessions/\(quoteId)")
+                XCTAssertEqual(request.httpMethod, "GET")
+            }
+            let payload: [String: Any] = [
+                "session_id": quoteId,
+                "account_id": "alice",
+                "exit_class": "standard",
+                "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                "lease_secs": 900,
+                "expires_at_ms": 1_700_000_900_000,
+                "connected_at_ms": 1_700_000_000_000,
+                "meter_family": "vpn-standard",
+                "quote_id": quoteId,
+                "payment_reference": quoteId,
+                "payment_tx_hash": paymentHash,
+                "fee_asset_id": "xor#universal.universal",
+                "escrow_account_id": "vpn_escrow",
+                "operator_account_id": "vpn_operator",
+                "lease_fee_nanos": 1_000_000,
+                "flow_label_bits": 24,
+                "padding_budget_ms": 15,
+                "relay_tls_spki_sha256_hex": NSNull(),
+                "route_pushes": [],
+                "excluded_routes": [],
+                "dns_servers": [],
+                "tunnel_addresses": ["10.208.0.2/32"],
+                "mtu_bytes": 1280,
+                "helper_ticket_hex": "abcd",
+                "bytes_in": "0",
+                "bytes_out": "0",
+                "status": "active"
+            ]
+            let response = HTTPURLResponse(url: request.url!, statusCode: callCount == 1 ? 201 : 200, httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, try JSONSerialization.data(withJSONObject: payload))
+        }
+        let client = makeClient()
+        let created = try await client.createVpnSession(
+            ToriiVpnSessionCreateRequest(quoteId: "0x\(quoteId)",
+                                         paymentTransactionHash: paymentHash,
+                                         meteringPublicKeyHex: meteringKey)
+        )
+        let fetched = try await client.getVpnSession(sessionId: quoteId)
+        XCTAssertEqual(created.sessionId, quoteId)
+        XCTAssertEqual(fetched?.paymentTransactionHash, paymentHash)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitListAndDeleteVpnReceiptsExposeSettlementInstruction() async throws {
+        let quoteId = String(repeating: "44", count: 32)
+        let settle: [String: Any] = [
+            "wire_id": "SettleVpnLease",
+            "payload_hex": "cafe"
+        ]
+        let receiptPayload: [String: Any] = [
+            "session_id": quoteId,
+            "account_id": "alice",
+            "exit_class": "standard",
+            "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+            "meter_family": "vpn-standard",
+            "connected_at_ms": 1,
+            "disconnected_at_ms": 2,
+            "duration_ms": 1,
+            "bytes_in": 10,
+            "bytes_out": "20",
+            "status": "settled",
+            "receipt_source": "relay",
+            "quote_id": quoteId,
+            "payment_tx_hash": String(repeating: "55", count: 32),
+            "fee_asset_id": "xor#universal.universal",
+            "escrow_account_id": "vpn_escrow",
+            "operator_account_id": "vpn_operator",
+            "lease_fee_nanos": "1000000",
+            "earned_fee_nanos": 700000,
+            "refunded_fee_nanos": 300000,
+            "lease_id_hex": quoteId,
+            "settle_lease_instruction": settle,
+            "tx_instructions": [settle]
+        ]
+        var callCount = 0
+        StubURLProtocol.handler = { request in
+            callCount += 1
+            if callCount == 1 {
+                XCTAssertEqual(request.url?.path, "/v1/vpn/receipts")
+                XCTAssertEqual(request.httpMethod, "POST")
+                let body = self.bodyJSON(from: request)
+                XCTAssertEqual(body["relay_receipt_hex"] as? String, "abcd")
+                XCTAssertEqual(body["client_voucher_hex"] as? String, "1234")
+                XCTAssertEqual(body["lease_id_hex"] as? String, quoteId)
+                let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, try JSONSerialization.data(withJSONObject: receiptPayload))
+            }
+            if callCount == 2 {
+                XCTAssertEqual(request.httpMethod, "GET")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, try JSONSerialization.data(withJSONObject: ["items": [receiptPayload], "total": "1"]))
+            }
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, try JSONSerialization.data(withJSONObject: receiptPayload))
+        }
+        let client = makeClient()
+        let submitted = try await client.submitVpnReceipt(
+            ToriiVpnReceiptSubmitRequest(relayReceiptHex: "0xabcd",
+                                         clientVoucherHex: "1234",
+                                         leaseIdHex: quoteId)
+        )
+        let list = try await client.listVpnReceipts()
+        let deleted = try await client.deleteVpnSession(sessionId: quoteId)
+        XCTAssertEqual(submitted.settleLeaseInstruction?.wireId, "SettleVpnLease")
+        XCTAssertEqual(list.items.first?.earnedFeeNanos, 700_000)
+        XCTAssertEqual(deleted?.txInstructions.first?.payloadHex, "cafe")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -5183,6 +5453,98 @@ final class ToriiClientTests: XCTestCase {
 
         _ = try await makeClient().getUaidPortfolio(uaid: "uaid:\(uaidHex)",
                                                     query: ToriiUaidPortfolioQuery(assetId: assetId))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountCanonicalizesUaidAndIdentityCommitment() async throws {
+        let uaidHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        let commitmentHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let responseBody = """
+        {
+          "account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+          "uaid":"uaid:\(uaidHex)",
+          "tx_hash_hex":"\(String(repeating: "22", count: 31))23",
+          "status":"accepted"
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/accounts/onboard")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["alias"] as? String, "alice@universal")
+            XCTAssertEqual(payload["account_id"] as? String, "sora-account")
+            XCTAssertEqual(payload["uaid"] as? String, "uaid:\(uaidHex)")
+            XCTAssertEqual(payload["identity_commitment_hex"] as? String, commitmentHex)
+            XCTAssertNil(payload["identity"])
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 202,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, responseBody)
+        }
+
+        let response = try await makeClient().registerAccount(
+            ToriiAccountOnboardingRequest(
+                alias: "alice@universal",
+                accountId: "sora-account",
+                uaid: "  UAID:\(uaidHex.uppercased())  ",
+                identityCommitmentHex: "  \(commitmentHex.uppercased())  "
+            )
+        )
+        XCTAssertEqual(response.uaid, "uaid:\(uaidHex)")
+        XCTAssertEqual(response.status, "accepted")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRejectsInvalidUaidBeforeNetwork() async {
+        StubURLProtocol.handler = { _ in
+            XCTFail("registerAccount should validate UAID before dispatch")
+            throw URLError(.badURL)
+        }
+        let invalidUaid = "uaid:\(String(repeating: "10", count: 32))"
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    accountId: "sora-account",
+                    uaid: invalidUaid
+                )
+            )
+            XCTFail("Expected invalid UAID error")
+        } catch {
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRejectsInvalidIdentityCommitmentBeforeNetwork() async {
+        StubURLProtocol.handler = { _ in
+            XCTFail("registerAccount should validate identity commitment before dispatch")
+            throw URLError(.badURL)
+        }
+        let uaidHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    accountId: "sora-account",
+                    uaid: "uaid:\(uaidHex)",
+                    identityCommitmentHex: "abcd"
+                )
+            )
+            XCTFail("Expected invalid identity commitment error")
+        } catch {
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

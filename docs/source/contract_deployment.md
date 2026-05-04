@@ -2,7 +2,7 @@
 title: Contract Deployment (.to) — API & Workflow
 ---
 
-Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
+Status: implemented and exercised by Torii, CLI, and core admission tests (May 2026).
 
 ## Overview
 
@@ -24,12 +24,14 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 ## Stored Artifacts & Retention
 
-- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
-  `code_hash`. When the same hash already exists, it is replaced with the new
-  manifest.
 - `RegisterSmartContractBytes` stores the compiled program under
-  `contract_code[code_hash]`. If bytes for a hash already exist they must match
-  exactly; differing bytes raise an invariant violation.
+  `contract_code[code_hash]` after verifying the self-describing `CNTR`
+  artifact and recomputing its canonical hash. If bytes for a hash already
+  exist they must match exactly; differing bytes raise an invariant violation.
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash` only after the matching bytecode is already stored. The stored
+  bytes must verify as a `CNTR` artifact whose embedded manifest payload
+  matches the submitted manifest payload.
 - Code size is capped by the custom parameter `max_contract_code_bytes`
   (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
   registering larger artifacts.
@@ -45,7 +47,8 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
   / ABI mismatches, or unsupported metadata.
 - The canonical manifest is built from the verified `CNTR` payload, signed by
-  the submitting key, and then stored together with the uploaded bytecode.
+  the submitting key, and then stored after the uploaded bytecode has been
+  verified and written under the same `code_hash`.
 - Transactions targeting protected namespaces must include metadata key
   `gov_contract_address`. The admission path compares the derived dataspace and
   address against enacted `DeployContract` proposals; if no matching proposal

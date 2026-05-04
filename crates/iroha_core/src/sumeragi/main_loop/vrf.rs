@@ -168,6 +168,102 @@ impl Actor {
         )
     }
 
+    fn sign_vrf_commit(&self, commit: &mut crate::sumeragi::consensus::VrfCommit, mode_tag: &str) {
+        commit.bls_sig.clear();
+        let preimage = vrf_commit_preimage(&self.common_config.chain, mode_tag, commit);
+        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
+        commit.bls_sig = signature.payload().to_vec();
+    }
+
+    fn sign_vrf_reveal(&self, reveal: &mut crate::sumeragi::consensus::VrfReveal, mode_tag: &str) {
+        reveal.bls_sig.clear();
+        let preimage = vrf_reveal_preimage(&self.common_config.chain, mode_tag, reveal);
+        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
+        reveal.bls_sig = signature.payload().to_vec();
+    }
+
+    fn verify_vrf_commit_signature(
+        &self,
+        commit: &crate::sumeragi::consensus::VrfCommit,
+        topology: &[PeerId],
+        mode_tag: &str,
+    ) -> bool {
+        let Ok(idx) = usize::try_from(commit.signer) else {
+            warn!(
+                signer = commit.signer,
+                "rejected VRF commit: signer index overflow"
+            );
+            return false;
+        };
+        let Some(peer) = topology.get(idx) else {
+            warn!(
+                signer = commit.signer,
+                topology_len = topology.len(),
+                "rejected VRF commit: signer index outside active topology"
+            );
+            return false;
+        };
+        if commit.bls_sig.is_empty() {
+            warn!(
+                signer = commit.signer,
+                "rejected VRF commit: missing BLS signature"
+            );
+            return false;
+        }
+        let preimage = vrf_commit_preimage(&self.common_config.chain, mode_tag, commit);
+        Signature::from_bytes(&commit.bls_sig)
+            .verify(peer.public_key(), &preimage)
+            .inspect_err(|err| {
+                warn!(
+                    ?err,
+                    signer = commit.signer,
+                    "rejected VRF commit: invalid BLS signature"
+                );
+            })
+            .is_ok()
+    }
+
+    fn verify_vrf_reveal_signature(
+        &self,
+        reveal: &crate::sumeragi::consensus::VrfReveal,
+        topology: &[PeerId],
+        mode_tag: &str,
+    ) -> bool {
+        let Ok(idx) = usize::try_from(reveal.signer) else {
+            warn!(
+                signer = reveal.signer,
+                "rejected VRF reveal: signer index overflow"
+            );
+            return false;
+        };
+        let Some(peer) = topology.get(idx) else {
+            warn!(
+                signer = reveal.signer,
+                topology_len = topology.len(),
+                "rejected VRF reveal: signer index outside active topology"
+            );
+            return false;
+        };
+        if reveal.bls_sig.is_empty() {
+            warn!(
+                signer = reveal.signer,
+                "rejected VRF reveal: missing BLS signature"
+            );
+            return false;
+        }
+        let preimage = vrf_reveal_preimage(&self.common_config.chain, mode_tag, reveal);
+        Signature::from_bytes(&reveal.bls_sig)
+            .verify(peer.public_key(), &preimage)
+            .inspect_err(|err| {
+                warn!(
+                    ?err,
+                    signer = reveal.signer,
+                    "rejected VRF reveal: invalid BLS signature"
+                );
+            })
+            .is_ok()
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn maybe_emit_vrf_messages(
         &mut self,
@@ -189,6 +285,7 @@ impl Actor {
             return Ok(());
         };
 
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
         let mut pending_commit: Option<crate::sumeragi::consensus::VrfCommit> = None;
 
         if position <= commit_end {
@@ -207,19 +304,26 @@ impl Actor {
                         state.commitment = commitment;
                         state.commit_sent = true;
                         state.reveal_sent = false;
-                        pending_commit = Some(crate::sumeragi::consensus::VrfCommit {
+                        let mut commit = crate::sumeragi::consensus::VrfCommit {
                             epoch,
                             commitment,
                             signer: local_signer,
-                        });
+                            bls_sig: Vec::new(),
+                        };
+                        self.sign_vrf_commit(&mut commit, mode_tag);
+                        pending_commit = Some(commit);
                     }
                 }
             }
         }
 
         if let Some(commit_msg) = pending_commit {
-            let note_result =
-                self.process_vrf_commit(height, roster_len_hint, commit_msg, Some(local_signer))?;
+            let note_result = self.process_vrf_commit(
+                height,
+                roster_len_hint,
+                commit_msg.clone(),
+                Some(local_signer),
+            )?;
             match note_result {
                 VrfNoteResult::Accepted | VrfNoteResult::AcceptedLate => {
                     let topology_peers = self.effective_commit_topology();
@@ -303,16 +407,23 @@ impl Actor {
                 reveal_value = derived_reveal;
             }
 
-            pending_reveal = Some(crate::sumeragi::consensus::VrfReveal {
+            let mut reveal = crate::sumeragi::consensus::VrfReveal {
                 epoch,
                 reveal: reveal_value,
                 signer: local_signer,
-            });
+                bls_sig: Vec::new(),
+            };
+            self.sign_vrf_reveal(&mut reveal, mode_tag);
+            pending_reveal = Some(reveal);
         }
 
         if let Some(reveal_msg) = pending_reveal {
-            let note_result =
-                self.process_vrf_reveal(height, roster_len_hint, reveal_msg, Some(local_signer))?;
+            let note_result = self.process_vrf_reveal(
+                height,
+                roster_len_hint,
+                reveal_msg.clone(),
+                Some(local_signer),
+            )?;
             match note_result {
                 VrfNoteResult::Accepted | VrfNoteResult::AcceptedLate => {
                     if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
@@ -362,7 +473,7 @@ impl Actor {
             return Err(eyre!("epoch manager unavailable"));
         };
 
-        let note_result = match manager.try_note_commit_at_height(height, commit) {
+        let note_result = match manager.try_note_commit_at_height(height, commit.clone()) {
             VrfNoteResult::Accepted => {
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_vrf_commit_emitted();
@@ -439,7 +550,7 @@ impl Actor {
             return Err(eyre!("epoch manager unavailable"));
         };
 
-        let note_result = match manager.try_note_reveal_at_height(height, reveal) {
+        let note_result = match manager.try_note_reveal_at_height(height, reveal.clone()) {
             VrfNoteResult::Accepted => {
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_vrf_reveal_emitted();
@@ -642,7 +753,15 @@ impl Actor {
             );
             return Ok(());
         }
-        let (height, roster_len, roster_indices) = self.current_height_and_roster();
+        let height = self.committed_height_snapshot();
+        let topology = self.effective_commit_topology();
+        let roster_len = topology.len();
+        let roster_indices =
+            compute_roster_indices_from_topology(&topology, self.epoch_roster_provider.as_ref());
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        if !self.verify_vrf_commit_signature(&commit, &topology, mode_tag) {
+            return Ok(());
+        }
         let local_signer = self.local_validator_index_current();
         if let Some(manager) = self.epoch_manager.as_mut() {
             apply_roster_indices_to_manager(manager, roster_len, roster_indices);
@@ -680,7 +799,15 @@ impl Actor {
             );
             return Ok(());
         }
-        let (height, roster_len, roster_indices) = self.current_height_and_roster();
+        let height = self.committed_height_snapshot();
+        let topology = self.effective_commit_topology();
+        let roster_len = topology.len();
+        let roster_indices =
+            compute_roster_indices_from_topology(&topology, self.epoch_roster_provider.as_ref());
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        if !self.verify_vrf_reveal_signature(&reveal, &topology, mode_tag) {
+            return Ok(());
+        }
         let local_signer = self.local_validator_index_current();
         if let Some(manager) = self.epoch_manager.as_mut() {
             apply_roster_indices_to_manager(manager, roster_len, roster_indices);

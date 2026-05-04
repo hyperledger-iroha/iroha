@@ -5,6 +5,7 @@ import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
+import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /** Builds framed Norito BFV identifier ciphertext envelopes from plaintext input. */
 internal object IdentifierBfvEnvelopeBuilder {
@@ -15,8 +16,6 @@ internal object IdentifierBfvEnvelopeBuilder {
     private val E1_DOMAIN = "iroha.sdk.identifier.bfv.e1.v1".toByteArray(StandardCharsets.UTF_8)
     private val E2_DOMAIN = "iroha.sdk.identifier.bfv.e2.v1".toByteArray(StandardCharsets.UTF_8)
     private val NORITO_MAGIC = byteArrayOf('N'.code.toByte(), 'R'.code.toByte(), 'T'.code.toByte(), '0'.code.toByte())
-    private const val FNV_OFFSET = -0x340d631b7cddd335L // 0xcbf29ce484222325L
-    private const val FNV_PRIME = 0x100000001b3L
     private const val CRC64_POLY = -0x3693a86a2878f0beL // 0xC96C5795D7870F42L
     private val CRC64_TABLE = buildCrc64Table()
     private val SECURE_RANDOM = SecureRandom()
@@ -171,7 +170,7 @@ internal object IdentifierBfvEnvelopeBuilder {
         out.write(NORITO_MAGIC)
         out.write(0)
         out.write(0)
-        out.write(schemaHash(SCHEMA_NAME))
+        out.write(SchemaHash.hash16(SCHEMA_NAME))
         out.write(0)
         out.write(littleEndianUInt64(payload.size.toLong()))
         out.write(littleEndianUInt64(crc64(payload)))
@@ -195,19 +194,6 @@ internal object IdentifierBfvEnvelopeBuilder {
             out[index] = ((value ushr (index * 8)) and 0xff).toByte()
         }
         return out
-    }
-
-    private fun schemaHash(typeName: String): ByteArray {
-        var hash = FNV_OFFSET
-        for (value in typeName.toByteArray(StandardCharsets.UTF_8)) {
-            hash = hash xor (value.toLong() and 0xffL)
-            hash *= FNV_PRIME
-        }
-        val part = littleEndianUInt64(hash)
-        val output = ByteArray(16)
-        System.arraycopy(part, 0, output, 0, 8)
-        System.arraycopy(part, 0, output, 8, 8)
-        return output
     }
 
     private fun crc64(payload: ByteArray): Long {

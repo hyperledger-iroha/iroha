@@ -16,6 +16,20 @@ interface IrohaClient {
     fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse>
 
     /**
+     * Submits an already versioned Norito transaction entrypoint to the node.
+     *
+     * This is intended for sealed commitment/reveal entrypoints and other non-legacy transaction
+     * envelopes that are not represented as a plain [SignedTransaction].
+     */
+    fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
+        val future = CompletableFuture<ClientResponse>()
+        future.completeExceptionally(
+            UnsupportedOperationException("submitTransactionEntrypoint not supported")
+        )
+        return future
+    }
+
+    /**
      * Polls the pipeline status endpoint until the transaction reaches a terminal state.
      *
      * The default implementation reports that the operation is unsupported.

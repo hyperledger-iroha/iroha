@@ -12,7 +12,11 @@
 //! admission limits (`pipeline.overlay_max_*`) in one place.
 
 use core::str::FromStr;
-use std::{collections::BTreeMap, mem, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    mem,
+    sync::{Arc, OnceLock},
+};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
@@ -436,7 +440,7 @@ fn compute_program_hashes(
     (code_hash, abi_hash)
 }
 
-const PREEXEC_OPCODE_DENYLIST: &[u8] = &[ivm::instruction::wide::system::SYSTEM];
+const PREEXEC_OPCODE_DENYLIST: &[u8] = &[];
 
 pub(crate) fn enforce_pre_execution_policy(
     ivm_max_cycles_upper_bound: u64,
@@ -572,6 +576,125 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
     Ok(())
 }
 
+fn metadata_contract_manifest(tx: &SignedTransaction) -> Option<ContractManifest> {
+    tx.metadata()
+        .get(&Name::from_str(MANIFEST_METADATA_KEY).expect("static manifest metadata key"))
+        .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok())
+}
+
+fn queued_contract_bytes_match(
+    queued: &[InstructionBox],
+    code_hash: &Hash,
+    bytecode: &[u8],
+) -> bool {
+    queued.iter().any(|instr| {
+        instr
+            .as_any()
+            .downcast_ref::<RegisterSmartContractBytes>()
+            .is_some_and(|bytes| {
+                bytes.code_hash() == code_hash && bytes.code().as_slice() == bytecode
+            })
+    })
+}
+
+fn queued_manifest_matches(queued: &[InstructionBox], manifest: &ContractManifest) -> bool {
+    queued.iter().any(|instr| {
+        instr
+            .as_any()
+            .downcast_ref::<RegisterSmartContractCode>()
+            .is_some_and(|registered| registered.manifest() == manifest)
+    })
+}
+
+fn append_verified_contract_metadata_registration<R: StateReadOnly>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    summary: &ProgramSummary,
+    bytecode: &[u8],
+    queued: &mut Vec<InstructionBox>,
+) -> Result<(), OverlayBuildError> {
+    let Some(manifest) = metadata_contract_manifest(tx) else {
+        return Ok(());
+    };
+    let verified = ivm::verify_contract_artifact(bytecode).map_err(|err| {
+        OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(err.to_string()))
+    })?;
+    if verified.code_hash != summary.code_hash {
+        return Err(OverlayBuildError::HeaderPolicy(
+            IvmAdmissionError::ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo {
+                expected: verified.code_hash,
+                actual: summary.code_hash,
+            }),
+        ));
+    }
+    if manifest.signature_payload() != verified.manifest.signature_payload() {
+        return Err(OverlayBuildError::HeaderPolicy(
+            IvmAdmissionError::BytecodeDecodingFailed(
+                "contract manifest metadata does not match embedded CNTR section".into(),
+            ),
+        ));
+    }
+
+    let code_hash = verified.code_hash;
+    let code_is_registered = state_ro.world().contract_code().get(&code_hash).is_some()
+        || queued_contract_bytes_match(queued, &code_hash, bytecode);
+    if !code_is_registered {
+        queued.push(
+            RegisterSmartContractBytes {
+                code_hash,
+                code: bytecode.to_vec(),
+            }
+            .into(),
+        );
+    }
+
+    let manifest_is_registered = state_ro
+        .world()
+        .contract_manifests()
+        .get(&code_hash)
+        .is_some()
+        || queued_manifest_matches(queued, &manifest);
+    if !manifest_is_registered {
+        queued.push(RegisterSmartContractCode { manifest }.into());
+    }
+    Ok(())
+}
+
+fn append_verified_contract_metadata_registration_without_state(
+    tx: &SignedTransaction,
+    bytecode: &[u8],
+    queued: &mut Vec<InstructionBox>,
+) -> Result<(), OverlayBuildError> {
+    let Some(manifest) = metadata_contract_manifest(tx) else {
+        return Ok(());
+    };
+    let verified = ivm::verify_contract_artifact(bytecode).map_err(|err| {
+        OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(err.to_string()))
+    })?;
+    if manifest.signature_payload() != verified.manifest.signature_payload() {
+        return Err(OverlayBuildError::HeaderPolicy(
+            IvmAdmissionError::BytecodeDecodingFailed(
+                "contract manifest metadata does not match embedded CNTR section".into(),
+            ),
+        ));
+    }
+
+    let code_hash = verified.code_hash;
+    if !queued_contract_bytes_match(queued, &code_hash, bytecode) {
+        queued.push(
+            RegisterSmartContractBytes {
+                code_hash,
+                code: bytecode.to_vec(),
+            }
+            .into(),
+        );
+    }
+    if !queued_manifest_matches(queued, &manifest) {
+        queued.push(RegisterSmartContractCode { manifest }.into());
+    }
+    Ok(())
+}
+
 pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
     state_ro: &R,
     queued: &mut Vec<InstructionBox>,
@@ -673,6 +796,7 @@ pub struct TxOverlay {
     execution_contexts: Option<Vec<OverlayInstructionExecutionContext>>,
     ivm_gas_used: Option<u64>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    byte_size: OnceLock<usize>,
 }
 
 impl TxOverlay {
@@ -683,6 +807,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: None,
             durable_state_overlay: BTreeMap::new(),
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -693,6 +818,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay: BTreeMap::new(),
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -707,6 +833,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -729,6 +856,7 @@ impl TxOverlay {
             execution_contexts: Some(execution_contexts),
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -769,10 +897,12 @@ impl TxOverlay {
 
     /// Approximate byte size of this overlay when serialized via Norito TLV.
     pub fn byte_size(&self) -> usize {
-        self.instructions
-            .iter()
-            .map(|i| NoritoEncode::encode(i).len())
-            .sum()
+        *self.byte_size.get_or_init(|| {
+            self.instructions
+                .iter()
+                .map(|i| NoritoEncode::encode(i).len())
+                .sum()
+        })
     }
 
     /// Apply the overlay to the given state transaction via the runtime executor.
@@ -807,14 +937,15 @@ impl TxOverlay {
                 }
                 if let Some(execution_contexts) = self.execution_contexts.as_ref() {
                     let execution_context = &execution_contexts[instruction_index];
-                    executor.execute_instruction_with_contract_runtime_context(
+                    executor.execute_borrowed_overlay_instruction(
                         state_tx,
                         &execution_context.authority,
-                        instr.clone(),
+                        instr,
                         execution_context.contract_runtime_context.as_ref(),
                     )?;
                 } else {
-                    executor.execute_instruction(state_tx, authority, instr.clone())?;
+                    executor
+                        .execute_borrowed_overlay_instruction(state_tx, authority, instr, None)?;
                 }
                 instruction_index = instruction_index.saturating_add(1);
             }
@@ -864,14 +995,15 @@ impl TxOverlay {
                 }
                 if let Some(execution_contexts) = self.execution_contexts.as_ref() {
                     let execution_context = &execution_contexts[instruction_index];
-                    executor.execute_instruction_with_contract_runtime_context(
+                    executor.execute_borrowed_overlay_instruction(
                         state_tx,
                         &execution_context.authority,
-                        instr.clone(),
+                        instr,
                         execution_context.contract_runtime_context.as_ref(),
                     )?;
                 } else {
-                    executor.execute_instruction(state_tx, authority, instr.clone())?;
+                    executor
+                        .execute_borrowed_overlay_instruction(state_tx, authority, instr, None)?;
                 }
                 instruction_index = instruction_index.saturating_add(1);
             }
@@ -1210,27 +1342,14 @@ where
                 }
             }
 
+            append_verified_contract_metadata_registration(
+                state_ro,
+                tx,
+                &summary,
+                bytecode.as_ref(),
+                &mut queued,
+            )?;
             prune_redundant_contract_ops(state_ro, &mut queued);
-            // If transaction metadata carries a ContractManifest, append a registration ISI
-            // when the manifest isn't present in WSV yet.
-            if let Some(json) = tx
-                .metadata()
-                .get(&iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY).unwrap())
-                && let Ok(manifest) = json.clone().try_into_any_norito::<ContractManifest>()
-            {
-                // Compute code hash from program body
-                let code_hash = summary.code_hash;
-                // Persist only if not present
-                if state_ro
-                    .world()
-                    .contract_manifests()
-                    .get(&code_hash)
-                    .is_none()
-                {
-                    let isi = RegisterSmartContractCode { manifest };
-                    queued.push(InstructionBox::from(isi));
-                }
-            }
             Ok(TxOverlay::from_ivm_execution(
                 queued,
                 ivm_gas_used,
@@ -1351,14 +1470,11 @@ pub fn build_overlay_for_transaction_with_accounts(
             } else {
                 (Vec::new(), BTreeMap::new())
             };
-            // Append manifest registration if attached in metadata
-            if let Some(json) = tx
-                .metadata()
-                .get(&iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY).unwrap())
-                && let Ok(manifest) = json.clone().try_into_any_norito::<ContractManifest>()
-            {
-                queued.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
-            }
+            append_verified_contract_metadata_registration_without_state(
+                tx,
+                bytecode.as_ref(),
+                &mut queued,
+            )?;
             Ok(TxOverlay::from_ivm_execution(
                 queued,
                 ivm_gas_used,
@@ -1518,11 +1634,10 @@ where
             ))
         }
         Executable::Ivm(bytecode) => {
-            let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
-            let meta = parsed.metadata;
+            let summary = ivm_cache_summary(bytecode.as_ref())?;
+            let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = parsed.code_offset;
+            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -1535,6 +1650,7 @@ where
                 code_offset,
                 bytecode.as_ref(),
             )?;
+            validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut vm = ivm::IVM::new(tx_gas_limit);
             let contract_call_context =
@@ -1614,15 +1730,13 @@ where
                     let _ = crate::pipeline::zk_lane::try_submit(job);
                 }
             }
-            if let Some(json) = tx
-                .metadata()
-                .get(&iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY).unwrap())
-                && let Ok(manifest) = json.clone().try_into_any_norito::<ContractManifest>()
-            {
-                let code_hash = iroha_crypto::Hash::new(&bytecode.as_ref()[parsed.header_len..]);
-                queued.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
-                let _ = code_hash;
-            }
+            append_verified_contract_metadata_registration(
+                state_ro,
+                tx,
+                &summary,
+                bytecode.as_ref(),
+                &mut queued,
+            )?;
             prune_redundant_contract_ops(state_ro, &mut queued);
             Ok(TxOverlay::from_ivm_execution(
                 queued,
@@ -1930,28 +2044,45 @@ mod tests_overlay_manifest {
     use super::*;
     use crate::state::State;
 
-    const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
 
-    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
+    fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, ContractManifest) {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,
             abi_version,
         };
-        let mut v = meta.encode();
-        v.extend_from_slice(&LITERAL_SECTION_MAGIC);
-        v.extend_from_slice(&0u32.to_le_bytes()); // literal entries
-        v.extend_from_slice(&0u32.to_le_bytes()); // post-pad
-        v.extend_from_slice(&0u32.to_le_bytes()); // literal size
-        v.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        v
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "iroha-core-overlay-test".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: None,
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            states: Vec::new(),
+        };
+        let mut artifact = meta.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let verified =
+            ivm::verify_contract_artifact(&artifact).expect("valid overlay test artifact");
+        (artifact, verified.manifest)
     }
 
     #[test]
@@ -1968,24 +2099,12 @@ mod tests_overlay_manifest {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
 
-        // Create a minimal program and its hashes
-        let prog = minimal_ivm_program(1);
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
-        let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-
-        // Build a manifest JSON and attach to tx metadata
-        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&kp);
+        // Create a minimal contract artifact and attach its verified manifest to tx metadata.
+        let (prog, verified_manifest) = minimal_contract_artifact(1);
+        let code_hash = verified_manifest
+            .code_hash
+            .expect("verified manifest code hash");
+        let manifest = verified_manifest.signed(&kp);
         let mut md = iroha_data_model::metadata::Metadata::default();
         insert_gas_limit(&mut md);
         md.insert(
@@ -2006,15 +2125,16 @@ mod tests_overlay_manifest {
         let overlay = build_overlay_for_transaction(&tx, &state.view()).expect("overlay");
         assert_eq!(
             overlay.instruction_count(),
-            1,
-            "expected one registration ISI"
+            2,
+            "expected bytecode and manifest registration ISIs"
         );
 
-        // Seed manifest into WSV
+        // Seed bytecode and manifest into WSV.
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        stx.world.contract_code.insert(code_hash, prog.clone());
         stx.world
             .contract_manifests
             .insert(code_hash, manifest.clone());
@@ -2079,6 +2199,25 @@ mod tests {
     fn empty_overlay_is_noop() {
         let ovl = TxOverlay::default();
         assert!(ovl.is_empty());
+    }
+
+    #[test]
+    fn overlay_byte_size_cache_matches_norito_instruction_sum() {
+        let instructions: Vec<InstructionBox> = vec![
+            iroha_data_model::isi::Log::new(iroha_logger::Level::INFO, "cached-size-a".to_owned())
+                .into(),
+            iroha_data_model::isi::Log::new(iroha_logger::Level::INFO, "cached-size-b".to_owned())
+                .into(),
+        ];
+        let expected = instructions
+            .iter()
+            .map(|instruction| NoritoEncode::encode(instruction).len())
+            .sum();
+        let overlay = TxOverlay::from_instructions(instructions);
+
+        assert_eq!(overlay.byte_size(), expected);
+        assert_eq!(overlay.byte_size.get(), Some(&expected));
+        assert_eq!(overlay.byte_size(), expected);
     }
 
     #[test]
@@ -4039,7 +4178,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_execution_policy_denies_system_opcode() {
+    fn pre_execution_policy_allows_scallx_opcode() {
         use std::sync::Arc;
 
         use iroha_crypto::KeyPair;
@@ -4068,8 +4207,7 @@ mod tests {
         };
         let mut program = meta.encode();
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SYSTEM, 0)
-                .to_le_bytes(),
+            &ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
@@ -4083,12 +4221,7 @@ mod tests {
             .sign(kp.private_key());
 
         let res = build_overlay_for_transaction(&tx, &state.view());
-        assert!(matches!(
-            res,
-            Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(msg)
-            )) if msg.contains("denied by pre-execution policy")
-        ));
+        assert!(res.is_ok(), "SCALLX is part of the first-release ABI");
     }
 
     #[test]

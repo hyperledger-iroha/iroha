@@ -22,7 +22,12 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     GovernanceContractResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
+    VpnQuoteCreateRequest,
+    VpnReceiptSubmitRequest,
+    VpnSessionCreateRequest,
+    canonical_request_signature_message,
     decode_pdp_commitment_header,
 )
 from iroha_torii_client.client import _decode_i105_string  # noqa: E402
@@ -101,6 +106,278 @@ class RecordingSession(requests.Session):
         if not self._responses:
             raise AssertionError("no queued responses")
         return self._responses.pop(0)
+
+
+VPN_ACCOUNT = "vpn-user@paynet"
+VPN_OPERATOR = "vpn-operator@paynet"
+VPN_ESCROW = "vpn-escrow@paynet"
+VPN_QUOTE_ID = "11" * 32
+VPN_PAYMENT_HASH = "22" * 32
+VPN_METERING_KEY = "33" * 32
+VPN_LEASE_ID = VPN_QUOTE_ID
+
+
+def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
+    return {"wire_id": wire_id, "payload_hex": "ab" * 8}
+
+
+def _vpn_profile_payload() -> Dict[str, Any]:
+    return {
+        "available": True,
+        "relay_endpoint": "/dns4/relay.example/tcp/443",
+        "supported_exit_classes": ["standard", "low-latency"],
+        "default_exit_class": "standard",
+        "lease_secs": 3600,
+        "dns_push_interval_secs": 60,
+        "meter_family": "soranet.vpn.v1",
+        "route_pushes": ["0.0.0.0/0"],
+        "excluded_routes": ["10.0.0.0/8"],
+        "dns_servers": ["1.1.1.1"],
+        "tunnel_addresses": ["10.208.0.2/32"],
+        "mtu_bytes": 1280,
+        "display_billing_label": "standard - soranet.vpn.v1 - 100 nano-XOR",
+        "fee_asset_id": "xor#universal",
+        "escrow_account_id": VPN_ESCROW,
+        "operator_account_id": VPN_OPERATOR,
+        "lease_fee_nanos": 100,
+        "settlement_grace_secs": 300,
+        "flow_label_bits": 20,
+        "padding_budget_ms": 250,
+        "relay_tls_spki_sha256_hex": "44" * 32,
+    }
+
+
+def _vpn_quote_payload() -> Dict[str, Any]:
+    payload = _vpn_profile_payload()
+    return {
+        "quote_id": VPN_QUOTE_ID,
+        "lease_id_hex": VPN_LEASE_ID,
+        "session_id_hex": VPN_QUOTE_ID,
+        "payment_reference": VPN_QUOTE_ID,
+        "account_id": VPN_ACCOUNT,
+        "exit_class": "standard",
+        "relay_endpoint": payload["relay_endpoint"],
+        "lease_secs": payload["lease_secs"],
+        "quote_expires_at_ms": 1_700_000_000_000,
+        "fee_asset_id": payload["fee_asset_id"],
+        "escrow_account_id": VPN_ESCROW,
+        "operator_account_id": VPN_OPERATOR,
+        "lease_fee_nanos": payload["lease_fee_nanos"],
+        "route_pushes": payload["route_pushes"],
+        "excluded_routes": payload["excluded_routes"],
+        "dns_servers": payload["dns_servers"],
+        "tunnel_addresses": payload["tunnel_addresses"],
+        "mtu_bytes": payload["mtu_bytes"],
+        "meter_family": payload["meter_family"],
+        "flow_label_bits": payload["flow_label_bits"],
+        "padding_budget_ms": payload["padding_budget_ms"],
+        "relay_tls_spki_sha256_hex": payload["relay_tls_spki_sha256_hex"],
+        "metering_public_key_hex": VPN_METERING_KEY,
+        "open_lease_instruction": _vpn_instruction(),
+        "tx_instructions": [_vpn_instruction()],
+    }
+
+
+def _vpn_session_payload() -> Dict[str, Any]:
+    quote_payload = _vpn_quote_payload()
+    return {
+        "session_id": VPN_QUOTE_ID,
+        "account_id": VPN_ACCOUNT,
+        "exit_class": quote_payload["exit_class"],
+        "relay_endpoint": quote_payload["relay_endpoint"],
+        "lease_secs": quote_payload["lease_secs"],
+        "expires_at_ms": quote_payload["quote_expires_at_ms"],
+        "connected_at_ms": 1_699_999_999_000,
+        "meter_family": quote_payload["meter_family"],
+        "quote_id": VPN_QUOTE_ID,
+        "payment_reference": VPN_QUOTE_ID,
+        "payment_tx_hash": VPN_PAYMENT_HASH,
+        "fee_asset_id": quote_payload["fee_asset_id"],
+        "escrow_account_id": VPN_ESCROW,
+        "operator_account_id": VPN_OPERATOR,
+        "lease_fee_nanos": quote_payload["lease_fee_nanos"],
+        "flow_label_bits": quote_payload["flow_label_bits"],
+        "padding_budget_ms": quote_payload["padding_budget_ms"],
+        "relay_tls_spki_sha256_hex": quote_payload["relay_tls_spki_sha256_hex"],
+        "route_pushes": quote_payload["route_pushes"],
+        "excluded_routes": quote_payload["excluded_routes"],
+        "dns_servers": quote_payload["dns_servers"],
+        "tunnel_addresses": quote_payload["tunnel_addresses"],
+        "mtu_bytes": quote_payload["mtu_bytes"],
+        "helper_ticket_hex": "55" * 32,
+        "bytes_in": 0,
+        "bytes_out": 0,
+        "status": "connected",
+    }
+
+
+def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
+    session_payload = _vpn_session_payload()
+    return {
+        "session_id": VPN_QUOTE_ID,
+        "account_id": VPN_ACCOUNT,
+        "exit_class": session_payload["exit_class"],
+        "relay_endpoint": session_payload["relay_endpoint"],
+        "meter_family": session_payload["meter_family"],
+        "connected_at_ms": session_payload["connected_at_ms"],
+        "disconnected_at_ms": session_payload["connected_at_ms"] + 60_000,
+        "duration_ms": 60_000,
+        "bytes_in": 1024,
+        "bytes_out": 2048,
+        "status": status,
+        "receipt_source": "relay" if status == "settled" else "torii",
+        "quote_id": VPN_QUOTE_ID,
+        "payment_tx_hash": VPN_PAYMENT_HASH,
+        "fee_asset_id": session_payload["fee_asset_id"],
+        "escrow_account_id": VPN_ESCROW,
+        "operator_account_id": VPN_OPERATOR,
+        "lease_fee_nanos": session_payload["lease_fee_nanos"],
+        "earned_fee_nanos": 25,
+        "refunded_fee_nanos": 75,
+        "lease_id_hex": VPN_LEASE_ID,
+        "settle_lease_instruction": _vpn_instruction("SettleVpnLease"),
+        "tx_instructions": [_vpn_instruction("SettleVpnLease")],
+    }
+
+
+def _vpn_auth(captured: List[bytes]) -> ToriiCanonicalRequestAuth:
+    def signer(message: bytes) -> bytes:
+        captured.append(message)
+        return b"\x7a" * 64
+
+    return ToriiCanonicalRequestAuth(
+        account_id=VPN_ACCOUNT,
+        signer=signer,
+        timestamp_ms=1_700_000_001_000,
+        nonce="vpn-test-nonce",
+    )
+
+
+def test_vpn_profile_deserializes_native_lease_fields() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_vpn_profile_payload()))
+    client = ToriiClient("http://node.test", session=session)
+
+    profile = client.get_vpn_profile()
+
+    assert profile.fee_asset_id == "xor#universal"
+    assert profile.lease_fee_nanos == 100
+    assert profile.escrow_account_id == VPN_ESCROW
+    assert profile.operator_account_id == VPN_OPERATOR
+    assert profile.route_pushes == ["0.0.0.0/0"]
+    assert session.calls[0]["url"] == "http://node.test/v1/vpn/profile"
+    assert session.calls[0]["headers"] == {"Accept": "application/json"}
+
+
+def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=201, payload=_vpn_quote_payload()))
+    captured: List[bytes] = []
+    auth = _vpn_auth(captured)
+    client = ToriiClient("http://node.test", session=session)
+
+    quote = client.create_vpn_quote(
+        VpnQuoteCreateRequest(
+            metering_public_key_hex=bytes.fromhex(VPN_METERING_KEY),
+            exit_class="standard",
+        ),
+        canonical_auth=auth,
+    )
+
+    body = session.calls[0]["data"]
+    assert body == (
+        b'{"exit_class":"standard","metering_public_key_hex":"'
+        + VPN_METERING_KEY.encode("ascii")
+        + b'"}'
+    )
+    assert captured == [
+        canonical_request_signature_message(
+            "POST",
+            "/v1/vpn/quotes",
+            body,
+            timestamp_ms=auth.timestamp_ms or 0,
+            nonce=auth.nonce or "",
+        )
+    ]
+    headers = session.calls[0]["headers"]
+    assert headers["X-Iroha-Account"] == VPN_ACCOUNT
+    assert headers["X-Iroha-Signature"] == base64.b64encode(b"\x7a" * 64).decode("ascii")
+    assert headers["X-Iroha-Timestamp-Ms"] == str(auth.timestamp_ms)
+    assert headers["X-Iroha-Nonce"] == auth.nonce
+    assert quote.lease_id_hex == VPN_LEASE_ID
+    assert quote.open_lease_instruction is not None
+    assert quote.open_lease_instruction.wire_id == "OpenVpnLeaseEscrow"
+    assert quote.tx_instructions[0].payload_hex == "ab" * 8
+
+
+def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=201, payload=_vpn_session_payload()))
+    session.queue(StubResponse(payload=_vpn_session_payload()))
+    session.queue(StubResponse(status_code=200, payload=_vpn_receipt_payload("disconnected")))
+    session.queue(
+        StubResponse(
+            payload={
+                "items": [_vpn_receipt_payload("disconnected")],
+                "total": 1,
+            }
+        )
+    )
+    session.queue(StubResponse(status_code=404))
+    client = ToriiClient("http://node.test", session=session)
+    captured: List[bytes] = []
+    auth = _vpn_auth(captured)
+
+    created = client.create_vpn_session(
+        VpnSessionCreateRequest(
+            quote_id=VPN_QUOTE_ID,
+            payment_tx_hash=VPN_PAYMENT_HASH,
+            metering_public_key_hex=VPN_METERING_KEY,
+        ),
+        canonical_auth=auth,
+    )
+    fetched = client.get_vpn_session(VPN_QUOTE_ID, canonical_auth=auth)
+    deleted = client.delete_vpn_session(VPN_QUOTE_ID, canonical_auth=auth)
+    receipts = client.list_vpn_receipts(canonical_auth=auth)
+    missing = client.get_vpn_session(VPN_QUOTE_ID, canonical_auth=auth)
+
+    assert created.session_id == VPN_QUOTE_ID
+    assert fetched is not None and fetched.payment_tx_hash == VPN_PAYMENT_HASH
+    assert deleted is not None and deleted.status == "disconnected"
+    assert deleted.settle_lease_instruction is not None
+    assert deleted.tx_instructions[0].wire_id == "SettleVpnLease"
+    assert receipts.total == 1
+    assert receipts.items[0].refunded_fee_nanos == 75
+    assert missing is None
+    assert [call["method"] for call in session.calls] == ["POST", "GET", "DELETE", "GET", "GET"]
+
+
+def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=201, payload=_vpn_receipt_payload()))
+    client = ToriiClient("http://node.test", session=session)
+    captured: List[bytes] = []
+
+    receipt = client.submit_vpn_receipt(
+        VpnReceiptSubmitRequest(
+            relay_receipt_hex="aa" * 12,
+            client_voucher_hex="bb" * 12,
+            lease_id_hex=VPN_LEASE_ID,
+        ),
+        canonical_auth=_vpn_auth(captured),
+    )
+
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload == {
+        "client_voucher_hex": "bb" * 12,
+        "lease_id_hex": VPN_LEASE_ID,
+        "relay_receipt_hex": "aa" * 12,
+    }
+    assert receipt.status == "settled"
+    assert receipt.earned_fee_nanos == 25
+    assert receipt.refunded_fee_nanos == 75
+    assert receipt.settle_lease_instruction is not None
+    assert receipt.settle_lease_instruction.wire_id == "SettleVpnLease"
 
 
 def test_list_peers_returns_typed_records() -> None:

@@ -1991,7 +1991,7 @@ mod run {
     const HI_BUDGET_FALLBACK: u8 = 1;
     const HI_CONTROL_BURST_MAX: u8 = 4;
     const HI_CONSENSUS_BURST_MAX: u8 = 4;
-    const HI_PAYLOAD_BURST_MAX: u8 = 2;
+    const HI_PAYLOAD_BURST_MAX: u8 = 1;
     // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
     // batch multiple logical messages into fewer encrypted frames.
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
@@ -3413,7 +3413,7 @@ mod run {
         const MAX_BATCH_HI_BURST: usize = 4;
         const MAX_BATCH_CONTROL_BURST: usize = 4;
         const MAX_BATCH_CONSENSUS_BURST: usize = 4;
-        const MAX_BATCH_PAYLOAD_BURST: usize = 2;
+        const MAX_BATCH_PAYLOAD_BURST: usize = 1;
         const MAX_PLAINTEXT_MSGS_HI: usize = 16;
         const MAX_PLAINTEXT_MSGS_LO: usize = 32;
         const MAX_PLAINTEXT_BYTES_HI: usize = 64 * 1024;
@@ -4375,8 +4375,8 @@ mod run {
                 delivered,
                 vec![
                     RoutedMsg::ConsensusPayload(1),
-                    RoutedMsg::ConsensusPayload(2),
                     RoutedMsg::ConsensusChunk(3),
+                    RoutedMsg::ConsensusPayload(2),
                 ]
             );
         }

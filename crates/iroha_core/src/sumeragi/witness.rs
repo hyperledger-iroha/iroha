@@ -119,7 +119,8 @@ pub fn drain_exec_witness() -> ExecWitness {
     g.reads.clear();
     g.writes.clear();
     g.active = false;
-    let fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
+    let mut fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
+    crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut fastpq_map);
     let fastpq_transcripts = map_to_bundles(fastpq_map);
     ExecWitness {
         reads,
@@ -338,6 +339,36 @@ pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
             .or_default()
             .push(transcript.clone());
     });
+}
+
+/// Copy finalized FASTPQ transcript digests from the block recorder into the execution witness.
+pub(crate) fn apply_fastpq_transcript_digests(finalized: &BTreeMap<Hash, Vec<TransferTranscript>>) {
+    let mut g = lock_slot();
+    for (entry_hash, finalized_transcripts) in finalized {
+        let Some(witness_transcripts) = g.fastpq_transcripts.get_mut(entry_hash) else {
+            continue;
+        };
+        for (witness, finalized) in witness_transcripts
+            .iter_mut()
+            .zip(finalized_transcripts.iter())
+        {
+            if witness.poseidon_preimage_digest.is_none()
+                && finalized.poseidon_preimage_digest.is_some()
+                && same_transfer_transcript_without_digest(witness, finalized)
+            {
+                witness.poseidon_preimage_digest = finalized.poseidon_preimage_digest;
+            }
+        }
+    }
+}
+
+fn same_transfer_transcript_without_digest(
+    left: &TransferTranscript,
+    right: &TransferTranscript,
+) -> bool {
+    left.batch_hash == right.batch_hash
+        && left.deltas == right.deltas
+        && left.authority_digest == right.authority_digest
 }
 
 /// Record a read (pre-value) of asset-definition metadata.
@@ -561,7 +592,8 @@ pub fn snapshot_exec_witness() -> ExecWitness {
             value: v.clone(),
         });
     }
-    let fastpq_transcripts = map_ref_to_bundles(&g.fastpq_transcripts);
+    let mut fastpq_transcripts = map_ref_to_bundles(&g.fastpq_transcripts);
+    crate::fastpq::finalize_transfer_transcript_bundle_digests_in_place(&mut fastpq_transcripts);
     ExecWitness {
         reads,
         writes,
@@ -656,8 +688,8 @@ mod tests {
             from_balance_after: Numeric::from(95u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(5u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let transcript = TransferTranscript {
@@ -666,6 +698,7 @@ mod tests {
             authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
             poseidon_preimage_digest: None,
         };
+        let expected_digest = crate::fastpq::poseidon_preimage_digest(&delta, &batch_hash);
         record_fastpq_transcript(&transcript);
 
         let witness = drain_exec_witness();
@@ -675,10 +708,117 @@ mod tests {
             .find(|bundle| bundle.entry_hash == batch_hash)
             .expect("transcript recorded");
         assert_eq!(stored.transcripts.len(), 1);
-        assert_eq!(stored.transcripts[0], transcript);
+        let mut expected = transcript;
+        expected.poseidon_preimage_digest = Some(expected_digest);
+        assert_eq!(stored.transcripts[0], expected);
         assert!(witness.fastpq_batches.is_empty());
         assert!(witness.reads.is_empty());
         assert!(witness.writes.is_empty());
+    }
+
+    #[test]
+    fn apply_fastpq_transcript_digests_updates_recorded_witness_copy() {
+        use iroha_data_model::{
+            asset::id::AssetDefinitionId,
+            fastpq::{TransferDeltaTranscript, TransferTranscript},
+        };
+        use iroha_primitives::numeric::Numeric;
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+        let _guard = exec_witness_guard();
+        start_block();
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: asset,
+            amount: Numeric::from(5u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(95u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(5u32),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        let batch_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: None,
+        };
+        let expected_digest = crate::fastpq::poseidon_preimage_digest(&delta, &batch_hash);
+        record_fastpq_transcript(&transcript);
+
+        let mut finalized = std::collections::BTreeMap::new();
+        let mut finalized_transcript = transcript;
+        finalized_transcript.poseidon_preimage_digest = Some(expected_digest);
+        finalized.insert(batch_hash, vec![finalized_transcript]);
+        apply_fastpq_transcript_digests(&finalized);
+
+        let g = slot().lock().unwrap();
+        let stored = g
+            .fastpq_transcripts
+            .get(&batch_hash)
+            .expect("transcript recorded");
+        assert_eq!(stored[0].poseidon_preimage_digest, Some(expected_digest));
+        drop(g);
+        let _ = drain_exec_witness();
+    }
+
+    #[test]
+    fn snapshot_finalizes_single_fastpq_transcript_without_clearing() {
+        use iroha_data_model::{
+            asset::id::AssetDefinitionId,
+            fastpq::{TransferDeltaTranscript, TransferTranscript},
+        };
+        use iroha_primitives::numeric::Numeric;
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+        let _guard = exec_witness_guard();
+        start_block();
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: asset,
+            amount: Numeric::from(5u32),
+            from_balance_before: Numeric::from(100u32),
+            from_balance_after: Numeric::from(95u32),
+            to_balance_before: Numeric::from(0u32),
+            to_balance_after: Numeric::from(5u32),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        let batch_hash = Hash::prehashed([0x22; Hash::LENGTH]);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta.clone()],
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: None,
+        };
+        let expected_digest = crate::fastpq::poseidon_preimage_digest(&delta, &batch_hash);
+        record_fastpq_transcript(&transcript);
+
+        let snapshot = snapshot_exec_witness();
+        let stored = snapshot
+            .fastpq_transcripts
+            .iter()
+            .find(|bundle| bundle.entry_hash == batch_hash)
+            .expect("snapshot transcript recorded");
+        assert_eq!(
+            stored.transcripts[0].poseidon_preimage_digest,
+            Some(expected_digest)
+        );
+
+        let drained = drain_exec_witness();
+        assert_eq!(drained.fastpq_transcripts.len(), 1);
     }
 
     #[test]

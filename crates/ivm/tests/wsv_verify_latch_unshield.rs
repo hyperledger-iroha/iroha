@@ -40,6 +40,23 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn verify_gas(payload_len: usize) -> u64 {
+    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn mutation_gas(payload_len: usize) -> u64 {
+    16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn json_payload_len(value: &norito::json::Value) -> usize {
+    let bytes = norito::json::to_vec(value).expect("serialize json envelope");
+    common::payload_for_type(PointerType::Json, &bytes).len()
+}
+
+fn json_bytes_payload_len(bytes: &[u8]) -> usize {
+    common::payload_for_type(PointerType::Json, bytes).len()
+}
+
 fn sample_account() -> AccountId {
     AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -160,7 +177,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD, &mut vm)
         .expect("verify syscall ok");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!(vm.register(10), 1, "verify must succeed");
 
     // Positive: unshield now succeeds thanks to the latch
@@ -170,7 +187,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     let gas2 = host
         .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
         .expect("unshield after verify");
-    assert_eq!(gas2, 0);
+    assert_eq!(gas2, mutation_gas(json_bytes_payload_len(&unshield_bytes)));
 
     // One-shot latch: a subsequent unshield without a fresh verify is denied
     let tlv3 = make_tlv(PointerType::Json as u16, &unshield_bytes);
@@ -256,7 +273,7 @@ fn unshield_rejects_mismatched_verifying_key() {
         let gas = host
             .syscall(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD, &mut vm)
             .expect("verify latch");
-        assert_eq!(gas, 0);
+        assert_eq!(gas, verify_gas(env_bytes.len()));
         assert_eq!(vm.register(10), 1);
     }
 
@@ -334,7 +351,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
         let gas = host
             .syscall(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD, &mut vm)
             .expect("verify latch");
-        assert_eq!(gas, 0);
+        assert_eq!(gas, verify_gas(verify_env.len()));
         assert_eq!(vm.register(10), 1);
     }
 
@@ -367,7 +384,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
         let gas = host
             .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
             .expect("inline vk should succeed");
-        assert_eq!(gas, 0);
+        assert_eq!(gas, mutation_gas(json_payload_len(&env_good)));
     }
 
     // Latch consumed; re-arm before testing mismatch
@@ -379,7 +396,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
         let gas = host
             .syscall(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD, &mut vm)
             .expect("verify latch");
-        assert_eq!(gas, 0);
+        assert_eq!(gas, verify_gas(verify_env.len()));
         assert_eq!(vm.register(10), 1);
     }
 

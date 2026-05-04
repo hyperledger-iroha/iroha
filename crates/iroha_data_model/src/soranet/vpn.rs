@@ -13,19 +13,24 @@ use core::fmt::Write as FmtWrite;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use blake3;
+use iroha_crypto::{PublicKey, Signature};
+use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
 
 use super::RelayId;
+use crate::{account::AccountId, asset::AssetDefinitionId};
 
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
 /// Magic prefix used by helper-authenticated VPN tickets.
 pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
 /// Fixed byte length of a helper-authenticated VPN ticket.
-pub const VPN_HELPER_TICKET_LEN: usize = 64;
+pub const VPN_HELPER_TICKET_LEN: usize = 192;
+/// Magic prefix for VPN control cells that carry client-signed usage vouchers.
+pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
 pub const VPN_DEFAULT_TUNNEL_MTU_BYTES: u16 = 1_280;
 
@@ -608,7 +613,7 @@ pub struct VpnCoverPlanEntryV1 {
 }
 
 /// Exit class advertised for billing/telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub enum VpnExitClassV1 {
     /// Standard exit class (balanced latency/bandwidth).
     Standard,
@@ -714,12 +719,244 @@ pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAdd
     }
 }
 
+/// Client-signed cumulative usage voucher used to release escrowed XOR to an operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+pub struct VpnUsageVoucherBodyV1 {
+    /// Session identifier bound to the tunnel runtime.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub session_id: [u8; 16],
+    /// Quote identifier that fixed the XOR price and relay policy.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub quote_id: [u8; 32],
+    /// Relay fingerprint that served the session.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Monotonic voucher sequence.
+    pub sequence: u64,
+    /// Cumulative client-to-relay payload bytes.
+    pub ingress_bytes: u64,
+    /// Cumulative relay-to-client payload bytes.
+    pub egress_bytes: u64,
+    /// Cumulative active service time covered by this voucher.
+    pub active_ms: u64,
+    /// Client timestamp in milliseconds since the Unix epoch.
+    pub issued_at_ms: u64,
+}
+
+/// Signed client usage voucher used for VPN escrow settlement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+pub struct VpnUsageVoucherV1 {
+    /// Cumulative usage body signed by the client.
+    pub body: VpnUsageVoucherBodyV1,
+    /// Client metering public key registered when the session was created.
+    pub client_public_key: PublicKey,
+    /// Signature over the Norito-encoded voucher body.
+    pub signature: Signature,
+}
+
+impl VpnUsageVoucherV1 {
+    /// Verify that the voucher signature matches the embedded public key and body.
+    ///
+    /// # Errors
+    /// Returns an error when signature verification fails.
+    pub fn verify(&self) -> Result<(), iroha_crypto::Error> {
+        self.signature
+            .verify(&self.client_public_key, &self.body.encode())
+    }
+
+    /// Deterministic hash of the signed voucher used by relay receipts.
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        let encoded = self.encode();
+        *blake3::hash(&encoded).as_bytes()
+    }
+}
+
+/// Client-signed voucher plus the client-computed earned XOR for relay receipt construction.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+pub struct VpnUsageVoucherEnvelopeV1 {
+    /// Highest cumulative voucher signed by the client.
+    pub voucher: VpnUsageVoucherV1,
+    /// Earned nano-XOR that the relay should mirror in its receipt.
+    pub earned_fee_nanos: u64,
+}
+
+/// Deterministic XOR tariff used to settle a VPN lease from a client usage voucher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VpnTariffV1 {
+    /// Maximum escrowed lease fee in nano-XOR.
+    pub lease_fee_nanos: u64,
+    /// Active service-time price in nano-XOR per minute.
+    pub active_fee_nanos_per_minute: u64,
+    /// Client-to-relay payload price in nano-XOR per mebibyte.
+    pub ingress_fee_nanos_per_mib: u64,
+    /// Relay-to-client payload price in nano-XOR per mebibyte.
+    pub egress_fee_nanos_per_mib: u64,
+}
+
+impl VpnTariffV1 {
+    const MILLIS_PER_MINUTE: u128 = 60_000;
+    const BYTES_PER_MIB: u128 = 1_048_576;
+
+    /// Compute the earned nano-XOR from a cumulative client usage voucher.
+    ///
+    /// Every non-zero partial minute or MiB is rounded up so all nodes agree on
+    /// integer-only settlement without undercharging short sessions.
+    #[must_use]
+    pub fn earned_fee_nanos(&self, voucher: &VpnUsageVoucherBodyV1) -> u64 {
+        let active = div_ceil_u128(
+            u128::from(voucher.active_ms)
+                .saturating_mul(u128::from(self.active_fee_nanos_per_minute)),
+            Self::MILLIS_PER_MINUTE,
+        );
+        let ingress = div_ceil_u128(
+            u128::from(voucher.ingress_bytes)
+                .saturating_mul(u128::from(self.ingress_fee_nanos_per_mib)),
+            Self::BYTES_PER_MIB,
+        );
+        let egress = div_ceil_u128(
+            u128::from(voucher.egress_bytes)
+                .saturating_mul(u128::from(self.egress_fee_nanos_per_mib)),
+            Self::BYTES_PER_MIB,
+        );
+        let earned = active.saturating_add(ingress).saturating_add(egress);
+        let capped = earned.min(u128::from(self.lease_fee_nanos));
+        u64::try_from(capped).unwrap_or(u64::MAX)
+    }
+
+    /// Return the fixed prepaid lease amount as a numeric value with nano-XOR scale.
+    #[must_use]
+    pub fn lease_fee_numeric(&self) -> Numeric {
+        Numeric::new(u128::from(self.lease_fee_nanos), 9)
+    }
+}
+
+fn div_ceil_u128(numerator: u128, denominator: u128) -> u128 {
+    if numerator == 0 {
+        0
+    } else {
+        numerator.div_ceil(denominator)
+    }
+}
+
+/// Lifecycle status for an on-chain VPN lease escrow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+pub enum VpnLeaseStatusV1 {
+    /// XOR is locked in protocol custody and awaiting settlement or timeout refund.
+    Active,
+    /// Lease was settled by a relay using a valid client voucher.
+    Settled,
+    /// Lease expired without settlement and was refunded to the client.
+    Refunded,
+}
+
+/// On-chain VPN lease escrow record.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VpnLeaseRecordV1 {
+    /// Caller-selected lease identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub lease_id: [u8; 32],
+    /// Session identifier bound to the tunnel runtime.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub session_id: [u8; 16],
+    /// Quote identifier that fixed pricing and route policy.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub quote_id: [u8; 32],
+    /// Client account that funded the escrow.
+    pub client_account_id: AccountId,
+    /// Operator account allowed to settle the lease.
+    pub operator_account_id: AccountId,
+    /// Client public key authorized to sign cumulative usage vouchers.
+    pub metering_public_key: PublicKey,
+    /// Escrowed asset definition. Native VPN leases require XOR.
+    pub asset_definition: AssetDefinitionId,
+    /// Escrowed lease fee with asset-native precision.
+    pub lease_fee: Numeric,
+    /// Escrowed lease fee in nano-XOR.
+    pub lease_fee_nanos: u64,
+    /// Deterministic protocol custody account holding the lease fee.
+    pub custody_account_id: AccountId,
+    /// Relay fingerprint authorized by the quote.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Deterministic usage tariff fixed at lease opening.
+    pub tariff: VpnTariffV1,
+    /// Hash of the transaction that opened and funded this lease.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub open_tx_hash: [u8; 32],
+    /// Current lease lifecycle status.
+    pub status: VpnLeaseStatusV1,
+    /// Block timestamp when the lease opened.
+    pub opened_at_ms: u64,
+    /// Last timestamp when the relay may provide service under this lease.
+    pub expires_at_ms: u64,
+    /// Extra time after expiry when the relay may still submit settlement.
+    pub settlement_grace_ms: u64,
+    /// Block timestamp when settlement completed.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub settled_at_ms: Option<u64>,
+    /// Block timestamp when timeout refund completed.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub refunded_at_ms: Option<u64>,
+    /// Highest client voucher sequence accepted during settlement.
+    pub highest_voucher_sequence: u64,
+    /// Hash of the settled client voucher.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub client_voucher_hash: Option<[u8; 32]>,
+    /// Hash of the relay receipt used for settlement.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub relay_receipt_hash: Option<[u8; 32]>,
+    /// Nano-XOR released to the relay.
+    pub earned_fee_nanos: u64,
+    /// Nano-XOR refunded to the client.
+    pub refunded_fee_nanos: u64,
+}
+
+impl VpnLeaseRecordV1 {
+    /// First timestamp at which anyone can refund the lease to the client.
+    #[must_use]
+    pub fn refund_available_at_ms(&self) -> u64 {
+        self.expires_at_ms.saturating_add(self.settlement_grace_ms)
+    }
+}
+
 /// Billing and telemetry receipt emitted by an exit gateway.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub struct VpnSessionReceiptV1 {
     /// Session identifier (client-assigned, 16 bytes).
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
+    /// Quote identifier that fixed pricing and route policy.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub quote_id: [u8; 32],
+    /// Hash of the committed XOR escrow payment transaction.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub payment_tx_hash: [u8; 32],
+    /// Hash of the paying canonical account id.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub account_hash: [u8; 32],
+    /// Relay fingerprint that emitted the receipt.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
     /// Total ingress bytes (user payloads only).
     pub ingress_bytes: u64,
     /// Total egress bytes (user payloads only).
@@ -728,11 +965,30 @@ pub struct VpnSessionReceiptV1 {
     pub cover_bytes: u64,
     /// Session uptime in seconds.
     pub uptime_secs: u32,
+    /// Session start timestamp in milliseconds since the Unix epoch.
+    pub started_at_ms: u64,
+    /// Session end timestamp in milliseconds since the Unix epoch.
+    pub ended_at_ms: u64,
     /// Exit class applied for billing.
     pub exit_class: VpnExitClassV1,
     /// Hash of the meter manifest applied to this session.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub meter_hash: [u8; 32],
+    /// XOR nanos earned by the relay for the verified usage window.
+    pub earned_fee_nanos: u64,
+    /// Highest client usage voucher sequence accepted by the relay.
+    pub highest_voucher_sequence: u64,
+    /// Hash of the highest accepted client voucher.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub client_voucher_hash: [u8; 32],
+}
+
+impl VpnSessionReceiptV1 {
+    /// Deterministic hash of the relay receipt used by lease settlement records.
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        *blake3::hash(&self.encode()).as_bytes()
+    }
 }
 
 /// Helper-authenticated ticket carried by the local VPN controller when opening a relay session.
@@ -740,6 +996,14 @@ pub struct VpnSessionReceiptV1 {
 pub struct VpnHelperTicketV1 {
     /// Session identifier bound to the tunnel runtime.
     pub session_id: [u8; 16],
+    /// Quote identifier that fixed pricing and route policy.
+    pub quote_id: [u8; 32],
+    /// Hash of the account that paid for the session.
+    pub account_hash: [u8; 32],
+    /// Relay fingerprint allowed to redeem the ticket.
+    pub relay_id: RelayId,
+    /// Committed XOR escrow payment transaction hash.
+    pub payment_tx_hash: [u8; 32],
     /// Absolute expiry time in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
 }
@@ -753,6 +1017,14 @@ impl VpnHelperTicketV1 {
         let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
         bytes[cursor..cursor + self.session_id.len()].copy_from_slice(&self.session_id);
         cursor += self.session_id.len();
+        bytes[cursor..cursor + self.quote_id.len()].copy_from_slice(&self.quote_id);
+        cursor += self.quote_id.len();
+        bytes[cursor..cursor + self.account_hash.len()].copy_from_slice(&self.account_hash);
+        cursor += self.account_hash.len();
+        bytes[cursor..cursor + self.relay_id.len()].copy_from_slice(&self.relay_id);
+        cursor += self.relay_id.len();
+        bytes[cursor..cursor + self.payment_tx_hash.len()].copy_from_slice(&self.payment_tx_hash);
+        cursor += self.payment_tx_hash.len();
         bytes[cursor..cursor + 8].copy_from_slice(&self.expires_at_ms.to_be_bytes());
         cursor += 8;
         let mac = helper_ticket_mac(secret, &bytes[..cursor]);
@@ -795,6 +1067,18 @@ impl VpnHelperTicketV1 {
         let mut session_id = [0u8; 16];
         session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
         cursor += 16;
+        let mut quote_id = [0u8; 32];
+        quote_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+        cursor += 32;
+        let mut account_hash = [0u8; 32];
+        account_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+        cursor += 32;
+        let mut relay_id = [0u8; 32];
+        relay_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+        cursor += 32;
+        let mut payment_tx_hash = [0u8; 32];
+        payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+        cursor += 32;
         let mut expires = [0u8; 8];
         expires.copy_from_slice(&bytes[cursor..cursor + 8]);
         cursor += 8;
@@ -811,6 +1095,10 @@ impl VpnHelperTicketV1 {
         }
         Ok(Self {
             session_id,
+            quote_id,
+            account_hash,
+            relay_id,
+            payment_tx_hash,
             expires_at_ms,
         })
     }
@@ -850,6 +1138,10 @@ pub enum VpnHelperTicketError {
     InvalidMagic,
     /// Helper ticket MAC did not verify against the shared secret.
     InvalidMac,
+    /// Helper ticket was minted for a different relay id.
+    InvalidRelay,
+    /// Helper ticket has already been redeemed.
+    Replayed,
     /// Helper ticket expired before verification completed.
     Expired {
         /// Ticket expiry timestamp in milliseconds since the Unix epoch.
@@ -872,6 +1164,10 @@ impl fmt::Display for VpnHelperTicketError {
             }
             Self::InvalidMagic => f.write_str("vpn helper ticket magic prefix is invalid"),
             Self::InvalidMac => f.write_str("vpn helper ticket MAC verification failed"),
+            Self::InvalidRelay => {
+                f.write_str("vpn helper ticket relay id does not match this relay")
+            }
+            Self::Replayed => f.write_str("vpn helper ticket has already been redeemed"),
             Self::Expired {
                 expires_at_ms,
                 now_ms,
@@ -958,6 +1254,13 @@ pub enum VpnCellError {
         /// Padding budget carried in the header.
         actual: u16,
     },
+    /// Frame sequence did not strictly advance for this tunnel direction.
+    NonMonotonicSequence {
+        /// Last accepted sequence number.
+        last: u64,
+        /// Sequence number carried by the rejected cell.
+        actual: u64,
+    },
 }
 
 impl fmt::Display for VpnCellError {
@@ -1014,6 +1317,10 @@ impl fmt::Display for VpnCellError {
                 f,
                 "padding budget {actual}ms does not match configured {expected}ms"
             ),
+            Self::NonMonotonicSequence { last, actual } => write!(
+                f,
+                "vpn cell sequence {actual} did not advance beyond last accepted {last}"
+            ),
         }
     }
 }
@@ -1025,6 +1332,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use hex::FromHex;
+    use iroha_crypto::KeyPair;
     use norito::{
         derive::{JsonDeserialize, JsonSerialize},
         json::{self, to_string_pretty},
@@ -1033,6 +1341,17 @@ mod tests {
     use super::*;
 
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
+
+    fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
+        VpnHelperTicketV1 {
+            session_id: [0xAB; 16],
+            quote_id: [0xBC; 32],
+            account_hash: [0xCD; 32],
+            relay_id: [0xDE; 32],
+            payment_tx_hash: [0xEF; 32],
+            expires_at_ms,
+        }
+    }
 
     #[test]
     fn flow_label_roundtrip_respects_bounds() {
@@ -1086,10 +1405,7 @@ mod tests {
     #[test]
     fn helper_ticket_roundtrips_and_verifies_mac() {
         let secret = [0x42; 32];
-        let ticket = VpnHelperTicketV1 {
-            session_id: [0xAB; 16],
-            expires_at_ms: 1_700_000_000_000,
-        };
+        let ticket = sample_helper_ticket(1_700_000_000_000);
         let bytes = ticket.to_bytes(&secret);
         assert!(VpnHelperTicketV1::looks_like(&bytes));
 
@@ -1106,10 +1422,7 @@ mod tests {
     #[test]
     fn helper_ticket_rejects_tampering() {
         let secret = [0x24; 32];
-        let ticket = VpnHelperTicketV1 {
-            session_id: [0x11; 16],
-            expires_at_ms: 55_000,
-        };
+        let ticket = sample_helper_ticket(55_000);
         let mut bytes = ticket.to_bytes(&secret);
         bytes[VPN_HELPER_TICKET_MAGIC.len() + 3] ^= 0xFF;
         let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tamper must fail");
@@ -1119,10 +1432,7 @@ mod tests {
     #[test]
     fn helper_ticket_rejects_expired_ticket() {
         let secret = [0x99; 32];
-        let ticket = VpnHelperTicketV1 {
-            session_id: [0x77; 16],
-            expires_at_ms: 999,
-        };
+        let ticket = sample_helper_ticket(999);
         let bytes = ticket.to_bytes(&secret);
         let err = VpnHelperTicketV1::parse(&bytes, &secret, 1_000).expect_err("expiry must fail");
         assert_eq!(
@@ -1132,6 +1442,61 @@ mod tests {
             },
             err
         );
+    }
+
+    #[test]
+    fn usage_voucher_verifies_signature_and_hashes() {
+        let key_pair = KeyPair::random();
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 7,
+            ingress_bytes: 128,
+            egress_bytes: 256,
+            active_ms: 1_500,
+            issued_at_ms: 1_700_000_000_000,
+        };
+        let signature = Signature::new(key_pair.private_key(), &body.encode());
+        let voucher = VpnUsageVoucherV1 {
+            body,
+            client_public_key: key_pair.public_key().clone(),
+            signature,
+        };
+
+        voucher.verify().expect("voucher signature must verify");
+        assert_ne!([0u8; 32], voucher.hash());
+    }
+
+    #[test]
+    fn tariff_computes_earned_fee_with_integer_ceiling_and_cap() {
+        let tariff = VpnTariffV1 {
+            lease_fee_nanos: 1_000,
+            active_fee_nanos_per_minute: 60,
+            ingress_fee_nanos_per_mib: 100,
+            egress_fee_nanos_per_mib: 200,
+        };
+        let voucher = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 7,
+            ingress_bytes: 1_048_577,
+            egress_bytes: 1,
+            active_ms: 1,
+            issued_at_ms: 1_700_000_000_000,
+        };
+
+        assert_eq!(tariff.earned_fee_nanos(&voucher), 103);
+
+        let capped = VpnUsageVoucherBodyV1 {
+            ingress_bytes: u64::MAX,
+            egress_bytes: u64::MAX,
+            active_ms: u64::MAX,
+            ..voucher
+        };
+        assert_eq!(tariff.earned_fee_nanos(&capped), tariff.lease_fee_nanos);
+        assert_eq!(tariff.lease_fee_numeric(), Numeric::new(1_000u128, 9));
     }
 
     #[test]

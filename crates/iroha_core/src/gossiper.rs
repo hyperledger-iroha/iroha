@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::Write,
     num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -20,7 +20,7 @@ use iroha_data_model::{
     isi::InstructionBox,
     nexus::{LaneCatalog, LaneId, LaneVisibility},
     peer::PeerId,
-    transaction::SignedTransaction,
+    transaction::{SignedTransaction, signed::TransactionEntrypoint},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
@@ -35,7 +35,10 @@ use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{GossipBatchEntry, Queue, RoutingDecision},
     state::{State, TransactionsReadOnly},
-    tx::AcceptedTransaction,
+    tx::{
+        AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
+        SignatureRejectionCode, SignatureVerificationFail,
+    },
 };
 
 /// Grouped gossip entries and the lanes they originated from.
@@ -615,7 +618,7 @@ impl TransactionGossiper {
                     dataspace = %dataspace_id,
                     "dataspace missing from lane catalog; requeueing gossip batch"
                 );
-                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.as_ref().hash()));
+                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.hash()));
                 self.record_drop_metric(
                     GossipPlane::Restricted,
                     dataspace_id,
@@ -695,7 +698,7 @@ impl TransactionGossiper {
 
         let mut sent_hashes = Vec::with_capacity(message.txs.len());
         for tx in &message.txs {
-            sent_hashes.push(tx.as_signed().hash());
+            sent_hashes.push(tx.hash());
         }
         let batch_txs = message.txs.len();
         let frame_bytes = encoded_len;
@@ -877,7 +880,7 @@ impl TransactionGossiper {
         let frame_bytes = encoded_len;
         let mut sent_hashes = Vec::with_capacity(message.txs.len());
         for tx in &message.txs {
-            sent_hashes.push(tx.as_signed().hash());
+            sent_hashes.push(tx.hash());
         }
 
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_RESTRICTED_DOMAIN);
@@ -1310,7 +1313,15 @@ impl TransactionGossiper {
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
         let state = self.state.as_ref();
         let committed_transactions = state.transactions.view();
+        let ed25519_batch_cap = self.state.pipeline.signature_batch_max_ed25519;
 
+        struct GossipAdmissionCandidate {
+            tx: GossipTransaction,
+            route: GossipRoute,
+            tx_hash: HashOf<SignedTransaction>,
+        }
+
+        let mut candidates = Vec::with_capacity(batch_txs);
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
@@ -1328,15 +1339,6 @@ impl TransactionGossiper {
                 );
                 continue;
             };
-            let tx_hash = tx.hash();
-            if !batch_seen_hashes.insert(tx_hash.clone()) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
-                continue;
-            }
-            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
-                continue;
-            }
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -1427,14 +1429,203 @@ impl TransactionGossiper {
                 continue;
             }
 
-            let (signed, payload) = tx.into_signed_with_payload();
-            match AcceptedTransaction::accept(
-                signed,
-                &self.chain_id,
-                max_clock_drift,
-                tx_limits,
-                crypto_cfg.as_ref(),
-            ) {
+            let tx_hash = tx.hash();
+            if !batch_seen_hashes.insert(tx_hash.clone()) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            candidates.push(GossipAdmissionCandidate { tx, route, tx_hash });
+        }
+
+        struct MaterializedGossipCandidate {
+            entrypoint: TransactionEntrypoint,
+            payload: Arc<Vec<u8>>,
+            entrypoint_hash: HashOf<TransactionEntrypoint>,
+            route: GossipRoute,
+            tx_hash: HashOf<SignedTransaction>,
+            prepared: Option<PreparedTransactionMetadata>,
+            ed25519_prechecked: bool,
+            precheck_rejection: Option<AcceptTransactionFail>,
+        }
+
+        let mut materialized = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let entrypoint_hash = candidate.tx.hash_as_entrypoint();
+            let (entrypoint, payload) = match candidate.tx.into_entrypoint_with_payload() {
+                Ok(decoded) => decoded,
+                Err(err) => {
+                    let tx_hash = candidate.tx_hash;
+                    iroha_logger::warn!(
+                        %tx_hash,
+                        ?err,
+                        "dropping transaction gossip entry due to entrypoint decode failure"
+                    );
+                    self.record_drop_metric(
+                        plane,
+                        candidate.route.dataspace_id,
+                        &[candidate.route.lane_id],
+                        "entrypoint_decode",
+                        false,
+                        None,
+                        &[],
+                        self.target_cap_for_plane(plane),
+                        1,
+                        0,
+                    );
+                    continue;
+                }
+            };
+            let prepared = match &entrypoint {
+                TransactionEntrypoint::External(signed) => {
+                    Some(AcceptedTransaction::prepare_gossip_signed_metadata(
+                        signed,
+                        entrypoint_hash,
+                        payload.as_slice(),
+                    ))
+                }
+                _ => None,
+            };
+            materialized.push(MaterializedGossipCandidate {
+                entrypoint,
+                payload,
+                entrypoint_hash,
+                route: candidate.route,
+                tx_hash: candidate.tx_hash,
+                prepared,
+                ed25519_prechecked: false,
+                precheck_rejection: None,
+            });
+        }
+
+        if ed25519_batch_cap > 0 {
+            #[derive(Clone, Copy)]
+            struct Ed25519BatchItem {
+                idx: usize,
+            }
+
+            fn verify_ed25519_batch_slices<'a>(
+                messages: &[&'a [u8]],
+                signatures: &[&'a [u8]],
+                public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+                scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
+            ) -> Result<(), iroha_crypto::Error> {
+                iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+                    messages,
+                    signatures,
+                    public_keys,
+                    [0; 32],
+                    scratch,
+                )
+            }
+
+            fn signature_error(tx: &SignedTransaction, detail: String) -> AcceptTransactionFail {
+                AcceptTransactionFail::SignatureVerification(SignatureVerificationFail::new(
+                    tx.signature().clone(),
+                    SignatureRejectionCode::InvalidSignature,
+                    detail,
+                ))
+            }
+
+            let mut batch_items = Vec::new();
+            let mut messages = Vec::new();
+            let mut signatures = Vec::new();
+            let mut public_keys = Vec::new();
+            for (idx, candidate) in materialized.iter().enumerate() {
+                let TransactionEntrypoint::External(signed) = &candidate.entrypoint else {
+                    continue;
+                };
+                let signature = signed.signature().payload().payload();
+                if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
+                    continue;
+                }
+                let Some(prepared) = candidate.prepared.as_ref() else {
+                    continue;
+                };
+                let Some(public_key) = prepared.single_ed25519_key else {
+                    continue;
+                };
+                let message: &[u8] = prepared.payload_hash.as_ref();
+                batch_items.push(Ed25519BatchItem { idx });
+                messages.push(message);
+                signatures.push(signature);
+                public_keys.push(public_key);
+            }
+            let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
+            let mut prechecked_indices = Vec::new();
+            let mut precheck_rejections = Vec::new();
+            for range_start in (0..batch_items.len()).step_by(ed25519_batch_cap) {
+                let range_end = range_start
+                    .saturating_add(ed25519_batch_cap)
+                    .min(batch_items.len());
+                let batch = &batch_items[range_start..range_end];
+                let batch_messages = &messages[range_start..range_end];
+                let batch_signatures = &signatures[range_start..range_end];
+                let batch_public_keys = &public_keys[range_start..range_end];
+                let batch_result = verify_ed25519_batch_slices(
+                    batch_messages,
+                    batch_signatures,
+                    batch_public_keys,
+                    &mut scratch,
+                )
+                .map_err(|err| {
+                    iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                        batch_messages,
+                        batch_signatures,
+                        batch_public_keys,
+                        [0; 32],
+                        &mut scratch,
+                    )
+                    .map_or_else(|| (0, err.to_string()), |bad| bad)
+                });
+                match batch_result {
+                    Ok(()) => prechecked_indices.extend(batch.iter().map(|item| item.idx)),
+                    Err((relative_idx, detail)) => {
+                        if let Some(item) = batch.get(relative_idx)
+                            && let TransactionEntrypoint::External(signed) =
+                                &materialized[item.idx].entrypoint
+                        {
+                            precheck_rejections.push((item.idx, signature_error(signed, detail)));
+                        }
+                    }
+                }
+            }
+            drop(batch_items);
+            drop(messages);
+            drop(signatures);
+            drop(public_keys);
+
+            for idx in prechecked_indices {
+                materialized[idx].ed25519_prechecked = true;
+            }
+            for (idx, err) in precheck_rejections {
+                materialized[idx].precheck_rejection = Some(err);
+            }
+        }
+
+        for mut candidate in materialized {
+            let route = candidate.route;
+            let tx_hash = candidate.tx_hash;
+            let payload = Some(Arc::clone(&candidate.payload));
+            let accepted = if let Some(err) = candidate.precheck_rejection.take() {
+                Err(err)
+            } else {
+                AcceptedTransaction::accept_gossip_entrypoint_with_payload_and_prepared_metadata(
+                    candidate.entrypoint,
+                    Arc::clone(&candidate.payload),
+                    candidate.entrypoint_hash,
+                    &self.chain_id,
+                    max_clock_drift,
+                    tx_limits,
+                    crypto_cfg.as_ref(),
+                    candidate.prepared.as_ref(),
+                    candidate.ed25519_prechecked,
+                )
+            };
+            match accepted {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
                     let local_route = match self.queue.route_for_gossip_with_state(&tx, state) {
@@ -1498,7 +1689,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::InBlockchain,
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in blockchain, ignoring..."
                             )
                         }
@@ -1507,7 +1698,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::IsInQueue,
                         }) => {
                             iroha_logger::trace!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
@@ -1516,7 +1707,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
                             );
@@ -1538,7 +1729,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
                         }) => {
                             iroha_logger::warn!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
                             );
@@ -1558,7 +1749,7 @@ impl TransactionGossiper {
                         Err(crate::queue::Failure { tx, err }) => {
                             iroha_logger::error!(
                                 ?err,
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Failed to enqueue transaction."
                             )
                         }
@@ -1653,15 +1844,6 @@ impl TransactionGossiper {
                 );
                 continue;
             };
-            let tx_hash = tx.hash();
-            if !batch_seen_hashes.insert(tx_hash.clone()) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
-                continue;
-            }
-            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
-                continue;
-            }
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -1752,15 +1934,50 @@ impl TransactionGossiper {
                 continue;
             }
 
-            let signed = (*tx.signed).clone();
-            let payload = tx.encoded.as_ref().map(Arc::clone);
-            match AcceptedTransaction::accept(
-                signed,
+            let tx_hash = tx.hash();
+            if !batch_seen_hashes.insert(tx_hash.clone()) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            let entrypoint_hash = tx.hash_as_entrypoint();
+            let entrypoint = match tx.materialize_entrypoint() {
+                Ok(entrypoint) => (*entrypoint).clone(),
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %tx_hash,
+                        ?err,
+                        "dropping transaction gossip entry due to invalid entrypoint payload"
+                    );
+                    self.record_drop_metric(
+                        plane,
+                        route.dataspace_id,
+                        &[route.lane_id],
+                        "invalid_entrypoint_payload",
+                        false,
+                        None,
+                        &[],
+                        self.target_cap_for_plane(plane),
+                        1,
+                        0,
+                    );
+                    continue;
+                }
+            };
+            let payload = tx.payload();
+            let accepted = AcceptedTransaction::accept_gossip_entrypoint_with_payload(
+                entrypoint,
+                Arc::clone(&payload),
+                entrypoint_hash,
                 &self.chain_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
-            ) {
+            );
+            match accepted {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
                     let local_route = match self.queue.route_for_gossip_with_state(&tx, state) {
@@ -1814,7 +2031,7 @@ impl TransactionGossiper {
                         tx,
                         state,
                         local_route,
-                        payload,
+                        Some(payload),
                     ) {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
@@ -1824,7 +2041,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::InBlockchain,
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in blockchain, ignoring..."
                             )
                         }
@@ -1833,7 +2050,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::IsInQueue,
                         }) => {
                             iroha_logger::trace!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
@@ -1842,7 +2059,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
                             );
@@ -1864,7 +2081,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
                         }) => {
                             iroha_logger::warn!(
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
                             );
@@ -1884,7 +2101,7 @@ impl TransactionGossiper {
                         Err(crate::queue::Failure { tx, err }) => {
                             iroha_logger::error!(
                                 ?err,
-                                tx = %tx.as_ref().as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Failed to enqueue transaction."
                             )
                         }
@@ -2063,9 +2280,9 @@ fn decode_transaction_gossip_payload(
 impl NoritoSerialize for TransactionGossip {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
         let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(&mut writer, &self.txs, &mut tmp)?;
-        ncore::write_len_prefixed(&mut writer, &self.routes, &mut tmp)?;
-        ncore::write_len_prefixed(&mut writer, &self.plane, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.txs, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.routes, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.plane, &mut tmp)?;
         Ok(())
     }
 
@@ -2101,12 +2318,22 @@ impl<'a> ncore::DecodeFromSlice<'a> for TransactionGossip {
     }
 }
 
-/// Gossip payload wrapper for signed transactions.
-#[derive(Debug, Clone)]
+/// Gossip payload wrapper for transaction entrypoints.
+#[derive(Debug)]
 pub struct GossipTransaction {
-    signed: Arc<SignedTransaction>,
-    encoded: Option<Arc<Vec<u8>>>,
+    entrypoint: Arc<OnceLock<Arc<TransactionEntrypoint>>>,
+    encoded: Arc<Vec<u8>>,
     tx_hash: HashOf<SignedTransaction>,
+}
+
+impl Clone for GossipTransaction {
+    fn clone(&self) -> Self {
+        Self {
+            entrypoint: Arc::clone(&self.entrypoint),
+            encoded: Arc::clone(&self.encoded),
+            tx_hash: self.tx_hash,
+        }
+    }
 }
 
 const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
@@ -2142,7 +2369,6 @@ impl GossipTxDecodeCacheKey {
 }
 
 struct GossipTxDecodeCacheEntry {
-    signed: Arc<SignedTransaction>,
     encoded: Arc<Vec<u8>>,
     tx_hash: HashOf<SignedTransaction>,
     consumed: usize,
@@ -2275,25 +2501,25 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
     Ok(FramedPrefixInfo { consumed })
 }
 
-fn encode_signed_transaction(signed: &SignedTransaction) -> Vec<u8> {
-    ncore::to_bytes(signed).expect("encode signed transaction")
+fn encode_transaction_entrypoint(entrypoint: &TransactionEntrypoint) -> Vec<u8> {
+    ncore::to_bytes(entrypoint).expect("encode transaction entrypoint")
 }
 
-fn decode_framed_signed_transaction(framed: &[u8]) -> Result<SignedTransaction, ncore::Error> {
-    norito::decode_from_bytes::<SignedTransaction>(framed)
+fn signed_hash_from_entrypoint_hash(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> HashOf<SignedTransaction> {
+    HashOf::<SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
+}
+
+fn decode_framed_transaction_entrypoint(
+    framed: &[u8],
+) -> Result<TransactionEntrypoint, ncore::Error> {
+    norito::decode_from_bytes::<TransactionEntrypoint>(framed)
 }
 
 fn decode_gossip_transaction_payload(
     bytes: &[u8],
-) -> Result<
-    (
-        Arc<SignedTransaction>,
-        Arc<Vec<u8>>,
-        HashOf<SignedTransaction>,
-        usize,
-    ),
-    ncore::Error,
-> {
+) -> Result<(Arc<Vec<u8>>, HashOf<SignedTransaction>, usize), ncore::Error> {
     if let Some(hit) = GOSSIP_TX_DECODE_CACHE.with(|cache| {
         let cache = cache.borrow();
         let key = GossipTxDecodeCacheKey::from_bytes(bytes);
@@ -2302,12 +2528,7 @@ fn decode_gossip_transaction_payload(
             // match the cached encoded payload before reusing it.
             if entry.consumed <= bytes.len() && entry.encoded.as_slice() == &bytes[..entry.consumed]
             {
-                Some((
-                    Arc::clone(&entry.signed),
-                    Arc::clone(&entry.encoded),
-                    entry.tx_hash.clone(),
-                    entry.consumed,
-                ))
+                Some((Arc::clone(&entry.encoded), entry.tx_hash, entry.consumed))
             } else {
                 None
             }
@@ -2316,80 +2537,144 @@ fn decode_gossip_transaction_payload(
         return Ok(hit);
     }
 
-    let prefix = framed_prefix_info::<SignedTransaction>(bytes)?;
+    let prefix = framed_prefix_info::<TransactionEntrypoint>(bytes)?;
     let framed = bytes
         .get(..prefix.consumed)
         .ok_or(ncore::Error::LengthMismatch)?;
-    let signed = decode_framed_signed_transaction(framed)?;
-    let signed = Arc::new(signed);
-    let tx_hash = signed.hash();
+    let entrypoint_hash = crate::tx::entrypoint_hash_from_framed_bytes(framed)?;
+    let tx_hash = signed_hash_from_entrypoint_hash(entrypoint_hash);
     let encoded = Arc::new(framed.to_vec());
     let entry = GossipTxDecodeCacheEntry {
-        signed: signed.clone(),
         encoded: encoded.clone(),
         tx_hash,
         consumed: prefix.consumed,
     };
     let key = GossipTxDecodeCacheKey::from_bytes(bytes);
     GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
-    Ok((signed, encoded, tx_hash.clone(), prefix.consumed))
+    Ok((encoded, tx_hash, prefix.consumed))
 }
 
 impl GossipTransaction {
     /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
     pub fn new(tx: AcceptedTransaction<'static>) -> Self {
-        let signed: SignedTransaction = tx.into();
-        let tx_hash = signed.hash();
+        let encoded = tx.entrypoint_bytes();
+        let tx_hash = tx.hash();
+        let entrypoint = tx.entrypoint().clone();
+        let entrypoint_cache = OnceLock::new();
+        let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
-            signed: Arc::new(signed),
-            encoded: None,
+            entrypoint: Arc::new(entrypoint_cache),
+            encoded,
             tx_hash,
         }
     }
 
-    /// Wrap an already-signed transaction with cached default full-frame bytes.
-    pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
-        let tx_hash = signed.hash();
-        let canonical = Arc::new(encode_signed_transaction(&signed));
+    /// Wrap an entrypoint with cached default full-frame bytes.
+    pub fn with_encoded(
+        entrypoint: impl Into<TransactionEntrypoint>,
+        encoded: Arc<Vec<u8>>,
+    ) -> Self {
+        let entrypoint = entrypoint.into();
+        let tx_hash = crate::tx::entrypoint_hash_from_framed_bytes(encoded.as_slice())
+            .map(signed_hash_from_entrypoint_hash)
+            .unwrap_or_else(|_| signed_hash_from_entrypoint_hash(entrypoint.hash()));
+        let entrypoint_cache = OnceLock::new();
+        let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
-            signed: Arc::new(signed),
-            encoded: Some(if encoded.as_slice() == canonical.as_slice() {
-                encoded
-            } else {
-                canonical
-            }),
+            entrypoint: Arc::new(entrypoint_cache),
+            encoded,
             tx_hash,
         }
     }
 
-    /// Borrow the signed transaction payload.
+    fn lazy_from_encoded(encoded: Arc<Vec<u8>>, tx_hash: HashOf<SignedTransaction>) -> Self {
+        Self {
+            entrypoint: Arc::new(OnceLock::new()),
+            encoded,
+            tx_hash,
+        }
+    }
+
+    /// Whether this gossip item has already materialized its transaction entrypoint.
+    #[cfg(test)]
+    fn is_entrypoint_materialized(&self) -> bool {
+        self.entrypoint.get().is_some()
+    }
+
+    /// Return the cached framed entrypoint bytes.
+    fn payload(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.encoded)
+    }
+
+    /// Materialize the owned entrypoint only when admission needs semantic validation.
+    fn materialize_entrypoint(&self) -> Result<Arc<TransactionEntrypoint>, ncore::Error> {
+        if let Some(entrypoint) = self.entrypoint.get() {
+            return Ok(Arc::clone(entrypoint));
+        }
+        let entrypoint = Arc::new(decode_framed_transaction_entrypoint(
+            self.encoded.as_slice(),
+        )?);
+        let _ = self.entrypoint.set(Arc::clone(&entrypoint));
+        Ok(self.entrypoint.get().map_or(entrypoint, Arc::clone))
+    }
+
+    /// Borrow the transaction entrypoint payload.
+    pub fn as_entrypoint(&self) -> &TransactionEntrypoint {
+        if self.entrypoint.get().is_none() {
+            self.materialize_entrypoint()
+                .expect("decode gossip transaction entrypoint");
+        }
+        self.entrypoint
+            .get()
+            .expect("entrypoint materialized above")
+            .as_ref()
+    }
+
+    /// Borrow the signed transaction payload when this gossip item exposes one.
     pub fn as_signed(&self) -> &SignedTransaction {
-        self.signed.as_ref()
+        match self.as_entrypoint() {
+            TransactionEntrypoint::External(signed) => signed,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => {
+                panic!("gossip entrypoint is not a signed transaction")
+            }
+        }
     }
 
     /// Return the transaction hash without rehashing.
     pub fn hash(&self) -> HashOf<SignedTransaction> {
-        self.tx_hash.clone()
+        self.tx_hash
     }
 
-    /// Consume the wrapper and return the signed transaction.
-    pub fn into_signed(self) -> SignedTransaction {
-        self.into_signed_with_payload().0
+    /// Return the entrypoint hash without rehashing.
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(iroha_crypto::Hash::from(
+            self.tx_hash,
+        ))
     }
 
-    /// Consume the wrapper and return the signed transaction and cached full-frame payload.
-    pub fn into_signed_with_payload(self) -> (SignedTransaction, Option<Arc<Vec<u8>>>) {
-        let signed = Arc::try_unwrap(self.signed).unwrap_or_else(|arc| (*arc).clone());
-        (signed, self.encoded)
+    /// Consume the wrapper and return the entrypoint and cached full-frame payload.
+    pub fn into_entrypoint_with_payload(
+        self,
+    ) -> Result<(TransactionEntrypoint, Arc<Vec<u8>>), ncore::Error> {
+        let entrypoint = self.materialize_entrypoint()?;
+        let entrypoint = Arc::try_unwrap(entrypoint).unwrap_or_else(|arc| (*arc).clone());
+        Ok((entrypoint, self.encoded))
     }
 }
 
 impl From<SignedTransaction> for GossipTransaction {
     fn from(signed: SignedTransaction) -> Self {
-        let tx_hash = signed.hash();
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
+        let encoded = Arc::new(encode_transaction_entrypoint(&entrypoint));
+        let entrypoint_cache = OnceLock::new();
+        let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
-            signed: Arc::new(signed),
-            encoded: None,
+            entrypoint: Arc::new(entrypoint_cache),
+            encoded,
             tx_hash,
         }
     }
@@ -2397,41 +2682,16 @@ impl From<SignedTransaction> for GossipTransaction {
 
 impl NoritoSerialize for GossipTransaction {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
-        if let Some(encoded) = self.encoded.as_ref() {
-            writer.write_all(encoded)?;
-            return Ok(());
-        }
-        let encoded = encode_signed_transaction(self.signed.as_ref());
-        writer.write_all(&encoded)?;
+        writer.write_all(self.encoded.as_slice())?;
         Ok(())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.encoded.as_ref().map(|bytes| bytes.len()).or_else(|| {
-            self.signed
-                .as_ref()
-                .encoded_len_hint()
-                .and_then(|payload_len| {
-                    framed_payload_len(
-                        payload_len,
-                        core::mem::align_of::<ncore::Archived<SignedTransaction>>(),
-                    )
-                })
-        })
+        Some(self.encoded.len())
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded.as_ref().map(|bytes| bytes.len()).or_else(|| {
-            self.signed
-                .as_ref()
-                .encoded_len_exact()
-                .and_then(|payload_len| {
-                    framed_payload_len(
-                        payload_len,
-                        core::mem::align_of::<ncore::Archived<SignedTransaction>>(),
-                    )
-                })
-        })
+        Some(self.encoded.len())
     }
 }
 
@@ -2443,33 +2703,16 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let prefix = framed_prefix_info::<SignedTransaction>(bytes)?;
-        let framed = bytes
-            .get(..prefix.consumed)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let signed = Arc::new(decode_framed_signed_transaction(framed)?);
-        let encoded = Arc::new(framed.to_vec());
-        let tx_hash = signed.hash();
-        ncore::note_payload_access(bytes, prefix.consumed);
-        Ok(Self {
-            signed,
-            encoded: Some(encoded),
-            tx_hash,
-        })
+        let (encoded, tx_hash, consumed) = decode_gossip_transaction_payload(bytes)?;
+        ncore::note_payload_access(bytes, consumed);
+        Ok(Self::lazy_from_encoded(encoded, tx_hash))
     }
 }
 
 impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (signed, encoded, tx_hash, consumed) = decode_gossip_transaction_payload(bytes)?;
-        Ok((
-            Self {
-                signed,
-                encoded: Some(encoded),
-                tx_hash,
-            },
-            consumed,
-        ))
+        let (encoded, tx_hash, consumed) = decode_gossip_transaction_payload(bytes)?;
+        Ok((Self::lazy_from_encoded(encoded, tx_hash), consumed))
     }
 }
 
@@ -2539,7 +2782,7 @@ fn gossip_vec_payload_len_cached<'a>(
     let mut total = 0usize;
     for item in items {
         count = count.checked_add(1)?;
-        let item_len = item.encoded.as_ref().map(|bytes| bytes.len())?;
+        let item_len = item.encoded.len();
         total = total.checked_add(ncore::len_prefix_len(item_len))?;
         total = total.checked_add(item_len)?;
     }
@@ -2585,7 +2828,7 @@ fn partition_gossip_batch(
     let mut requeue = Vec::with_capacity(txs.len());
     let mut encoded_len = gossip_message_empty_len().unwrap_or(0);
     let Some(route_len) = gossip_route_encoded_len() else {
-        requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
         return PartitionedGossipBatch {
             message,
             requeue,
@@ -2593,7 +2836,7 @@ fn partition_gossip_batch(
         };
     };
     let Some(route_entry_len) = ncore::len_prefix_len(route_len).checked_add(route_len) else {
-        requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
         return PartitionedGossipBatch {
             message,
             requeue,
@@ -2602,7 +2845,7 @@ fn partition_gossip_batch(
     };
 
     if frame_cap_bytes == 0 {
-        requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
         return PartitionedGossipBatch {
             message,
             requeue,
@@ -2611,7 +2854,7 @@ fn partition_gossip_batch(
     }
 
     for entry in txs {
-        let hash = entry.tx.as_ref().hash();
+        let hash = entry.tx.hash();
 
         if message.txs.len() >= max_count {
             requeue.push(hash);
@@ -2637,12 +2880,10 @@ fn partition_gossip_batch(
             continue;
         }
 
-        let Some(signed) = entry.tx.external().cloned() else {
-            continue;
-        };
-        message
-            .txs
-            .push(GossipTransaction::with_encoded(signed, entry.payload));
+        message.txs.push(GossipTransaction::with_encoded(
+            entry.tx.entrypoint().clone(),
+            entry.payload,
+        ));
         message.routes.push(GossipRoute {
             lane_id: routing.lane_id,
             dataspace_id: routing.dataspace_id,
@@ -2653,7 +2894,7 @@ fn partition_gossip_batch(
     let mut exact_len = message.encoded_len_exact().unwrap_or(encoded_len);
     while exact_len > frame_cap_bytes && !message.txs.is_empty() {
         if let Some(removed) = message.txs.pop() {
-            requeue.push(removed.as_signed().hash());
+            requeue.push(removed.hash());
         }
         message.routes.pop();
         exact_len = message.encoded_len_exact().unwrap_or(exact_len);
@@ -2700,7 +2941,13 @@ mod tests {
         isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneId, LaneVisibility},
         ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
-        transaction::TransactionBuilder,
+        transaction::{
+            TransactionBuilder,
+            signed::{
+                SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+                TransactionSignature, compute_sealed_transaction_commitment,
+            },
+        },
     };
     use iroha_primitives::{addr::socket_addr, time::TimeSource};
     use iroha_test_samples::{
@@ -2730,7 +2977,68 @@ mod tests {
     }
 
     fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
-        Arc::new(encode_signed_transaction(tx))
+        Arc::new(encode_transaction_entrypoint(
+            &TransactionEntrypoint::External(tx.clone()),
+        ))
+    }
+
+    fn decode_gossip_message(message: &TransactionGossip) -> TransactionGossip {
+        let encoded = message.encode();
+        Decode::decode(&mut encoded.as_slice()).expect("decode transaction gossip")
+    }
+
+    fn corrupt_signature(tx: &mut SignedTransaction) {
+        let mut signature_payload = tx.signature().payload().payload().to_vec();
+        let flip_index = signature_payload
+            .len()
+            .checked_sub(1)
+            .expect("transaction signature payload should never be empty");
+        signature_payload[flip_index] ^= 0xFF;
+        let forged_signature = iroha_crypto::Signature::from_bytes(&signature_payload);
+        tx.set_signature(TransactionSignature(
+            iroha_crypto::SignatureOf::from_signature(forged_signature),
+        ));
+    }
+
+    #[test]
+    fn gossip_transaction_hash_from_framed_entrypoint_matches_canonical_hash() {
+        let (signed, _accepted) = build_transaction("framed-entrypoint-hash");
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let payload = Arc::new(encode_transaction_entrypoint(&entrypoint));
+
+        let hash = crate::tx::entrypoint_hash_from_framed_bytes(payload.as_slice())
+            .expect("hash framed entrypoint payload");
+
+        assert_eq!(hash, entrypoint.hash());
+        let gossip_tx = GossipTransaction::with_encoded(entrypoint, payload);
+        assert_eq!(gossip_tx.hash_as_entrypoint(), hash);
+    }
+
+    fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let authority = (*ALICE_ID).clone();
+        let inner = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "sealed-inner".to_string())])
+            .sign(ALICE_KEYPAIR.private_key());
+        let reveal_deadline_height = 10;
+        let commitment = compute_sealed_transaction_commitment(
+            &chain_id,
+            &inner,
+            [0x5A; 32],
+            reveal_deadline_height,
+        );
+        let payload = SealedTransactionCommitmentPayload::new(
+            chain_id,
+            authority,
+            commitment,
+            5,
+            reveal_deadline_height,
+            None,
+        );
+        TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
+            payload,
+            ALICE_KEYPAIR.private_key(),
+        ))
     }
 
     fn identifier_bfv_parameters() -> BfvParameters {
@@ -2808,20 +3116,47 @@ mod tests {
         assert_eq!(used1, bytes.len());
         assert_eq!(used2, bytes.len());
         assert!(
-            Arc::ptr_eq(&first.signed, &second.signed),
-            "signed transaction must be reused from cache"
+            !first.is_entrypoint_materialized(),
+            "decode must defer semantic entrypoint materialization"
         );
-        let first_encoded = first
-            .encoded
-            .as_ref()
-            .expect("encoded bytes must be cached");
-        let second_encoded = second
-            .encoded
-            .as_ref()
-            .expect("encoded bytes must be cached");
         assert!(
-            Arc::ptr_eq(first_encoded, second_encoded),
+            !second.is_entrypoint_materialized(),
+            "cached decode must stay lazy"
+        );
+        assert!(
+            Arc::ptr_eq(&first.encoded, &second.encoded),
             "encoded bytes must be reused from cache"
+        );
+        assert_eq!(first.as_signed().hash(), signed.hash());
+        assert!(first.is_entrypoint_materialized());
+    }
+
+    #[test]
+    fn gossip_transaction_try_deserialize_uses_decode_cache() {
+        let (signed, _accepted) = build_transaction("gossip-try-deserialize-cache-test");
+        let payload = payload_for(&signed);
+        let gossip_tx = GossipTransaction::with_encoded(
+            TransactionEntrypoint::External(signed),
+            Arc::clone(&payload),
+        );
+        let encoded = gossip_tx.encode();
+
+        let first: GossipTransaction =
+            Decode::decode(&mut encoded.as_slice()).expect("decode first gossip transaction");
+        let second: GossipTransaction =
+            Decode::decode(&mut encoded.as_slice()).expect("decode second gossip transaction");
+
+        assert!(
+            !first.is_entrypoint_materialized(),
+            "try_deserialize must defer semantic entrypoint materialization"
+        );
+        assert!(
+            !second.is_entrypoint_materialized(),
+            "cached try_deserialize must stay lazy"
+        );
+        assert!(
+            Arc::ptr_eq(&first.encoded, &second.encoded),
+            "try_deserialize must reuse encoded bytes from cache"
         );
     }
 
@@ -3065,7 +3400,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             .expect("queue accepts tx");
         let batch = queue.gossip_batch(1, &state.view());
         assert_eq!(batch.len(), 1);
-        let hash = batch[0].tx.as_ref().hash();
+        let hash = batch[0].tx.hash();
 
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let now = Instant::now();
@@ -3115,7 +3450,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             .expect("queue accepts tx");
         let first_batch = gossiper.queue.gossip_batch(1, &gossiper.state.view());
         assert_eq!(first_batch.len(), 1);
-        let hash = first_batch[0].tx.as_ref().hash();
+        let hash = first_batch[0].tx.hash();
         assert!(
             gossiper
                 .queue
@@ -3336,12 +3671,67 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert_eq!(decoded.txs.len(), 1);
         assert_eq!(decoded.routes.len(), 1);
         assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
-        let decoded_payload = decoded.txs[0].encoded.as_ref().expect("cached payload");
-        assert_eq!(decoded_payload.as_slice(), payload.as_slice());
+        assert_eq!(decoded.txs[0].encoded.as_slice(), payload.as_slice());
         assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
         assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(decoded.plane, GossipPlane::Public);
         assert_eq!(decoded.txs[0].encode().as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn gossip_roundtrip_preserves_sealed_commitment_entrypoint() {
+        let entrypoint = build_sealed_commitment_entrypoint();
+        let payload = Arc::new(encode_transaction_entrypoint(&entrypoint));
+        let expected_hash = entrypoint.hash();
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                entrypoint,
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        let decoded: TransactionGossip =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip");
+
+        assert_eq!(decoded.txs.len(), 1);
+        assert!(matches!(
+            decoded.txs[0].as_entrypoint(),
+            TransactionEntrypoint::SealedCommitment(_)
+        ));
+        assert_eq!(decoded.txs[0].as_entrypoint().hash(), expected_hash);
+        assert_eq!(decoded.txs[0].encoded.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn partition_gossip_batch_keeps_sealed_commitments() {
+        let entrypoint = build_sealed_commitment_entrypoint();
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let payload = Arc::new(encode_transaction_entrypoint(&entrypoint));
+
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            usize::MAX,
+            GossipPlane::Public,
+            vec![GossipBatchEntry {
+                tx: accepted,
+                routing: RoutingDecision::default(),
+                payload,
+            }],
+        );
+
+        assert_eq!(partitioned.message.txs.len(), 1);
+        assert!(partitioned.requeue.is_empty());
+        assert!(matches!(
+            partitioned.message.txs[0].as_entrypoint(),
+            TransactionEntrypoint::SealedCommitment(_)
+        ));
     }
 
     #[test]
@@ -3403,7 +3793,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     #[test]
     fn gossip_transaction_decode_rejects_trailing_bytes() {
         let (signed, _accepted) = build_transaction("trailing");
-        let mut encoded = ncore::to_bytes(&signed).expect("encode signed transaction");
+        let mut encoded = ncore::to_bytes(&TransactionEntrypoint::External(signed))
+            .expect("encode transaction entrypoint");
         encoded.extend_from_slice(&[0xAA, 0xBB]);
 
         let err =
@@ -3417,7 +3808,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let canonical_payload = payload_for(&signed);
         let payload = {
             let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+            Arc::new(
+                ncore::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                    .expect("encode transaction entrypoint"),
+            )
         };
         std::thread::spawn(move || {
             let message = TransactionGossip {
@@ -3438,9 +3832,11 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             match decoded {
                 NetworkMessage::TransactionGossiper(message) => {
                     assert_eq!(message.txs.len(), 1);
-                    let decoded_payload = message.txs[0].encoded.as_ref().expect("cached payload");
-                    assert_eq!(decoded_payload.as_slice(), canonical_payload.as_slice());
-                    assert!(decoded_payload.starts_with(&ncore::MAGIC));
+                    assert_eq!(
+                        message.txs[0].encoded.as_slice(),
+                        canonical_payload.as_slice()
+                    );
+                    assert!(message.txs[0].encoded.starts_with(&ncore::MAGIC));
                 }
                 other => panic!("unexpected network message: {other:?}"),
             }
@@ -3455,7 +3851,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let canonical_payload = payload_for(&signed);
         let payload = {
             let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+            Arc::new(
+                ncore::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                    .expect("encode transaction entrypoint"),
+            )
         };
         std::thread::spawn(move || {
             let message = TransactionGossip {
@@ -3474,9 +3873,11 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 Decode::decode(&mut encoded.as_slice()).expect("decode transaction gossip");
 
             assert_eq!(decoded.txs.len(), 1);
-            let decoded_payload = decoded.txs[0].encoded.as_ref().expect("cached payload");
-            assert_eq!(decoded_payload.as_slice(), canonical_payload.as_slice());
-            assert!(decoded_payload.starts_with(&ncore::MAGIC));
+            assert_eq!(
+                decoded.txs[0].encoded.as_slice(),
+                canonical_payload.as_slice()
+            );
+            assert!(decoded.txs[0].encoded.starts_with(&ncore::MAGIC));
             assert_eq!(decoded.routes.len(), 1);
             assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
             assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
@@ -3542,8 +3943,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 assert_eq!(message.txs.len(), 1);
                 assert_eq!(message.routes.len(), 1);
                 assert_eq!(message.txs[0].as_signed().hash(), signed.hash());
-                let decoded_payload = message.txs[0].encoded.as_ref().expect("cached payload");
-                assert_eq!(decoded_payload.as_slice(), payload.as_slice());
+                assert_eq!(message.txs[0].encoded.as_slice(), payload.as_slice());
                 assert_eq!(message.routes[0].lane_id, LaneId::SINGLE);
                 assert_eq!(message.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
                 assert_eq!(message.plane, GossipPlane::Public);
@@ -4132,6 +4532,119 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         }));
 
         assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn route_invalid_gossip_drop_does_not_materialize_entrypoint() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (signed, _) = build_transaction("lazy-invalid-route");
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                payload_for(&signed),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::new(9),
+                dataspace_id: DataSpaceId::new(9),
+            }],
+            plane: GossipPlane::Public,
+        });
+        assert!(
+            !decoded.txs[0].is_entrypoint_materialized(),
+            "decoded gossip should start without semantic entrypoint materialization"
+        );
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "route rejection should not force entrypoint decode"
+        );
+        assert_eq!(gossiper.queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn known_duplicate_gossip_drop_does_not_materialize_entrypoint() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (signed, accepted) = build_transaction("lazy-known-duplicate");
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("seed queue with known transaction");
+
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                payload_for(&signed),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "known duplicate rejection should not force entrypoint decode"
+        );
+        assert_eq!(gossiper.queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn gossip_ed25519_batch_precheck_accepts_all_valid_single_key_transactions() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (first, _) = build_transaction("batch-valid-a");
+        let (second, _) = build_transaction("batch-valid-b");
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+            ],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(gossiper.queue.queued_len(), 2);
+    }
+
+    #[test]
+    fn gossip_ed25519_batch_precheck_drops_invalid_single_key_signature() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("batch-valid-before-invalid");
+        let (mut invalid, _) = build_transaction("batch-invalid-signature");
+        corrupt_signature(&mut invalid);
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![valid.into(), invalid.into()],
+            routes: vec![
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+            ],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(gossiper.queue.queued_len(), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]

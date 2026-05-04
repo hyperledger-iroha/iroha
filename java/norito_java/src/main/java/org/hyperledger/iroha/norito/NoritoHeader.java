@@ -22,7 +22,7 @@ public final class NoritoHeader {
   public static final int FIELD_BITSET = 0x20;
 
   private static final int SUPPORTED_FLAGS_MASK =
-      PACKED_SEQ | COMPACT_LEN | PACKED_STRUCT | VARINT_OFFSETS | COMPACT_SEQ_LEN | FIELD_BITSET;
+      PACKED_SEQ | COMPACT_LEN | PACKED_STRUCT | FIELD_BITSET;
 
   /** Minor version is fixed for v1; layout flags are declared in the header flag byte. */
   public static final int MINOR_VERSION = 0;
@@ -49,11 +49,16 @@ public final class NoritoHeader {
     if (schemaHash.length != 16) {
       throw new IllegalArgumentException("schemaHash must be 16 bytes");
     }
+    if (payloadLength < 0) {
+      throw new IllegalArgumentException("payloadLength must be non-negative");
+    }
     int normalizedMinor = minor & 0xFF;
     if (normalizedMinor != MINOR_VERSION) {
       throw new IllegalArgumentException(
           String.format("Unsupported Norito minor version: 0x%02x", normalizedMinor));
     }
+    validateCompression(compression);
+    validateFlags(flags);
     this.schemaHash = Arrays.copyOf(schemaHash, schemaHash.length);
     this.payloadLength = payloadLength;
     this.checksum = checksum;
@@ -87,6 +92,8 @@ public final class NoritoHeader {
   }
 
   public byte[] encode() {
+    validateCompression(compression);
+    validateFlags(flags);
     ByteBuffer buffer = ByteBuffer.allocate(HEADER_LENGTH).order(ByteOrder.LITTLE_ENDIAN);
     buffer.put(MAGIC);
     buffer.put((byte) MAJOR_VERSION);
@@ -112,6 +119,28 @@ public final class NoritoHeader {
     if (actual != checksum) {
       throw new IllegalArgumentException(
           String.format("Checksum mismatch: expected 0x%016x got 0x%016x", checksum, actual));
+    }
+  }
+
+  public static void validateFlags(int flags) {
+    int normalizedFlags = flags & 0xFF;
+    int unsupportedFlags = normalizedFlags & ~SUPPORTED_FLAGS_MASK;
+    if (unsupportedFlags != 0) {
+      throw new IllegalArgumentException(
+          String.format("Unsupported Norito layout flags: 0x%02x", unsupportedFlags));
+    }
+    if ((normalizedFlags & FIELD_BITSET) != 0) {
+      int required = PACKED_STRUCT | COMPACT_LEN;
+      if ((normalizedFlags & required) != required) {
+        throw new IllegalArgumentException(
+            String.format("Unsupported Norito layout flag combination: 0x%02x", normalizedFlags));
+      }
+    }
+  }
+
+  private static void validateCompression(int compression) {
+    if (compression != COMPRESSION_NONE && compression != COMPRESSION_ZSTD) {
+      throw new IllegalArgumentException("Unsupported compression byte: " + compression);
     }
   }
 
@@ -148,20 +177,14 @@ public final class NoritoHeader {
       throw new IllegalArgumentException("Schema mismatch");
     }
     int compression = buffer.get() & 0xFF;
-    if (compression != COMPRESSION_NONE && compression != COMPRESSION_ZSTD) {
-      throw new IllegalStateException("Unsupported compression byte: " + compression);
-    }
+    validateCompression(compression);
     long payloadLength = buffer.getLong();
-    if (payloadLength > Integer.MAX_VALUE) {
+    if (payloadLength < 0 || payloadLength > Integer.MAX_VALUE) {
       throw new IllegalArgumentException("Payload too large for Java implementation");
     }
     long checksum = buffer.getLong();
     int flags = buffer.get() & 0xFF;
-    int unsupportedFlags = flags & ~SUPPORTED_FLAGS_MASK;
-    if (unsupportedFlags != 0) {
-      throw new IllegalArgumentException(
-          String.format("Unsupported Norito layout flags: 0x%02x", unsupportedFlags));
-    }
+    validateFlags(flags);
     int intPayloadLength = (int) payloadLength;
     int payloadOffset = HEADER_LENGTH;
     int payloadLimit = buffer.limit();

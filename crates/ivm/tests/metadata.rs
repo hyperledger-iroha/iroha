@@ -145,7 +145,7 @@ fn parse_accepts_legacy_minor_zero_without_cntr() {
 
 #[test]
 fn parse_accepts_vector_len_without_vector_flag() {
-    // Vector length is advisory and may be present even if VECTOR bit is off.
+    // Vector length may be present even if VECTOR bit is off.
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.mode = 0; // VECTOR not set
         m.vector_length = 8;
@@ -164,6 +164,16 @@ fn parse_accepts_vector_len_with_flag() {
     let parsed = ProgramMetadata::parse(&bytes).expect("parse vector header");
     assert_eq!(parsed.metadata.mode & ivm_mode::VECTOR, ivm_mode::VECTOR);
     assert_eq!(parsed.metadata.vector_length, 8);
+}
+
+#[test]
+fn parse_rejects_vector_len_above_abi_max() {
+    let bytes = encode_with(ProgramMetadata::default(), |m| {
+        m.mode = ivm_mode::VECTOR;
+        m.vector_length = ivm::VECTOR_LENGTH_MAX + 1;
+    });
+    let err = ProgramMetadata::parse(&bytes).unwrap_err();
+    assert_eq!(err, VMError::InvalidMetadata);
 }
 
 #[test]

@@ -111,7 +111,7 @@ UAID теперь являются якорем для второго уровн
 Текущие маршруты Torii:| Маршрут | Цель |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | Перечисляет активные и неактивные политики программ RAM-LFE, а также их общедоступные метаданные выполнения, включая дополнительные параметры BFV `input_encryption` и программируемый серверный компонент `ram_fhe_profile`. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | Принимает ровно один из `{ input_hex }` или `{ encrypted_input }` и возвращает `RamLfeExecutionReceipt` без сохранения состояния плюс `{ output_hex, output_hash, receipt_hash }` для выбранной программы. Текущая среда выполнения Torii выдает квитанции для запрограммированной серверной части BFV. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Принимает ровно один из `{ input_hex }` или `{ encrypted_input }` и возвращает `RamLfeExecutionReceipt` без сохранения состояния плюс `{ output_hash, receipt_hash }` для выбранной программы. Torii не возвращает открытый текстовый вывод RAM-LFE. Текущая среда выполнения Torii выдает квитанции для запрограммированной серверной части BFV. |
 | `POST /v1/ram-lfe/receipts/verify` | Без сохранения состояния проверяет `RamLfeExecutionReceipt` на соответствие опубликованной внутрисетевой политике программы и дополнительно проверяет, соответствует ли `output_hex`, предоставленный вызывающим абонентом, квитанции `output_hash`. |
 | `GET /v1/identifier-policies` | Перечисляет активные и неактивные пространства имен политик скрытых функций, а также их общедоступные метаданные, включая дополнительные параметры BFV `input_encryption`, необходимый режим `normalization` для зашифрованных входных данных на стороне клиента и `ram_fhe_profile` для запрограммированных политик BFV. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Принимает ровно один из `{ input }` или `{ encrypted_input }`. Открытый текст `input` нормализуется на стороне сервера; BFV `encrypted_input` уже должен быть нормализован в соответствии с режимом опубликованной политики. Затем конечная точка получает дескриптор `opaque:` и возвращает подписанную квитанцию, которую `ClaimIdentifier` может отправить в цепочку, включая как необработанный `signature_payload_hex`, так и проанализированный `signature_payload`. || `POST /v1/identifiers/resolve` | Принимает ровно один из `{ input }` или `{ encrypted_input }`. Открытый текст `input` нормализуется на стороне сервера; BFV `encrypted_input` уже должен быть нормализован в соответствии с режимом опубликованной политики. Конечная точка преобразует идентификатор в `{ opaque_id, receipt_hash, uaid, account_id, signature }`, если существует активное утверждение, а также возвращает канонические подписанные полезные данные как `{ signature_payload_hex, signature_payload }`. |
@@ -227,8 +227,9 @@ UAID теперь являются якорем для второго уровн
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```Всегда храните литерал в нижнем регистре и нормализуйте пробелы перед хешированием.
 Помощники CLI, такие как `iroha app space-directory manifest scaffold` и Android
 Анализатор `UaidLiteral` применяет те же правила обрезки, поэтому проверки управления могут

@@ -132,6 +132,19 @@ impl ivm::IVMHost for ExtraCostHost {
     }
 }
 
+struct MeteredErrorHost;
+
+impl ivm::IVMHost for MeteredErrorHost {
+    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
+        Err(VMError::metered(7, VMError::PermissionDenied))
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 #[test]
 fn downcast_extra_cost_host() {
     let mut host: Box<dyn ivm::IVMHost> = Box::new(ExtraCostHost);
@@ -154,6 +167,48 @@ fn test_syscall_additional_gas() {
     vm.run().expect("syscall should succeed");
     assert_eq!(vm.register(10), 6);
     assert_eq!(vm.remaining_gas(), 0);
+}
+
+#[test]
+fn metered_syscall_error_debits_gas_and_preserves_error() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(MeteredErrorHost);
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm::syscalls::SYSCALL_EXIT as u8,
+        )
+        .to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.set_gas_limit(20);
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::PermissionDenied)));
+    assert_eq!(vm.remaining_gas(), 8);
+}
+
+#[test]
+fn metered_syscall_error_returns_out_of_gas_when_debit_cannot_be_paid() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(MeteredErrorHost);
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm::syscalls::SYSCALL_EXIT as u8,
+        )
+        .to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.set_gas_limit(10);
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::OutOfGas)));
+    assert_eq!(vm.remaining_gas(), 5);
 }
 
 #[test]

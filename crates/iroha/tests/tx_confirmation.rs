@@ -60,6 +60,7 @@ fn block_event(height: NonZeroU64, status: BlockStatus) -> EventBox {
         sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
+        execution_context_hash: None,
         confidential_features: None,
     };
     let event = BlockEvent { header, status };

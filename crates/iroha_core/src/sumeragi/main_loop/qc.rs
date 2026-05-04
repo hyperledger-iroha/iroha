@@ -14,6 +14,20 @@ struct QcSignerSnapshot {
     total_signers: usize,
 }
 
+impl QcSignerSnapshot {
+    fn retain_signers(
+        &mut self,
+        filtered: BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+        voting_len: usize,
+    ) {
+        self.accepted_votes
+            .retain(|signer, _| filtered.contains(signer));
+        self.signers = filtered;
+        self.voting_signers = voting_signer_count(&self.signers, voting_len);
+        self.total_signers = self.signers.len();
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct QcSignerFilterStats {
     raw_votes: usize,
@@ -90,7 +104,134 @@ pub(super) fn select_commit_root_signers(
     (filtered, group_count)
 }
 
+fn signed_stake_for_world(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<Numeric, super::stake_snapshot::StakeQuorumError> {
+    let fallback_stake = super::stake_snapshot::fallback_stake_for_world(world);
+    let mut stake_map = super::stake_snapshot::stake_map_from_world(world);
+    if stake_map.is_empty() {
+        for peer in roster {
+            stake_map.insert(peer.clone(), fallback_stake.clone());
+        }
+    } else {
+        for peer in roster {
+            stake_map
+                .entry(peer.clone())
+                .or_insert_with(|| fallback_stake.clone());
+        }
+    }
+
+    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+    let mut signed = Numeric::from(0_u64);
+    for peer in signers {
+        if !roster_set.contains(peer) {
+            return Err(super::stake_snapshot::StakeQuorumError::SignerOutOfRoster);
+        }
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(super::stake_snapshot::StakeQuorumError::MissingStake);
+        };
+        signed = signed
+            .checked_add(stake.clone())
+            .ok_or(super::stake_snapshot::StakeQuorumError::Overflow)?;
+    }
+    Ok(signed)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn select_commit_root_signers_by_stake(
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    signature_topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    stake_roster: &[PeerId],
+) -> Result<
+    (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize),
+    super::stake_snapshot::StakeQuorumError,
+> {
+    if signers.is_empty() {
+        return Ok((BTreeSet::new(), 0));
+    }
+    let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
+        BTreeMap::new();
+    for signer in signers {
+        let Some(vote) = accepted_votes.get(signer) else {
+            continue;
+        };
+        if vote.phase != crate::sumeragi::consensus::Phase::Commit
+            || vote.block_hash != block_hash
+            || vote.height != height
+            || vote.view != view
+            || vote.epoch != epoch
+        {
+            continue;
+        }
+        groups
+            .entry((vote.parent_state_root, vote.post_state_root))
+            .or_default()
+            .insert(*signer);
+    }
+
+    let group_count = groups.len();
+    let mut selected: Option<(
+        &(Hash, Hash),
+        &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+        Numeric,
+    )> = None;
+    for (root, group) in &groups {
+        let signer_peers = signer_peers_for_topology(group, signature_topology)
+            .map_err(|_| super::stake_snapshot::StakeQuorumError::SignerOutOfRoster)?;
+        let stake_weight = signed_stake_for_world(world, stake_roster, &signer_peers)?;
+        let replace = match &selected {
+            None => true,
+            Some((best_root, _best_group, best_weight)) => {
+                stake_weight > *best_weight || (stake_weight == *best_weight && root < *best_root)
+            }
+        };
+        if replace {
+            selected = Some((root, group, stake_weight));
+        }
+    }
+    let filtered = selected
+        .map(|(_, group, _)| group.clone())
+        .unwrap_or_default();
+    Ok((filtered, group_count))
+}
+
 impl Actor {
+    pub(super) fn npos_stake_roster_for_qc(
+        &self,
+        canonical_topology: &super::network_topology::Topology,
+        provided_topology: &super::network_topology::Topology,
+        signature_topology: &super::network_topology::Topology,
+        height: u64,
+    ) -> Vec<PeerId> {
+        let world = self.state.world_view();
+        let baseline_stake_roster = if !canonical_topology.as_ref().is_empty() {
+            canonical_topology.as_ref().to_vec()
+        } else if !provided_topology.as_ref().is_empty() {
+            provided_topology.as_ref().to_vec()
+        } else {
+            signature_topology.as_ref().to_vec()
+        };
+        if baseline_stake_roster.is_empty() {
+            return Vec::new();
+        }
+        super::roster::derive_active_topology_for_mode_from_world(
+            &world,
+            baseline_stake_roster.as_slice(),
+            height,
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            ConsensusMode::Npos,
+        )
+    }
+
     fn certified_embedded_qc_roster(
         &self,
         qc: &crate::sumeragi::consensus::Qc,
@@ -107,8 +248,38 @@ impl Actor {
         {
             return None;
         }
+        if qc.phase != crate::sumeragi::consensus::Phase::NewView && qc.highest_qc.is_some() {
+            return None;
+        }
+        if !self.embedded_qc_roster_matches_authoritative_topology(qc, consensus_mode) {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                roster_len = qc.validator_set.len(),
+                "rejecting embedded QC roster that is not anchored to active topology"
+            );
+            return None;
+        }
 
         let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+        if topology.as_ref().iter().any(|peer| {
+            !self
+                .roster_validation_cache
+                .pops
+                .contains_key(peer.public_key())
+        }) {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                roster_len = topology.as_ref().len(),
+                "rejecting embedded QC roster with missing validator proof of possession"
+            );
+            return None;
+        }
         let roster_len = topology.as_ref().len();
         let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
         let stake_snapshot = match consensus_mode {
@@ -147,6 +318,42 @@ impl Actor {
         }
 
         Some((topology, stake_snapshot))
+    }
+
+    fn embedded_qc_roster_matches_authoritative_topology(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+        consensus_mode: ConsensusMode,
+    ) -> bool {
+        let embedded =
+            super::roster::canonicalize_roster_for_mode(qc.validator_set.clone(), consensus_mode);
+        if embedded.is_empty() {
+            return false;
+        }
+        let mut candidates: Vec<Vec<PeerId>> = Vec::new();
+        let mut add_candidate = |roster: Vec<PeerId>| {
+            let canonical = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+            if !canonical.is_empty() && !candidates.iter().any(|known| known == &canonical) {
+                candidates.push(canonical);
+            }
+        };
+
+        let committed_height = self.committed_height_snapshot();
+        {
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            add_candidate(self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                committed_height,
+                consensus_mode,
+            ));
+        }
+        if qc.height <= committed_height.saturating_add(1) {
+            add_candidate(self.roster_for_live_vote_with_mode(qc.height, consensus_mode));
+        }
+        add_candidate(self.canonical_round_roster_with_mode(qc.height, qc.view, consensus_mode));
+        candidates.iter().any(|candidate| candidate == &embedded)
     }
 
     fn try_bootstrap_qc_validation_from_embedded_roster(
@@ -3422,7 +3629,7 @@ impl Actor {
             );
             return;
         }
-        let snapshot = self.qc_signer_snapshot(
+        let mut snapshot = self.qc_signer_snapshot(
             phase,
             block_hash,
             height,
@@ -3431,6 +3638,153 @@ impl Actor {
             &signature_topology,
             required,
         );
+        let npos_stake_roster = if matches!(consensus_mode, ConsensusMode::Npos) {
+            let stake_roster = self.npos_stake_roster_for_qc(
+                &canonical_topology,
+                topology,
+                &signature_topology,
+                height,
+            );
+            if stake_roster.is_empty() {
+                warn!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = ?block_hash,
+                    "skipping QC aggregation: active NPoS stake roster unavailable"
+                );
+                return;
+            }
+            Some(stake_roster)
+        } else {
+            None
+        };
+        let mut selected_new_view_highest_qc = None;
+        if phase == crate::sumeragi::consensus::Phase::Commit && !snapshot.signers.is_empty() {
+            let valid_signers = snapshot.signers.len();
+            let root_selection = match consensus_mode {
+                ConsensusMode::Permissioned => Ok(select_commit_root_signers(
+                    &snapshot.accepted_votes,
+                    block_hash,
+                    height,
+                    view,
+                    epoch,
+                    &snapshot.signers,
+                )),
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                        return;
+                    };
+                    let world = self.state.world_view();
+                    select_commit_root_signers_by_stake(
+                        &snapshot.accepted_votes,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        &snapshot.signers,
+                        &signature_topology,
+                        &world,
+                        stake_roster,
+                    )
+                }
+            };
+            let (filtered, root_groups) = match root_selection {
+                Ok(selection) => selection,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        "skipping QC aggregation: failed to select commit root signers"
+                    );
+                    return;
+                }
+            };
+            snapshot.retain_signers(filtered, signature_topology.as_ref().len());
+            if root_groups > 1 && snapshot.signers.len() < valid_signers {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    root_groups,
+                    selected_signers = snapshot.signers.len(),
+                    valid_signers,
+                    required,
+                    "commit votes split across execution roots; selected root signer set for QC"
+                );
+            }
+        }
+        if phase == crate::sumeragi::consensus::Phase::NewView && !snapshot.signers.is_empty() {
+            let groups = super::new_view_highest_qc_signer_groups(
+                &snapshot.accepted_votes,
+                &snapshot.signers,
+                height,
+                view,
+                epoch,
+            );
+            let group_count = groups.len();
+            let selected = match consensus_mode {
+                ConsensusMode::Permissioned => groups
+                    .into_iter()
+                    .filter(|(_, group)| voting_signer_count(group, voting_len) >= required)
+                    .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc)),
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                        warn!(
+                            height,
+                            view,
+                            block = ?block_hash,
+                            "skipping NEW_VIEW certificate: stake roster unavailable"
+                        );
+                        return;
+                    };
+                    let world = self.state.world_view();
+                    groups
+                        .into_iter()
+                        .filter_map(|(highest_qc, group)| {
+                            let signer_peers =
+                                signer_peers_for_topology(&group, &signature_topology).ok()?;
+                            let quorum = super::stake_snapshot::stake_quorum_reached_for_world(
+                                &world,
+                                stake_roster,
+                                &signer_peers,
+                            )
+                            .ok()?;
+                            quorum.then_some((highest_qc, group))
+                        })
+                        .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc))
+                }
+            };
+            let Some((highest_qc, filtered_signers)) = selected else {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    groups = group_count,
+                    voting_signers = snapshot.voting_signers,
+                    total_signers = snapshot.total_signers,
+                    required,
+                    "skipping NEW_VIEW certificate: no single highest-QC vote group reached quorum"
+                );
+                return;
+            };
+            if filtered_signers.len() < snapshot.signers.len() {
+                info!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    selected_signers = filtered_signers.len(),
+                    valid_signers = snapshot.signers.len(),
+                    groups = group_count,
+                    "NEW_VIEW votes split across highest-QC references; selected same-highest signer set for QC"
+                );
+            }
+            snapshot.retain_signers(filtered_signers, voting_len);
+            selected_new_view_highest_qc = Some(highest_qc);
+        }
         if let Some((signer_peer, conflicting_vote)) = self.qc_conflicts_with_vote_history(
             phase,
             block_hash,
@@ -3470,28 +3824,7 @@ impl Actor {
                             return;
                         }
                     };
-                let world = self.state.world_view();
-                let baseline_stake_roster = if !canonical_topology.as_ref().is_empty() {
-                    canonical_topology.as_ref().to_vec()
-                } else if !topology.as_ref().is_empty() {
-                    topology.as_ref().to_vec()
-                } else {
-                    signature_topology.as_ref().to_vec()
-                };
-                let active_stake_roster = super::roster::derive_active_topology_for_mode_from_world(
-                    &world,
-                    baseline_stake_roster.as_slice(),
-                    height,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
-                    ConsensusMode::Npos,
-                );
-                let stake_roster = if active_stake_roster.is_empty() {
-                    baseline_stake_roster
-                } else {
-                    active_stake_roster
-                };
-                if stake_roster.is_empty() {
+                let Some(stake_roster) = npos_stake_roster.as_deref() else {
                     warn!(
                         height,
                         view,
@@ -3500,10 +3833,11 @@ impl Actor {
                         "skipping QC aggregation: stake roster unavailable"
                     );
                     return;
-                }
+                };
+                let world = self.state.world_view();
                 match super::stake_snapshot::stake_quorum_reached_for_world(
                     &world,
-                    stake_roster.as_slice(),
+                    stake_roster,
                     &signer_peers,
                 ) {
                     Ok(result) => result,
@@ -3621,13 +3955,7 @@ impl Actor {
             }
         };
         let highest_qc = if phase == crate::sumeragi::consensus::Phase::NewView {
-            super::select_new_view_highest_qc_from_votes(
-                &snapshot.accepted_votes,
-                &snapshot.signers,
-                height,
-                view,
-                epoch,
-            )
+            selected_new_view_highest_qc
         } else {
             None
         };
@@ -3780,22 +4108,8 @@ impl Actor {
             signature_topology,
         );
         let raw_votes = stats.raw_votes;
-        let mut accepted_votes = valid_votes.clone();
-        let mut signers: BTreeSet<_> = accepted_votes.keys().copied().collect();
-        let mut root_groups = 0;
-        if phase == crate::sumeragi::consensus::Phase::Commit && !signers.is_empty() {
-            let (filtered, groups) = select_commit_root_signers(
-                &accepted_votes,
-                block_hash,
-                height,
-                view,
-                epoch,
-                &signers,
-            );
-            root_groups = groups;
-            accepted_votes.retain(|signer, _| filtered.contains(signer));
-            signers = filtered;
-        }
+        let accepted_votes = valid_votes.clone();
+        let signers: BTreeSet<_> = accepted_votes.keys().copied().collect();
         if valid_votes.is_empty() && raw_votes > 0 {
             iroha_logger::warn!(
                 height,
@@ -3826,21 +4140,6 @@ impl Actor {
                 required,
                 topology_len = signature_topology.as_ref().len(),
                 "votes filtered during QC tally; QC may stall"
-            );
-        }
-        if phase == crate::sumeragi::consensus::Phase::Commit
-            && root_groups > 1
-            && signers.len() < valid_votes.len()
-        {
-            warn!(
-                height,
-                view,
-                block = ?block_hash,
-                root_groups,
-                selected_signers = signers.len(),
-                valid_signers = valid_votes.len(),
-                required,
-                "commit votes split across execution roots; QC tally may stall"
             );
         }
         let voting_signers = voting_signer_count(&signers, signature_topology.as_ref().len());
@@ -4512,26 +4811,18 @@ impl Actor {
                     Ok(peers) => peers,
                     Err(_) => return true,
                 };
+                let stake_roster =
+                    self.npos_stake_roster_for_qc(topology, topology, &signature_topology, height);
+                if stake_roster.is_empty() {
+                    return false;
+                }
                 let world = self.state.world_view();
-                let active_stake_roster = super::roster::derive_active_topology_for_mode_from_world(
-                    &world,
-                    topology.as_ref(),
-                    height,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
-                    ConsensusMode::Npos,
-                );
-                let stake_roster = if active_stake_roster.is_empty() {
-                    topology.as_ref().to_vec()
-                } else {
-                    active_stake_roster
-                };
                 let Some(stake_snapshot) = self
                     .roster_validation_cache
                     .stake_snapshot_for_roster(stake_roster.as_slice())
                     .or_else(|| CommitStakeSnapshot::from_roster(&world, stake_roster.as_slice()))
                 else {
-                    return true;
+                    return false;
                 };
                 match stake_quorum_reached_for_snapshot(
                     &stake_snapshot,
@@ -4539,7 +4830,7 @@ impl Actor {
                     &signer_peers,
                 ) {
                     Ok(result) => result,
-                    Err(_) => true,
+                    Err(_) => false,
                 }
             }
         }
@@ -6288,6 +6579,7 @@ impl Actor {
         match err {
             QcValidationError::MissingVotes { .. }
             | QcValidationError::SubjectMismatch { .. }
+            | QcValidationError::RootsMismatch { .. }
             | QcValidationError::InvalidSignature { .. } => {}
             _ => return None,
         }
@@ -6366,10 +6658,25 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::select_commit_root_signers;
-    use crate::sumeragi::consensus::{Phase, ValidatorIndex, Vote};
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::BlockHeader;
+    use super::{select_commit_root_signers, select_commit_root_signers_by_stake};
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        sumeragi::{
+            consensus::{Phase, ValidatorIndex, Vote},
+            network_topology::Topology,
+        },
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        block::BlockHeader,
+        metadata::Metadata,
+        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        peer::PeerId,
+    };
+    use iroha_primitives::numeric::Numeric;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn vote_with_roots(
@@ -6503,5 +6810,100 @@ mod tests {
         assert_eq!(groups, 2);
         assert_eq!(filtered.len(), 1);
         assert!(filtered.contains(&1));
+    }
+
+    #[test]
+    fn commit_root_signers_by_stake_prefers_heavier_root() {
+        let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
+        let height = 5;
+        let view = 1;
+        let epoch = 0;
+        let low_root = (
+            Hash::prehashed([0x10; Hash::LENGTH]),
+            Hash::prehashed([0x11; Hash::LENGTH]),
+        );
+        let high_root = (
+            Hash::prehashed([0x20; Hash::LENGTH]),
+            Hash::prehashed([0x21; Hash::LENGTH]),
+        );
+        let keypairs: Vec<KeyPair> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let accounts: Vec<AccountId> = keypairs
+            .iter()
+            .map(|kp| AccountId::new(kp.public_key().clone()))
+            .collect();
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (idx, (account, peer, stake)) in [
+                (&accounts[0], &peers[0], Numeric::new(1, 0)),
+                (&accounts[1], &peers[1], Numeric::new(1, 0)),
+                (&accounts[2], &peers[2], Numeric::new(100, 0)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let lane_id = LaneId::new(u32::try_from(idx).expect("index fits u32") + 1);
+                block.insert(
+                    (lane_id, account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id,
+                        validator: account.clone(),
+                        peer_id: peer.clone(),
+                        stake_account: account.clone(),
+                        total_stake: stake.clone(),
+                        self_stake: stake,
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+
+        let mut accepted_votes = BTreeMap::new();
+        accepted_votes.insert(
+            0,
+            vote_with_roots(block_hash, height, view, epoch, 0, low_root.0, low_root.1),
+        );
+        accepted_votes.insert(
+            1,
+            vote_with_roots(block_hash, height, view, epoch, 1, low_root.0, low_root.1),
+        );
+        accepted_votes.insert(
+            2,
+            vote_with_roots(block_hash, height, view, epoch, 2, high_root.0, high_root.1),
+        );
+        let signers = BTreeSet::from([0, 1, 2]);
+        let topology = Topology::new(peers.clone());
+        let world = state.world_view();
+
+        let (filtered, groups) = select_commit_root_signers_by_stake(
+            &accepted_votes,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers,
+            &topology,
+            &world,
+            &peers,
+        )
+        .expect("stake root selection should succeed");
+
+        assert_eq!(groups, 2);
+        assert_eq!(filtered, BTreeSet::from([2]));
     }
 }

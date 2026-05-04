@@ -1,12 +1,18 @@
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     env,
     ffi::OsStr,
-    fs, io,
+    fs,
+    io::{self, Write as _},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
-    sync::Arc,
-    time::Duration,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
@@ -15,15 +21,20 @@ use blake3::hash as blake3_hash;
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
 use iroha_crypto::{
-    Algorithm, KeyPair,
+    Algorithm, KeyPair, Signature,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         RuntimeParams, build_client_hello, client_handle_relay_hello,
     },
 };
-use iroha_data_model::soranet::vpn::{
-    VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
-    VpnFlowLabelV1, VpnPaddedCellV1,
+use iroha_data_model::{
+    Encode,
+    soranet::vpn::{
+        VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC,
+        VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
+        VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
+        VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+    },
 };
 use nix::{
     errno::Errno,
@@ -37,10 +48,13 @@ use quinn::{
 };
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::{
+    RootCertStore,
+    client::WebPkiServerVerifier,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::{
     io::unix::AsyncFd,
@@ -60,12 +74,17 @@ const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
+const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
 #[cfg(target_os = "linux")]
 const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 #[cfg(target_os = "linux")]
 const LINUX_IFF_NO_PI: nix::libc::c_short = 0x1000;
 #[cfg(target_os = "linux")]
 const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
+
+fn default_usage_voucher_interval_ms() -> u64 {
+    DEFAULT_USAGE_VOUCHER_INTERVAL_MS
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "sora-vpn-controller")]
@@ -144,6 +163,10 @@ struct ConnectPayload {
     relay_endpoint: String,
     exit_class: String,
     helper_ticket_hex: String,
+    #[serde(alias = "relay_tls_spki_sha256_hex")]
+    relay_tls_spki_sha256_hex: String,
+    #[serde(alias = "padding_budget_ms")]
+    padding_budget_ms: u16,
     #[serde(default)]
     route_pushes: Vec<String>,
     #[serde(default)]
@@ -153,6 +176,14 @@ struct ConnectPayload {
     #[serde(default)]
     tunnel_addresses: Vec<String>,
     mtu_bytes: u64,
+    #[serde(default)]
+    lease_secs: u64,
+    #[serde(default)]
+    lease_fee_nanos: u64,
+    #[serde(default)]
+    metering_private_key_seed_hex: Option<String>,
+    #[serde(default = "default_usage_voucher_interval_ms")]
+    usage_voucher_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -241,9 +272,51 @@ struct PreparedTunnel {
     packet_read_mtu: usize,
 }
 
+#[derive(Clone, Copy)]
+struct TunnelTrafficConfig {
+    circuit_id: [u8; 16],
+    flow_label: VpnFlowLabelV1,
+    padding_budget_ms: u16,
+    packet_read_mtu: usize,
+}
+
 struct LinuxTunDevice {
     file: AsyncFd<fs::File>,
     name: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct UsageVoucherCounters {
+    ingress_bytes: Arc<AtomicU64>,
+    egress_bytes: Arc<AtomicU64>,
+}
+
+impl UsageVoucherCounters {
+    fn add_ingress(&self, bytes: u64) {
+        self.ingress_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn add_egress(&self, bytes: u64) {
+        self.egress_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64) {
+        (
+            self.ingress_bytes.load(Ordering::Relaxed),
+            self.egress_bytes.load(Ordering::Relaxed),
+        )
+    }
+}
+
+struct UsageVoucherSigner {
+    key_pair: KeyPair,
+    ticket: VpnHelperTicketV1,
+    sequence: u64,
+    started_at: Instant,
+    last_emitted_at: Instant,
+    lease_fee_nanos: u64,
+    lease_secs: u64,
+    interval: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -509,13 +582,20 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
 
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
+    let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
+    let voucher_counters = UsageVoucherCounters::default();
     let shutdown = tunnel_packet_loop(
         Arc::clone(&prepared.device),
         &mut send,
         &mut recv,
-        circuit_id,
-        flow_label,
-        prepared.packet_read_mtu,
+        TunnelTrafficConfig {
+            circuit_id,
+            flow_label,
+            padding_budget_ms: payload.padding_budget_ms,
+            packet_read_mtu: prepared.packet_read_mtu,
+        },
+        voucher_signer,
+        voucher_counters,
     )
     .await;
 
@@ -590,7 +670,18 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
 
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
-    let shutdown = packet_engine_loop(&mut send, &mut recv, circuit_id, flow_label).await;
+    let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
+    let voucher_counters = UsageVoucherCounters::default();
+    let shutdown = packet_engine_loop(
+        &mut send,
+        &mut recv,
+        circuit_id,
+        flow_label,
+        payload.padding_budget_ms,
+        voucher_signer,
+        voucher_counters,
+    )
+    .await;
     let (repair_required, message) = match shutdown {
         Ok(exit) => (exit.repair_required, exit.message),
         Err(error) => (false, error.to_string()),
@@ -638,7 +729,11 @@ async fn connect_and_handshake(
             "failed to create packet engine QUIC endpoint on {bind_addr}: {error}"
         ))
     })?;
-    endpoint.set_default_client_config(build_client_config().map_err(|error| {
+    let relay_tls_pin = parse_fixed_hex_32(
+        payload.relay_tls_spki_sha256_hex.as_str(),
+        "relay TLS SPKI pin",
+    )?;
+    endpoint.set_default_client_config(build_client_config(relay_tls_pin).map_err(|error| {
         ControllerError::State(format!(
             "failed to build packet engine QUIC client config: {error}"
         ))
@@ -679,8 +774,10 @@ async fn resolve_multiaddr_socket_addr(
     }
 }
 
-fn build_client_config() -> Result<ClientConfig, ControllerError> {
-    let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, ControllerError> {
+    let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedSpkiVerifier {
+        relay_tls_spki_sha256,
+    });
     let mut tls_config = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier)
@@ -830,20 +927,20 @@ async fn tunnel_packet_loop(
     device: Arc<LinuxTunDevice>,
     send: &mut SendStream,
     recv: &mut RecvStream,
-    circuit_id: [u8; 16],
-    flow_label: VpnFlowLabelV1,
-    packet_read_mtu: usize,
+    traffic: TunnelTrafficConfig,
+    voucher_signer: Option<UsageVoucherSigner>,
+    voucher_counters: UsageVoucherCounters,
 ) -> Result<TunnelShutdown, ControllerError> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
     let upstream = tun_to_vpn_loop(
         Arc::clone(&device),
         send,
-        circuit_id,
-        flow_label,
-        packet_read_mtu,
+        traffic,
+        voucher_signer,
+        voucher_counters.clone(),
     );
-    let downstream = vpn_to_tun_loop(device, recv);
+    let downstream = vpn_to_tun_loop(device, recv, voucher_counters);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
 
@@ -878,6 +975,9 @@ async fn packet_engine_loop(
     recv: &mut RecvStream,
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
+    padding_budget_ms: u16,
+    voucher_signer: Option<UsageVoucherSigner>,
+    voucher_counters: UsageVoucherCounters,
 ) -> Result<TunnelShutdown, ControllerError> {
     let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
         ControllerError::State(format!(
@@ -889,8 +989,15 @@ async fn packet_engine_loop(
             "failed to register packet engine SIGINT handler: {error}"
         ))
     })?;
-    let upstream = packet_engine_to_vpn_loop(send, circuit_id, flow_label);
-    let downstream = vpn_to_packet_engine_loop(recv);
+    let upstream = packet_engine_to_vpn_loop(
+        send,
+        circuit_id,
+        flow_label,
+        padding_budget_ms,
+        voucher_signer,
+        voucher_counters.clone(),
+    );
+    let downstream = vpn_to_packet_engine_loop(recv, voucher_counters);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
 
@@ -923,38 +1030,81 @@ async fn packet_engine_loop(
 async fn tun_to_vpn_loop(
     device: Arc<LinuxTunDevice>,
     send: &mut SendStream,
-    circuit_id: [u8; 16],
-    flow_label: VpnFlowLabelV1,
-    packet_read_mtu: usize,
+    traffic: TunnelTrafficConfig,
+    mut voucher_signer: Option<UsageVoucherSigner>,
+    voucher_counters: UsageVoucherCounters,
 ) -> Result<(), ControllerError> {
+    let TunnelTrafficConfig {
+        circuit_id,
+        flow_label,
+        padding_budget_ms,
+        packet_read_mtu,
+    } = traffic;
     let mut packet_buf = vec![0u8; packet_read_mtu.max(512)];
     let mut sequence = 0u64;
+    if let Some(signer) = voucher_signer.as_mut() {
+        send_usage_voucher_control_cell(
+            send,
+            circuit_id,
+            flow_label,
+            padding_budget_ms,
+            &voucher_counters,
+            signer,
+            &mut sequence,
+        )
+        .await?;
+    }
+    let mut voucher_interval = tokio::time::interval(
+        voucher_signer
+            .as_ref()
+            .map(|signer| signer.interval)
+            .unwrap_or(Duration::from_secs(60 * 60)),
+    );
+    voucher_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        let packet_len = device.recv(&mut packet_buf).await?;
-        if packet_len == 0 {
-            continue;
+        tokio::select! {
+            packet = device.recv(&mut packet_buf) => {
+                let packet_len = packet?;
+                if packet_len == 0 {
+                    continue;
+                }
+                voucher_counters.add_egress(packet_len as u64);
+                let encoded = encode_packet_stream_frame(&packet_buf[..packet_len])?;
+                for chunk in encoded.chunks(VpnCellV1::max_payload_len()) {
+                    let cell = VpnCellV1 {
+                        header: VpnCellHeaderV1 {
+                            version: 1,
+                            class: VpnCellClassV1::Data,
+                            flags: VpnCellFlagsV1::new(false, false, false, false),
+                            circuit_id,
+                            flow_label,
+                            sequence,
+                            ack: 0,
+                            padding_budget_ms,
+                            payload_len: 0,
+                        },
+                        payload: chunk.to_vec(),
+                    };
+                    let padded = cell.into_padded_frame()?;
+                    send.write_all(padded.as_ref()).await?;
+                    sequence = sequence.saturating_add(1);
+                }
+                add_traffic_bytes(0, packet_len as u64)?;
+            }
+            _ = voucher_interval.tick(), if voucher_signer.is_some() => {
+                if let Some(signer) = voucher_signer.as_mut() {
+                    send_usage_voucher_control_cell(
+                        send,
+                        circuit_id,
+                        flow_label,
+                        padding_budget_ms,
+                        &voucher_counters,
+                        signer,
+                        &mut sequence,
+                    ).await?;
+                }
+            }
         }
-        let encoded = encode_packet_stream_frame(&packet_buf[..packet_len])?;
-        for chunk in encoded.chunks(VpnCellV1::max_payload_len()) {
-            let cell = VpnCellV1 {
-                header: VpnCellHeaderV1 {
-                    version: 1,
-                    class: VpnCellClassV1::Data,
-                    flags: VpnCellFlagsV1::new(false, false, false, false),
-                    circuit_id,
-                    flow_label,
-                    sequence,
-                    ack: 0,
-                    padding_budget_ms: 0,
-                    payload_len: 0,
-                },
-                payload: chunk.to_vec(),
-            };
-            let padded = cell.into_padded_frame()?;
-            send.write_all(padded.as_ref()).await?;
-            sequence = sequence.saturating_add(1);
-        }
-        add_traffic_bytes(0, packet_len as u64)?;
     }
 }
 
@@ -962,9 +1112,24 @@ async fn packet_engine_to_vpn_loop(
     send: &mut SendStream,
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
+    padding_budget_ms: u16,
+    mut voucher_signer: Option<UsageVoucherSigner>,
+    voucher_counters: UsageVoucherCounters,
 ) -> Result<(), ControllerError> {
     let mut reader = tokio_io::stdin();
     let mut sequence = 0u64;
+    if let Some(signer) = voucher_signer.as_mut() {
+        send_usage_voucher_control_cell(
+            send,
+            circuit_id,
+            flow_label,
+            padding_budget_ms,
+            &voucher_counters,
+            signer,
+            &mut sequence,
+        )
+        .await?;
+    }
     loop {
         let Some(packet) = read_packet_from_stream(&mut reader)
             .await
@@ -974,9 +1139,22 @@ async fn packet_engine_to_vpn_loop(
                 ))
             })?
         else {
+            if let Some(signer) = voucher_signer.as_mut() {
+                send_usage_voucher_control_cell(
+                    send,
+                    circuit_id,
+                    flow_label,
+                    padding_budget_ms,
+                    &voucher_counters,
+                    signer,
+                    &mut sequence,
+                )
+                .await?;
+            }
             send.finish()?;
             return Ok(());
         };
+        voucher_counters.add_egress(packet.len() as u64);
         let encoded = encode_packet_stream_frame(&packet)?;
         for chunk in encoded.chunks(VpnCellV1::max_payload_len()) {
             let cell = VpnCellV1 {
@@ -988,7 +1166,7 @@ async fn packet_engine_to_vpn_loop(
                     flow_label,
                     sequence,
                     ack: 0,
-                    padding_budget_ms: 0,
+                    padding_budget_ms,
                     payload_len: 0,
                 },
                 payload: chunk.to_vec(),
@@ -997,6 +1175,20 @@ async fn packet_engine_to_vpn_loop(
             send.write_all(padded.as_ref()).await?;
             sequence = sequence.saturating_add(1);
         }
+        if let Some(signer) = voucher_signer.as_mut()
+            && signer.should_emit()
+        {
+            send_usage_voucher_control_cell(
+                send,
+                circuit_id,
+                flow_label,
+                padding_budget_ms,
+                &voucher_counters,
+                signer,
+                &mut sequence,
+            )
+            .await?;
+        }
         add_traffic_bytes(0, packet.len() as u64)?;
     }
 }
@@ -1004,6 +1196,7 @@ async fn packet_engine_to_vpn_loop(
 async fn vpn_to_tun_loop(
     device: Arc<LinuxTunDevice>,
     recv: &mut RecvStream,
+    voucher_counters: UsageVoucherCounters,
 ) -> Result<(), ControllerError> {
     let mut decoder = PacketStreamDecoder::default();
     let mut frame = [0u8; VPN_CELL_LEN];
@@ -1020,6 +1213,7 @@ async fn vpn_to_tun_loop(
                 }
                 for packet in decoder.ingest(&cell.payload)? {
                     device.send(&packet).await?;
+                    voucher_counters.add_ingress(packet.len() as u64);
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }
@@ -1038,7 +1232,10 @@ async fn vpn_to_tun_loop(
     }
 }
 
-async fn vpn_to_packet_engine_loop(recv: &mut RecvStream) -> Result<(), ControllerError> {
+async fn vpn_to_packet_engine_loop(
+    recv: &mut RecvStream,
+    voucher_counters: UsageVoucherCounters,
+) -> Result<(), ControllerError> {
     let mut decoder = PacketStreamDecoder::default();
     let mut frame = [0u8; VPN_CELL_LEN];
     let mut writer = tokio_io::stdout();
@@ -1061,6 +1258,7 @@ async fn vpn_to_packet_engine_loop(recv: &mut RecvStream) -> Result<(), Controll
                                 "failed to write packet engine stdout stream: {error}"
                             ))
                         })?;
+                    voucher_counters.add_ingress(packet.len() as u64);
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }
@@ -1077,6 +1275,180 @@ async fn vpn_to_packet_engine_loop(recv: &mut RecvStream) -> Result<(), Controll
             }
         }
     }
+}
+
+impl UsageVoucherSigner {
+    fn from_payload(payload: &ConnectPayload) -> Result<Option<Self>, ControllerError> {
+        let Some(seed_hex) = payload.metering_private_key_seed_hex.as_deref() else {
+            return Ok(None);
+        };
+        if payload.lease_fee_nanos == 0 || payload.lease_secs == 0 {
+            return Err(ControllerError::InvalidPayload(
+                "leaseSecs and leaseFeeNanos are required when meteringPrivateKeySeedHex is set"
+                    .to_owned(),
+            ));
+        }
+        let seed = parse_fixed_hex_32(seed_hex, "metering private key seed")?;
+        let ticket = decode_helper_ticket_metadata(payload.helper_ticket_hex.as_str())?;
+        let expected_session_id = relay_session_id_from_session_id(payload.session_id.as_str());
+        if ticket.session_id != expected_session_id {
+            return Err(ControllerError::InvalidPayload(
+                "helper ticket session id does not match connect sessionId".to_owned(),
+            ));
+        }
+        let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        let now = Instant::now();
+        Ok(Some(Self {
+            key_pair,
+            ticket,
+            sequence: 0,
+            started_at: now,
+            last_emitted_at: now,
+            lease_fee_nanos: payload.lease_fee_nanos,
+            lease_secs: payload.lease_secs,
+            interval: Duration::from_millis(payload.usage_voucher_interval_ms.max(1)),
+        }))
+    }
+
+    fn should_emit(&self) -> bool {
+        self.last_emitted_at.elapsed() >= self.interval
+    }
+
+    fn build_envelope(&mut self, counters: &UsageVoucherCounters) -> VpnUsageVoucherEnvelopeV1 {
+        let (ingress_bytes, egress_bytes) = counters.snapshot();
+        let active_ms = self
+            .started_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: self.ticket.session_id,
+            quote_id: self.ticket.quote_id,
+            relay_id: self.ticket.relay_id,
+            sequence: self.sequence,
+            ingress_bytes,
+            egress_bytes,
+            active_ms,
+            issued_at_ms: unix_now_ms(),
+        };
+        let voucher = VpnUsageVoucherV1 {
+            signature: Signature::new(self.key_pair.private_key(), &body.encode()),
+            client_public_key: self.key_pair.public_key().clone(),
+            body,
+        };
+        let earned_fee_nanos = tariff_earned_fee_nanos(
+            self.lease_fee_nanos,
+            self.lease_secs,
+            voucher.body.active_ms,
+        );
+        self.sequence = self.sequence.saturating_add(1);
+        self.last_emitted_at = Instant::now();
+        VpnUsageVoucherEnvelopeV1 {
+            voucher,
+            earned_fee_nanos,
+        }
+    }
+}
+
+async fn send_usage_voucher_control_cell(
+    send: &mut SendStream,
+    circuit_id: [u8; 16],
+    flow_label: VpnFlowLabelV1,
+    padding_budget_ms: u16,
+    counters: &UsageVoucherCounters,
+    signer: &mut UsageVoucherSigner,
+    sequence: &mut u64,
+) -> Result<(), ControllerError> {
+    let envelope = signer.build_envelope(counters);
+    let encoded = envelope.encode();
+    let mut payload = Vec::with_capacity(
+        VPN_USAGE_VOUCHER_CONTROL_MAGIC
+            .len()
+            .saturating_add(encoded.len()),
+    );
+    payload.extend_from_slice(VPN_USAGE_VOUCHER_CONTROL_MAGIC);
+    payload.extend_from_slice(&encoded);
+    if payload.len() > VpnCellV1::max_payload_len() {
+        return Err(ControllerError::State(
+            "usage voucher control payload exceeds vpn cell payload capacity".to_owned(),
+        ));
+    }
+    let cell = VpnCellV1 {
+        header: VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Control,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            circuit_id,
+            flow_label,
+            sequence: *sequence,
+            ack: 0,
+            padding_budget_ms,
+            payload_len: 0,
+        },
+        payload,
+    };
+    let padded = cell.into_padded_frame()?;
+    send.write_all(padded.as_ref()).await?;
+    *sequence = (*sequence).saturating_add(1);
+    Ok(())
+}
+
+fn tariff_active_fee_nanos_per_minute(lease_fee_nanos: u64, lease_secs: u64) -> u64 {
+    let numerator = u128::from(lease_fee_nanos).saturating_mul(60);
+    let denominator = u128::from(lease_secs.max(1));
+    u64::try_from(numerator.div_ceil(denominator)).unwrap_or(u64::MAX)
+}
+
+fn tariff_earned_fee_nanos(lease_fee_nanos: u64, lease_secs: u64, active_ms: u64) -> u64 {
+    let active_fee_nanos_per_minute =
+        tariff_active_fee_nanos_per_minute(lease_fee_nanos, lease_secs);
+    let earned = u128::from(active_ms)
+        .saturating_mul(u128::from(active_fee_nanos_per_minute))
+        .div_ceil(60_000);
+    u64::try_from(earned.min(u128::from(lease_fee_nanos))).unwrap_or(u64::MAX)
+}
+
+fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, ControllerError> {
+    let bytes = decode_hex(hex_ticket)?;
+    if bytes.len() != VPN_HELPER_TICKET_LEN || !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
+        return Err(ControllerError::InvalidPayload(
+            "helperTicketHex is not a v1 helper ticket".to_owned(),
+        ));
+    }
+    let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
+    let mut session_id = [0u8; 16];
+    session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
+    cursor += 16;
+    let mut quote_id = [0u8; 32];
+    quote_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut account_hash = [0u8; 32];
+    account_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut relay_id = [0u8; 32];
+    relay_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut payment_tx_hash = [0u8; 32];
+    payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut expires_at = [0u8; 8];
+    expires_at.copy_from_slice(&bytes[cursor..cursor + 8]);
+    Ok(VpnHelperTicketV1 {
+        session_id,
+        quote_id,
+        account_hash,
+        relay_id,
+        payment_tx_hash,
+        expires_at_ms: u64::from_be_bytes(expires_at),
+    })
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 impl PacketStreamDecoder {
@@ -1460,7 +1832,7 @@ fn apply_dns(
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&backup_path, backup_bytes)?;
+    write_private_file(&backup_path, &backup_bytes)?;
 
     let mut rendered = String::from("# sora-vpn-controller managed resolv.conf\n");
     for server in dns_servers {
@@ -1468,7 +1840,7 @@ fn apply_dns(
         rendered.push_str(server.trim());
         rendered.push('\n');
     }
-    fs::write("/etc/resolv.conf", rendered)?;
+    write_private_file(Path::new("/etc/resolv.conf"), rendered.as_bytes())?;
     Ok(Some(DnsBackendState::ResolvConf {
         backup_path: backup_path.to_string_lossy().into_owned(),
     }))
@@ -1485,7 +1857,7 @@ fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
         DnsBackendState::ResolvConf { backup_path } => {
             let backup = PathBuf::from(backup_path);
             let bytes = fs::read(&backup)?;
-            fs::write("/etc/resolv.conf", bytes)?;
+            write_private_file(Path::new("/etc/resolv.conf"), &bytes)?;
             let _ = fs::remove_file(backup);
         }
     }
@@ -1507,13 +1879,7 @@ fn resolv_conf_backup_path() -> PathBuf {
 }
 
 fn command_exists(program: &str) -> bool {
-    let Some(path) = env::var_os("PATH") else {
-        return false;
-    };
-    env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(program);
-        candidate.exists()
-    })
+    resolve_trusted_command(program).is_some()
 }
 
 fn run_command<I, S>(program: &str, args: I) -> Result<String, ControllerError>
@@ -1521,11 +1887,18 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let program_path = resolve_trusted_command(program).ok_or_else(|| {
+        ControllerError::State(format!("{program} was not found in trusted system paths"))
+    })?;
     let collected = args
         .into_iter()
         .map(|item| item.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    let output = ProcessCommand::new(program).args(&collected).output()?;
+    let output = ProcessCommand::new(&program_path)
+        .env_clear()
+        .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
+        .args(&collected)
+        .output()?;
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
@@ -1539,6 +1912,17 @@ where
         "{program} {} failed: {detail}",
         collected.join(" ")
     )))
+}
+
+fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
+    if program.contains('/') {
+        let path = PathBuf::from(program);
+        return path.exists().then_some(path);
+    }
+    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+        .into_iter()
+        .map(|dir| Path::new(dir).join(program))
+        .find(|candidate| candidate.exists())
 }
 
 fn normalize_mtu(value: u64) -> Result<u16, ControllerError> {
@@ -1683,7 +2067,7 @@ fn persist_state(state: &State) -> Result<(), ControllerError> {
     }
     let bytes = serde_json::to_vec(state)
         .map_err(|error| ControllerError::State(format!("failed to encode state: {error}")))?;
-    fs::write(path, bytes)?;
+    write_private_file(path.as_path(), &bytes)?;
     Ok(())
 }
 
@@ -1697,7 +2081,26 @@ fn print_state(state: &State) -> Result<(), ControllerError> {
 fn state_path() -> PathBuf {
     env::var("SORANET_VPN_STATE_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp/sora-vpn-controller-state.json"))
+        .unwrap_or_else(|_| default_state_path())
+}
+
+fn default_state_path() -> PathBuf {
+    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.json");
+    }
+    if let Some(home) = env::var_os("HOME") {
+        return PathBuf::from(home).join(".local/state/sora-vpn-controller/state.json");
+    }
+    PathBuf::from("/var/lib/sora-vpn-controller/state.json")
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    file.write_all(bytes)
 }
 
 fn hydrate_runtime_fields(state: &mut State) {
@@ -1797,6 +2200,17 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
     Ok(hex::decode(normalized)?)
 }
 
+fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
+    let decoded = decode_hex(value)?;
+    let bytes: [u8; 32] = decoded.try_into().map_err(|bytes: Vec<u8>| {
+        ControllerError::InvalidPayload(format!(
+            "{label} must decode to 32 bytes (got {})",
+            bytes.len()
+        ))
+    })?;
+    Ok(bytes)
+}
+
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
     let payload = serde_json::from_str::<ConnectPayload>(raw_payload)
@@ -1814,6 +2228,20 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
     if payload.helper_ticket_hex.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "helperTicketHex must not be empty".to_owned(),
+        ));
+    }
+    if payload.relay_tls_spki_sha256_hex.trim().is_empty() {
+        return Err(ControllerError::InvalidPayload(
+            "relayTlsSpkiSha256Hex must not be empty".to_owned(),
+        ));
+    }
+    let _ = parse_fixed_hex_32(
+        payload.relay_tls_spki_sha256_hex.as_str(),
+        "relayTlsSpkiSha256Hex",
+    )?;
+    if payload.padding_budget_ms == 0 {
+        return Err(ControllerError::InvalidPayload(
+            "paddingBudgetMs must be greater than zero".to_owned(),
         ));
     }
     if payload.mtu_bytes == 0 {
@@ -1891,36 +2319,45 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
 }
 
 #[derive(Debug)]
-struct NoCertificateVerification;
+struct PinnedSpkiVerifier {
+    relay_tls_spki_sha256: [u8; 32],
+}
 
-impl ServerCertVerifier for NoCertificateVerification {
+impl ServerCertVerifier for PinnedSpkiVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+        let spki = extract_spki_der(end_entity.as_ref())?;
+        let digest: [u8; 32] = Sha256::digest(spki).into();
+        if digest != self.relay_tls_spki_sha256 {
+            return Err(rustls::Error::General(
+                "relay TLS SPKI pin mismatch".to_owned(),
+            ));
+        }
         Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        verifier_for_signature_cert(cert)?.verify_tls12_signature(message, cert, dss)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        verifier_for_signature_cert(cert)?.verify_tls13_signature(message, cert, dss)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
@@ -1932,6 +2369,103 @@ impl ServerCertVerifier for NoCertificateVerification {
             rustls::SignatureScheme::RSA_PKCS1_SHA256,
         ]
     }
+}
+
+fn verifier_for_signature_cert(
+    cert: &CertificateDer<'_>,
+) -> Result<Arc<WebPkiServerVerifier>, rustls::Error> {
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(cert.as_ref().to_vec()))?;
+    WebPkiServerVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|error| rustls::Error::General(format!("TLS verifier config error: {error}")))
+}
+
+fn extract_spki_der(certificate: &[u8]) -> Result<&[u8], rustls::Error> {
+    let (_, cert_content, _) = read_der_element(certificate, 0, Some(0x30))?;
+    let (tbs_start, tbs_content, _) =
+        read_der_element(certificate, cert_content.start, Some(0x30))?;
+    let mut cursor = tbs_content.start;
+    if certificate
+        .get(cursor)
+        .copied()
+        .is_some_and(|tag| tag == 0xA0)
+    {
+        let (_, _, next) = read_der_element(certificate, cursor, Some(0xA0))?;
+        cursor = next;
+    }
+    for _ in 0..5 {
+        let (_, _, next) = read_der_element(certificate, cursor, None)?;
+        cursor = next;
+    }
+    let (spki_start, _, spki_next) = read_der_element(certificate, cursor, Some(0x30))?;
+    if spki_start < tbs_start || spki_next > certificate.len() {
+        return Err(rustls::Error::General(
+            "invalid relay certificate SPKI bounds".to_owned(),
+        ));
+    }
+    Ok(&certificate[spki_start..spki_next])
+}
+
+fn read_der_element(
+    bytes: &[u8],
+    start: usize,
+    expected_tag: Option<u8>,
+) -> Result<(usize, std::ops::Range<usize>, usize), rustls::Error> {
+    let tag = *bytes
+        .get(start)
+        .ok_or_else(|| rustls::Error::General("truncated DER element".to_owned()))?;
+    if let Some(expected) = expected_tag
+        && tag != expected
+    {
+        return Err(rustls::Error::General(format!(
+            "unexpected DER tag {tag:#x}; expected {expected:#x}"
+        )));
+    }
+    let len_start = start
+        .checked_add(1)
+        .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
+    let first_len = *bytes
+        .get(len_start)
+        .ok_or_else(|| rustls::Error::General("truncated DER length".to_owned()))?;
+    let (length, content_start) = if first_len & 0x80 == 0 {
+        (
+            usize::from(first_len),
+            len_start
+                .checked_add(1)
+                .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?,
+        )
+    } else {
+        let length_bytes = usize::from(first_len & 0x7F);
+        if length_bytes == 0 || length_bytes > std::mem::size_of::<usize>() {
+            return Err(rustls::Error::General(
+                "unsupported DER length encoding".to_owned(),
+            ));
+        }
+        let length_start = len_start
+            .checked_add(1)
+            .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
+        let length_end = length_start
+            .checked_add(length_bytes)
+            .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
+        let mut length = 0usize;
+        for byte in bytes
+            .get(length_start..length_end)
+            .ok_or_else(|| rustls::Error::General("truncated DER length".to_owned()))?
+        {
+            length = (length << 8) | usize::from(*byte);
+        }
+        (length, length_end)
+    };
+    let content_end = content_start
+        .checked_add(length)
+        .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
+    if content_end > bytes.len() {
+        return Err(rustls::Error::General(
+            "DER element length exceeds certificate".to_owned(),
+        ));
+    }
+    Ok((start, content_start..content_end, content_end))
 }
 
 #[cfg(test)]
@@ -1983,18 +2517,82 @@ mod tests {
     #[test]
     fn connect_payload_deserializes_camel_case() {
         let payload = parse_connect_payload(Some(
-            r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#,
+            r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#,
         ))
         .expect("payload");
         assert_eq!("session-1", payload.session_id);
         assert_eq!("/ip4/127.0.0.1/udp/7777/quic", payload.relay_endpoint);
         assert_eq!(1280, payload.mtu_bytes);
+        assert_eq!(15, payload.padding_budget_ms);
     }
 
     #[test]
     fn decode_hex_accepts_prefixed_values() {
         let decoded = decode_hex("0x0A0b").expect("hex");
         assert_eq!(decoded, vec![0x0A, 0x0B]);
+    }
+
+    #[test]
+    fn helper_ticket_metadata_decodes_without_secret() {
+        let ticket = VpnHelperTicketV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            account_hash: [0x33; 32],
+            relay_id: [0x44; 32],
+            payment_tx_hash: [0x55; 32],
+            expires_at_ms: 99_000,
+        };
+        let encoded = ticket.to_hex(&[0xAA; 32]);
+        let decoded = decode_helper_ticket_metadata(&encoded).expect("ticket metadata");
+
+        assert_eq!(decoded, ticket);
+    }
+
+    #[test]
+    fn usage_voucher_signer_builds_signed_cumulative_voucher() {
+        let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
+        let ticket = VpnHelperTicketV1 {
+            session_id: relay_session_id_from_session_id(session_id),
+            quote_id: [0x22; 32],
+            account_hash: [0x33; 32],
+            relay_id: [0x44; 32],
+            payment_tx_hash: [0x55; 32],
+            expires_at_ms: 99_000,
+        };
+        let raw_payload = serde_json::json!({
+            "sessionId": session_id,
+            "relayEndpoint": "/ip4/127.0.0.1/udp/7777/quic",
+            "exitClass": "standard",
+            "helperTicketHex": ticket.to_hex(&[0xAA; 32]),
+            "relayTlsSpkiSha256Hex": "ab".repeat(32),
+            "paddingBudgetMs": 15,
+            "tunnelAddresses": ["10.208.0.2/32"],
+            "mtuBytes": 1280,
+            "leaseSecs": 10,
+            "leaseFeeNanos": 1_000,
+            "meteringPrivateKeySeedHex": "66".repeat(32),
+            "usageVoucherIntervalMs": 1
+        });
+        let payload = parse_connect_payload(Some(&raw_payload.to_string())).expect("payload");
+        let mut signer = UsageVoucherSigner::from_payload(&payload)
+            .expect("signer")
+            .expect("enabled signer");
+        let counters = UsageVoucherCounters::default();
+        counters.add_ingress(10);
+        counters.add_egress(20);
+
+        let envelope = signer.build_envelope(&counters);
+
+        envelope.voucher.verify().expect("voucher signature");
+        assert_eq!(envelope.voucher.body.session_id, ticket.session_id);
+        assert_eq!(envelope.voucher.body.quote_id, ticket.quote_id);
+        assert_eq!(envelope.voucher.body.relay_id, ticket.relay_id);
+        assert_eq!(envelope.voucher.body.ingress_bytes, 10);
+        assert_eq!(envelope.voucher.body.egress_bytes, 20);
+        assert_eq!(
+            envelope.earned_fee_nanos,
+            tariff_earned_fee_nanos(1_000, 10, envelope.voucher.body.active_ms)
+        );
     }
 
     #[test]
@@ -2088,7 +2686,7 @@ mod tests {
 
     #[test]
     fn cli_accepts_connect_payload_after_subcommand() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
         let cli = Cli::try_parse_from(["sora-vpn-controller", "connect", payload]).expect("parse");
         match cli.command {
             Command::Connect { payload: parsed } => {
@@ -2100,7 +2698,7 @@ mod tests {
 
     #[test]
     fn cli_accepts_run_packet_engine_payload_after_subcommand() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.json","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.json","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
         let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
             .expect("parse");
         match cli.command {

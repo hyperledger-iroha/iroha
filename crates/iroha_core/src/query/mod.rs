@@ -202,8 +202,9 @@ pub fn insert_contract_instance_for_test(
 pub fn insert_proof_record_for_test(
     state: &mut crate::state::State,
     id: iroha_data_model::proof::ProofId,
-    rec: iroha_data_model::proof::ProofRecord,
+    mut rec: iroha_data_model::proof::ProofRecord,
 ) {
+    rec.id = id;
     let height = next_test_block_height();
     let height_u64 = u64::try_from(usize::from(height)).expect("height fits in u64");
     let header = iroha_data_model::block::BlockHeader::new(
@@ -216,7 +217,7 @@ pub fn insert_proof_record_for_test(
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.world.proofs.insert(id, rec);
+    stx.world.insert_proof_record(rec);
     stx.apply();
     block
         .transactions

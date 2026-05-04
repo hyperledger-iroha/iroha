@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -601,6 +602,7 @@ def onboard_account(
     payload: dict[str, Any] = {
         "alias": alias,
         "public_key_hex": public_key_hex,
+        "uaid": derive_canary_uaid(public_key_hex),
     }
     requested_permissions = normalize_permissions(list(permissions or []))
     if requested_permissions:
@@ -630,6 +632,17 @@ def onboard_account(
         }
 
     raise RuntimeError(f"account onboarding failed: status={status} body={payload!r}")
+
+
+def derive_canary_uaid(public_key_hex: str) -> str:
+    digest = bytearray(
+        hashlib.blake2b(
+            f"taira-canary-account:{public_key_hex.strip().lower()}".encode("utf-8"),
+            digest_size=32,
+        ).digest()
+    )
+    digest[-1] |= 1
+    return f"uaid:{digest.hex()}"
 
 
 def resolve_alias_account_id(torii_root: str, alias: str) -> str:

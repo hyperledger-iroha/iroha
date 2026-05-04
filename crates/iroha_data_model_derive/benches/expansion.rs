@@ -8,6 +8,7 @@ use criterion::Criterion;
 use manyhow::Emitter;
 use syn::{Item, ItemMod, parse_quote};
 
+#[allow(dead_code, unused_imports)]
 #[path = "../src/model.rs"]
 mod model;
 

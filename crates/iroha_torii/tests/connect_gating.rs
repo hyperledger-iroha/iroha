@@ -241,6 +241,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
+            cors: A::ToriiCors::default(),
             ram_lfe: None,
             tx_history: None,
             // minimal defaults
@@ -255,6 +256,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             soracloud_public_burst_per_ip: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
                 .and_then(std::num::NonZeroU32::new),
             soracloud_public_max_inflight: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+            soracloud_public_max_response_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES,
             soracloud_mutation_rate_per_account_origin_per_sec: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
                 .and_then(std::num::NonZeroU32::new),
             soracloud_mutation_burst_per_account_origin: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
@@ -1072,17 +1075,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             },
         },
         norito: iroha_config::parameters::actual::Norito {
-            min_compress_bytes_cpu:
-                iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_CPU,
-            min_compress_bytes_gpu:
-                iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_GPU,
-            zstd_level_small: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_SMALL,
-            zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
-            zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
-            large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
             allow_gpu_compression:
                 iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
-            aos_ncb_small_n: iroha_config::parameters::defaults::norito::AOS_NCB_SMALL_N,
             max_archive_len: iroha_config::parameters::defaults::norito::MAX_ARCHIVE_LEN,
         },
         hijiri: A::Hijiri::new(None),
@@ -2557,6 +2551,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
 
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
 
@@ -2733,6 +2728,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
 
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 

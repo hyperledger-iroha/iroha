@@ -593,8 +593,51 @@ pub struct PublicKeyCompact {
     // payload: ConstVec<u8>,
 }
 
+/// Parsed Ed25519 public key for hot-path verification reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
+
+/// Reusable scratch storage for Ed25519 batch verification.
+#[derive(Debug, Default)]
+pub struct Ed25519BatchScratch<'a> {
+    public_keys: Vec<signature::ed25519::PublicKey>,
+    signatures: Vec<ed25519_dalek::Signature>,
+    miss_messages: Vec<&'a [u8]>,
+    miss_raw_signatures: Vec<&'a [u8]>,
+    miss_original_indices: Vec<usize>,
+}
+
+impl Ed25519BatchScratch<'_> {
+    /// Clear retained scratch contents while keeping allocated capacity.
+    pub fn clear(&mut self) {
+        self.public_keys.clear();
+        self.signatures.clear();
+        self.miss_messages.clear();
+        self.miss_raw_signatures.clear();
+        self.miss_original_indices.clear();
+    }
+}
+
+impl Ed25519ParsedPublicKey {
+    /// Raw canonical Ed25519 public-key bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+}
+
 // Batch verification helpers (deterministic), exposed for admission-time grouping
 // across transaction signatures.
+
+/// Parse an Ed25519 public key once for reuse in batch verification.
+///
+/// # Errors
+/// Returns [`Error::Parse`] if the key payload is not a canonical, non-weak Ed25519 public key.
+pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey, Error> {
+    signature::ed25519::Ed25519Sha512::parse_public_key(payload)
+        .map(Ed25519ParsedPublicKey)
+        .map_err(Error::from)
+}
 
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// The `seed32` parameter is reserved for API compatibility and is ignored.
@@ -613,6 +656,210 @@ pub fn ed25519_verify_batch_deterministic(
         public_keys,
         seed32,
     )
+}
+
+/// Deterministic Ed25519 batch verification wrapper using pre-parsed public keys.
+///
+/// Under the `ecc-batch` feature this uses dalek's deterministic batch verifier.
+/// Otherwise it retains ordered per-signature fallback behavior.
+///
+/// # Errors
+/// Returns `Err(Error::BadSignature)` if any tuple fails verification, if signatures have invalid
+/// length, if the input slices have mismatched lengths, or if the input is empty.
+pub fn ed25519_verify_batch_preparsed_deterministic(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+) -> Result<(), Error> {
+    let mut scratch = Ed25519BatchScratch::default();
+    ed25519_verify_batch_preparsed_deterministic_with_scratch(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+        &mut scratch,
+    )
+}
+
+/// Deterministic Ed25519 batch verification wrapper using pre-parsed public keys and caller scratch.
+///
+/// Reusing `scratch` avoids allocating the dalek key slice for every chunk or
+/// deterministic bisection probe in block validation.
+///
+/// # Errors
+/// Returns `Err(Error::BadSignature)` if any tuple fails verification, if signatures have invalid
+/// length, if the input slices have mismatched lengths, or if the input is empty.
+pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch<'a>,
+) -> Result<(), Error> {
+    ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+        scratch,
+    )
+}
+
+fn ed25519_verify_batch_preparsed_deterministic_with_scratch_inner<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch<'a>,
+) -> Result<(), Error> {
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
+        return Err(Error::BadSignature);
+    }
+    let _ = seed32;
+
+    scratch.clear();
+    scratch
+        .miss_original_indices
+        .try_reserve(messages.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .miss_messages
+        .try_reserve(messages.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .miss_raw_signatures
+        .try_reserve(signatures.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .public_keys
+        .try_reserve(public_keys.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .signatures
+        .try_reserve(signatures.len())
+        .map_err(|_| Error::BadSignature)?;
+
+    let mut cached_hits = 0usize;
+    for (idx, ((message, signature), public_key)) in messages
+        .iter()
+        .zip(signatures.iter())
+        .zip(public_keys.iter())
+        .enumerate()
+    {
+        if signature::ed25519::is_verify_ok_cached(&public_key.0, message, signature) {
+            cached_hits = cached_hits.saturating_add(1);
+            continue;
+        }
+        scratch.miss_original_indices.push(idx);
+        scratch.miss_messages.push(message);
+        scratch.miss_raw_signatures.push(signature);
+        scratch
+            .signatures
+            .push(signature::ed25519::Ed25519Sha512::parse_signature(
+                signature,
+            )?);
+        scratch.public_keys.push(public_key.0);
+    }
+
+    if scratch.miss_original_indices.is_empty() {
+        return Ok(());
+    }
+
+    if cached_hits == 0 {
+        return signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_uncached(
+            messages,
+            signatures,
+            &scratch.signatures,
+            &scratch.public_keys,
+        );
+    }
+
+    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_uncached(
+        &scratch.miss_messages,
+        &scratch.miss_raw_signatures,
+        &scratch.signatures,
+        &scratch.public_keys,
+    )
+}
+
+/// Return the lowest-index failing Ed25519 tuple for pre-parsed public keys.
+///
+/// The search uses the same deterministic batch verifier as
+/// [`ed25519_verify_batch_preparsed_deterministic_with_scratch`] and keeps
+/// `scratch` reusable across bisection probes.
+#[must_use]
+pub fn ed25519_first_bad_preparsed_deterministic_with_scratch<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch<'a>,
+) -> Option<(usize, String)> {
+    ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+        scratch,
+    )
+}
+
+fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch<'a>,
+) -> Option<(usize, String)> {
+    if messages.is_empty()
+        || ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
+            messages,
+            signatures,
+            public_keys,
+            seed32,
+            scratch,
+        )
+        .is_ok()
+    {
+        return None;
+    }
+    if messages.len() == 1 {
+        let detail = ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
+            messages,
+            signatures,
+            public_keys,
+            seed32,
+            scratch,
+        )
+        .expect_err("single invalid Ed25519 item must fail")
+        .to_string();
+        return Some((0, detail));
+    }
+
+    let split = messages.len() / 2;
+    let (left_messages, right_messages) = messages.split_at(split);
+    let (left_signatures, right_signatures) = signatures.split_at(split);
+    let (left_public_keys, right_public_keys) = public_keys.split_at(split);
+    ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
+        left_messages,
+        left_signatures,
+        left_public_keys,
+        seed32,
+        scratch,
+    )
+    .or_else(|| {
+        ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
+            right_messages,
+            right_signatures,
+            right_public_keys,
+            seed32,
+            scratch,
+        )
+        .map(|(idx, detail)| (idx + split, detail))
+    })
 }
 
 /// Deterministic secp256k1 (ECDSA) batch verification wrapper.
@@ -1356,15 +1603,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
     ) -> Result<Self, norito::core::Error> {
         let archived_bytes = archived.cast::<ConstVec<u8>>();
         let payload = ConstVec::<u8>::try_deserialize(archived_bytes)?;
-        #[cfg(debug_assertions)]
-        {
-            let preview_len = core::cmp::min(payload.len(), 16);
-            eprintln!(
-                "PublicKeyCompact::try_deserialize payload_len={} preview={:?}",
-                payload.len(),
-                &payload[..preview_len]
-            );
-        }
         if payload.is_empty() {
             return Err(norito::core::Error::length_mismatch_detail(
                 "PublicKeyCompact::try_deserialize",
@@ -1530,12 +1768,8 @@ impl Ord for PublicKey {
 // `norito::core::DecodeFromSlice` without re-implementing deep decoders.
 impl<'a> norito::core::DecodeFromSlice<'a> for PublicKey {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (normalized, used) =
-            <String as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        let key = normalized
-            .parse::<Self>()
-            .map_err(|err: ParseError| norito::core::Error::Message(err.to_string()))?;
-        Ok((key, used))
+        <PublicKeyCompact as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
+            .map(|(compact, used)| (Self(compact), used))
     }
 }
 
@@ -1615,8 +1849,15 @@ impl FromStr for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let normalized = self.normalize();
-        norito::core::NoritoSerialize::serialize(&normalized, writer)
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
 
@@ -1629,13 +1870,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        #[allow(unsafe_code)]
-        let archived_str =
-            unsafe { &*core::ptr::from_ref(archived).cast::<norito::core::Archived<String>>() };
-        let normalized = String::try_deserialize(archived_str)?;
-        normalized
-            .parse::<Self>()
-            .map_err(|err: ParseError| norito::core::Error::Message(err.to_string()))
+        let archived_compact = archived.cast::<PublicKeyCompact>();
+        PublicKeyCompact::try_deserialize(archived_compact).map(Self)
     }
 }
 
@@ -2889,6 +3125,24 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "ffi_import"))]
+    fn public_key_encoded_len_exact_matches_norito() {
+        let pk: PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key");
+        let expected = norito::core::to_bytes(&pk)
+            .expect("encode public key")
+            .len()
+            - norito::core::Header::SIZE;
+
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
+            expected
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_try_deserialize_rejects_invalid_payload() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let framed = norito::core::to_bytes(&compact).expect("encode compact");
@@ -2918,7 +3172,7 @@ mod tests {
                 .expect("public key");
         let framed = norito::core::to_bytes(&pk).expect("encode public key");
         let actual_hex = hex::encode(&framed);
-        let expected_hex = "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d240047000000000000003baa0fd04f6ed097024665643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435";
+        let expected_hex = "4e5254300000b6b01d0a3d2b9cfe06ff97af6ba0f622004a00000000000000ff3888681ae90906022100000000000000010001ed01f601d701b5012c0170013201d0013a01ec0169016f0120016801bd015301100115012801f301c701b60108011b01ff010501a10166012d017f01c20145";
         assert_eq!(
             actual_hex, expected_hex,
             "public key Norito archive changed"
@@ -2928,7 +3182,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_try_deserialize_rejects_invalid_payload() {
-        let bogus = String::from("not-a-public-key");
+        let bogus = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let (payload, flags) = norito::codec::encode_with_header_flags(&bogus);
         let framed = norito::core::frame_bare_with_header_flags::<PublicKey>(&payload, flags)
             .expect("frame");

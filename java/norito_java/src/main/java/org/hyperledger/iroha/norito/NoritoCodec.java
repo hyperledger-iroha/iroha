@@ -22,7 +22,6 @@ public final class NoritoCodec {
   private static final ThreadLocal<Deque<ContextFlags>> ACTIVE_DECODE_CONTEXTS =
       ThreadLocal.withInitial(ArrayDeque::new);
 
-  private static final ThreadLocal<Integer> LAST_ENCODE_FLAGS = new ThreadLocal<>();
   private static final ThreadLocal<byte[]> DECODE_ROOT_PAYLOAD = new ThreadLocal<>();
 
   private NoritoCodec() {}
@@ -71,7 +70,6 @@ public final class NoritoCodec {
     byte[] out = new byte[headerBytes.length + payloadBytes.length];
     System.arraycopy(headerBytes, 0, out, 0, headerBytes.length);
     System.arraycopy(payloadBytes, 0, out, headerBytes.length, payloadBytes.length);
-    LAST_ENCODE_FLAGS.set(flags & 0xFF);
     return out;
   }
 
@@ -91,18 +89,11 @@ public final class NoritoCodec {
       adapter.encode(encoder, value);
       payload = encoder.toByteArray();
     }
-    LAST_ENCODE_FLAGS.set(finalFlags & 0xFF);
     return new AdaptiveEncoding(payload, finalFlags & 0xFF);
   }
 
   public static <T> AdaptiveEncoding encodeWithHeaderFlags(T value, TypeAdapter<T> adapter) {
     return encodeAdaptive(value, adapter, DEFAULT_FLAGS);
-  }
-
-  public static Integer takeLastEncodeFlags() {
-    Integer current = LAST_ENCODE_FLAGS.get();
-    LAST_ENCODE_FLAGS.remove();
-    return current;
   }
 
   private static int combineFlags(int flags, int hint) {
@@ -131,7 +122,6 @@ public final class NoritoCodec {
     DECODE_FLAGS_STACK.get().clear();
     DECODE_FLAGS_HINT_STACK.get().clear();
     ACTIVE_DECODE_CONTEXTS.get().clear();
-    LAST_ENCODE_FLAGS.remove();
     DECODE_ROOT_PAYLOAD.remove();
   }
 

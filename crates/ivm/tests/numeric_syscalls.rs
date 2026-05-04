@@ -1,8 +1,9 @@
 //! Tests for Numeric syscall behavior.
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::host::IVMHost;
+use ivm::mock_wsv::{AccountId, MockWorldStateView, WsvHost};
 use ivm::{CoreHost, IVM, PointerType, VMError, host::DefaultHost, syscalls};
 mod common;
 
@@ -36,6 +37,11 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
     addr
 }
 
+fn account(public_key: &str) -> AccountId {
+    let public_key: PublicKey = public_key.parse().expect("public key");
+    AccountId::new(public_key)
+}
+
 #[test]
 fn numeric_from_int_rejects_negative() {
     let mut vm = IVM::new(u64::MAX);
@@ -66,8 +72,41 @@ fn numeric_from_int_encodes_i64() {
     let mut host = DefaultHost::new();
 
     vm.set_register(10, 42_u64);
-    host.syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm)
-        .expect("numeric from int");
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm),
+        Ok(16)
+    );
+
+    let out = decode_numeric(&vm, vm.register(10));
+    assert_eq!(out, Numeric::new(42_i64, 0));
+}
+
+#[test]
+fn numeric_from_int_charges_gas_core_host() {
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = CoreHost::new();
+
+    vm.set_register(10, 42_u64);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm),
+        Ok(16)
+    );
+
+    let out = decode_numeric(&vm, vm.register(10));
+    assert_eq!(out, Numeric::new(42_i64, 0));
+}
+
+#[test]
+fn numeric_from_int_charges_gas_wsv_host() {
+    let caller = account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+
+    vm.set_register(10, 42_u64);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_NUMERIC_FROM_INT, &mut vm),
+        Ok(16)
+    );
 
     let out = decode_numeric(&vm, vm.register(10));
     assert_eq!(out, Numeric::new(42_i64, 0));

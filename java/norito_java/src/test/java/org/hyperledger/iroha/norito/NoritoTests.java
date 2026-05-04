@@ -22,6 +22,8 @@ public final class NoritoTests {
     testCrc64ByteBuffer();
     testHeaderRoundtrip();
     testHeaderPaddingAccepted();
+    testHeaderRejectsReservedFlags();
+    testHeaderRejectsInvalidFieldBitsetFlags();
     testSchemaHashCanonicalPath();
     testEncodeDecodeUInt();
     testEncodeDecodeString();
@@ -151,7 +153,7 @@ public final class NoritoTests {
 
   private static void testSchemaHashCanonicalPath() {
     byte[] hash = SchemaHash.hash16("iroha.test.Header");
-    assert toHex(hash).equals("3d20b9b63277094a3d20b9b63277094a") : "Canonical schema hash mismatch";
+    assert toHex(hash).equals("ae7a510c0b77d4b4c8edb67c99d83baa") : "Canonical schema hash mismatch";
   }
 
   private static void testHeaderRoundtrip() {
@@ -187,6 +189,76 @@ public final class NoritoTests {
     System.arraycopy(payload, 0, combined, headerBytes.length + padding.length, payload.length);
     NoritoHeader.DecodeResult result = NoritoHeader.decode(combined, schemaHash);
     assert Arrays.equals(result.payload(), payload) : "Payload mismatch with padding";
+  }
+
+  private static void testHeaderRejectsReservedFlags() {
+    byte[] schemaHash = SchemaHash.hash16("iroha.test.ReservedFlags");
+    byte[] payload = new byte[] {1};
+    long checksum = CRC64.compute(payload);
+    int[] cases = {
+      NoritoHeader.VARINT_OFFSETS,
+      NoritoHeader.COMPACT_SEQ_LEN,
+      NoritoHeader.VARINT_OFFSETS | NoritoHeader.COMPACT_SEQ_LEN
+    };
+    for (int flags : cases) {
+      boolean constructionFailed = false;
+      try {
+        new NoritoHeader(schemaHash, payload.length, checksum, flags, NoritoHeader.COMPRESSION_NONE);
+      } catch (IllegalArgumentException ex) {
+        constructionFailed = true;
+      }
+      assert constructionFailed : "Expected reserved flags to be rejected at construction: " + flags;
+
+      byte[] combined = frameWithUncheckedFlags(schemaHash, payload, checksum, flags);
+      boolean failed = false;
+      try {
+        NoritoHeader.decode(combined, schemaHash);
+      } catch (IllegalArgumentException ex) {
+        failed = true;
+      }
+      assert failed : "Expected reserved flags to be rejected: " + flags;
+    }
+  }
+
+  private static void testHeaderRejectsInvalidFieldBitsetFlags() {
+    byte[] schemaHash = SchemaHash.hash16("iroha.test.FieldBitsetFlags");
+    byte[] payload = new byte[] {1};
+    long checksum = CRC64.compute(payload);
+    int[] cases = {
+      NoritoHeader.FIELD_BITSET,
+      NoritoHeader.FIELD_BITSET | NoritoHeader.COMPACT_LEN,
+      NoritoHeader.FIELD_BITSET | NoritoHeader.PACKED_STRUCT
+    };
+    for (int flags : cases) {
+      boolean constructionFailed = false;
+      try {
+        new NoritoHeader(schemaHash, payload.length, checksum, flags, NoritoHeader.COMPRESSION_NONE);
+      } catch (IllegalArgumentException ex) {
+        constructionFailed = true;
+      }
+      assert constructionFailed : "Expected invalid FIELD_BITSET flags to be rejected at construction: " + flags;
+
+      byte[] combined = frameWithUncheckedFlags(schemaHash, payload, checksum, flags);
+      boolean failed = false;
+      try {
+        NoritoHeader.decode(combined, schemaHash);
+      } catch (IllegalArgumentException ex) {
+        failed = true;
+      }
+      assert failed : "Expected invalid FIELD_BITSET flags to be rejected: " + flags;
+    }
+  }
+
+  private static byte[] frameWithUncheckedFlags(
+      byte[] schemaHash, byte[] payload, long checksum, int flags) {
+    NoritoHeader header =
+        new NoritoHeader(schemaHash, payload.length, checksum, 0, NoritoHeader.COMPRESSION_NONE);
+    byte[] encoded = header.encode();
+    encoded[NoritoHeader.HEADER_LENGTH - 1] = (byte) (flags & 0xFF);
+    byte[] combined = new byte[encoded.length + payload.length];
+    System.arraycopy(encoded, 0, combined, 0, encoded.length);
+    System.arraycopy(payload, 0, combined, encoded.length, payload.length);
+    return combined;
   }
 
   private static void testEncodeDecodeUInt() {
@@ -573,8 +645,8 @@ public final class NoritoTests {
         "bool", "bool",
         "u64", Map.of("Int", "FixedWidth"));
     byte[] expected = new byte[] {
-        (byte) 0x01, 0x07, (byte) 0xFE, (byte) 0xC5, (byte) 0xFC, 0x24, (byte) 0xAC, 0x0D,
-        (byte) 0x01, 0x07, (byte) 0xFE, (byte) 0xC5, (byte) 0xFC, 0x24, (byte) 0xAC, 0x0D
+        0x3A, (byte) 0xE1, 0x59, 0x17, 0x41, (byte) 0xF6, 0x66, 0x46,
+        0x2F, (byte) 0xB7, 0x66, 0x57, 0x20, (byte) 0xDD, (byte) 0xDE, 0x6C
     };
     byte[] actual = SchemaHash.hash16FromStructural(schema);
     assert Arrays.equals(expected, actual) : "Structural schema hash mismatch";
@@ -841,15 +913,15 @@ public final class NoritoTests {
 
   private static void testPublicKeyCanonicalArchive() {
     String hex =
-        "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d2400470000000000000096a36ea041b651ec"
-            + "374665643031323045444636443742353243373033324430334145433639364632303638424435"
+        "4e5254300000b6b01d0a3d2b9cfe06ff97af6ba0f62200470000000000000096a36ea041b651ec"
+            + "274665643031323045444636443742353243373033324430334145433639364632303638424435"
             + "333130313532384633433742363038314246463035413136363244374643323435";
     byte[] archive = fromHex(hex);
     byte[] schemaHash = SchemaHash.hash16("iroha_crypto::PublicKey");
     NoritoHeader.DecodeResult result = NoritoHeader.decode(archive, schemaHash);
     NoritoHeader header = result.header();
     byte[] payload = result.payload();
-    assert header.flags() == 0x37 : "Unexpected layout flags";
+    assert header.flags() == 0x27 : "Unexpected layout flags";
     assert header.payloadLength() == payload.length : "Payload length mismatch";
     assert header.checksum() == 0xEC51B641A06EA396L : "Checksum mismatch";
     NoritoDecoder decoder = new NoritoDecoder(payload, header.flags(), NoritoHeader.MINOR_VERSION);

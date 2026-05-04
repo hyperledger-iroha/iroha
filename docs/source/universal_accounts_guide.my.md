@@ -111,7 +111,7 @@ Universal-account စတင်ဖြန့်ချိခြင်းသည် c
 လက်ရှိ Torii လမ်းကြောင်းများ-| လမ်းကြောင်း | ရည်ရွယ်ချက် |
 |---------|---------|
 | `GET /v1/ram-lfe/program-policies` | အသုံးပြု၍မရသော RAM-LFE ပရိုဂရမ်မူဝါဒများအပြင် ရွေးချယ်နိုင်သော BFV `input_encryption` ဘောင်များနှင့် ပရိုဂရမ်လုပ်ထားသော နောက်ကွယ်မှ `ram_fhe_profile` အပါအဝင် ၎င်းတို့၏ အများသူငှာ လုပ်ဆောင်မှု မက်တာဒေတာကို စာရင်းပြုစုထားသည်။ |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` သို့မဟုတ် `{ encrypted_input }` ကို အတိအကျ လက်ခံပြီး ရွေးချယ်ထားသော အစီအစဉ်အတွက် နိုင်ငံမဲ့ `RamLfeExecutionReceipt` နှင့် `{ output_hex, output_hash, receipt_hash }` ကို ပြန်ပေးသည်။ လက်ရှိ Torii runtime သည် ပရိုဂရမ်ပြုလုပ်ထားသော BFV နောက်ခံအတွက် လက်ခံဖြတ်ပိုင်းများ။ |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` သို့မဟုတ် `{ encrypted_input }` ကို အတိအကျ လက်ခံပြီး ရွေးချယ်ထားသော အစီအစဉ်အတွက် နိုင်ငံမဲ့ `RamLfeExecutionReceipt` နှင့် `{ output_hash, receipt_hash }` ကို ပြန်ပေးသည်။ Torii သည် RAM-LFE ၏ plaintext output ကို ပြန်မပေးပါ။ လက်ရှိ Torii runtime သည် ပရိုဂရမ်ပြုလုပ်ထားသော BFV နောက်ခံအတွက် လက်ခံဖြတ်ပိုင်းများ။ |
 | `POST /v1/ram-lfe/receipts/verify` | ထုတ်ပြန်ထားသော ကွင်းဆက်ပရိုဂရမ်မူဝါဒကို နိုင်ငံမဲ့ `RamLfeExecutionReceipt` ကို တရားဝင်အတည်ပြုပြီး ခေါ်ဆိုသူမှပေးသော `output_hex` သည် လက်ခံပြေစာ `output_hash` နှင့် ကိုက်ညီမှုရှိမရှိ စစ်ဆေးပေးပါသည်။ |
 | `GET /v1/identifier-policies` | ရွေးချယ်နိုင်သော BFV `input_encryption` ဘောင်များအပါအဝင် တက်ကြွပြီး အသုံးမဝင်သော လျှို့ဝှက်လုပ်ဆောင်ချက် မူဝါဒအမည်နေရာလွတ်များ နှင့် ၎င်းတို့၏ အများသူငှာ မက်တာဒေတာများကို စာရင်းပြုစုထားသည်။ |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` သို့မဟုတ် `{ encrypted_input }` အနက်မှ တစ်ခုကို အတိအကျ လက်ခံပါသည်။ Plaintext `input` သည် ပုံမှန်ဆာဗာ-ခြမ်းဖြစ်သည်။ BFV `encrypted_input` ကို ထုတ်ပြန်ထားသည့် မူဝါဒမုဒ်အရ ပုံမှန်ပြန်ဖြစ်ရပါမည်။ ထို့နောက် အဆုံးမှတ်သည် `opaque:` လက်ကိုင်ကို ထုတ်ယူပြီး `ClaimIdentifier` အပါအဝင် အကြမ်းထည် `signature_payload_hex` နှင့် ခွဲခြမ်းစိတ်ဖြာထားသော `signature_payload` အပါအဝင် ကွင်းဆက်တွင် တင်ပြနိုင်သည့် လက်မှတ်ရေးထိုးထားသော ပြေစာကို ပြန်ပေးသည်။ || `POST /v1/identifiers/resolve` | `{ input }` သို့မဟုတ် `{ encrypted_input }` အနက်မှ တစ်ခုကို အတိအကျ လက်ခံပါသည်။ Plaintext `input` သည် ပုံမှန်ပြုလုပ်ထားသော server-side ဖြစ်သည်။ BFV `encrypted_input` ကို ထုတ်ပြန်ထားသည့် မူဝါဒမုဒ်အရ ပုံမှန်ပြန်ဖြစ်ရပါမည်။ လက်ရှိအရေးဆိုမှုတစ်ခုရှိသည့်အခါ အဆုံးအမှတ်သည် `{ opaque_id, receipt_hash, uaid, account_id, signature }` တွင် identifier ကို ဖြေရှင်းပေးပြီး `{ signature_payload_hex, signature_payload }` အဖြစ် canonical signed payload ကို ပြန်ပေးသည်။ |
@@ -227,8 +227,9 @@ UAID ရရှိရန် ပံ့ပိုးပေးထားသော န�
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```စာလုံးအသေးဖြင့် အမြဲသိမ်းဆည်းပြီး ဟက်ကင်းမပြုလုပ်မီ နေရာလွတ်များကို ပုံမှန်ဖြစ်အောင် ပြုလုပ်ပါ။
 `iroha app space-directory manifest scaffold` နှင့် Android ကဲ့သို့သော CLI အထောက်အကူများ
 `UaidLiteral` parser သည် တူညီသော ဖြတ်တောက်ခြင်း စည်းမျဉ်းများကို အသုံးပြု၍ အုပ်ချုပ်ရေးဆိုင်ရာ ပြန်လည်သုံးသပ်မှုများ ပြုလုပ်နိုင်သည်

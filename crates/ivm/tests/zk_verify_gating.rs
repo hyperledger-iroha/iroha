@@ -74,6 +74,10 @@ fn run_verify(number: u32, host: &mut DefaultHost, vm: &mut IVM, env_bytes: &[u8
     host.syscall(number, vm).expect("syscall ok")
 }
 
+fn verify_gas(payload_len: usize) -> u64 {
+    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
 fn label_for_syscall(number: u32) -> &'static str {
     match number {
         syscalls::SYSCALL_ZK_VERIFY_TRANSFER => ivm::host::LABEL_TRANSFER,
@@ -85,7 +89,7 @@ fn label_for_syscall(number: u32) -> &'static str {
 }
 
 #[test]
-fn verify_syscalls_gating_returns_zero_when_disabled() {
+fn verify_syscalls_gating_returns_status_when_disabled() {
     let mut vm = IVM::new(1_000_000);
     let cfg = ivm::host::ZkHalo2Config {
         enabled: false,
@@ -100,7 +104,7 @@ fn verify_syscalls_gating_returns_zero_when_disabled() {
     ] {
         let env = build_valid_env_pallas(label_for_syscall(num));
         let gas = run_verify(num, &mut host, &mut vm, &env);
-        assert_eq!(gas, 0);
+        assert_eq!(gas, verify_gas(env.len()));
         assert_eq!(
             vm.register(10),
             0,
@@ -111,7 +115,7 @@ fn verify_syscalls_gating_returns_zero_when_disabled() {
 }
 
 #[test]
-fn verify_syscalls_gating_returns_zero_on_curve_mismatch() {
+fn verify_syscalls_gating_returns_status_on_curve_mismatch() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new().with_zk_halo2_config(Default::default());
     // Host expects Pallas, but env encodes BN254
@@ -122,7 +126,8 @@ fn verify_syscalls_gating_returns_zero_on_curve_mismatch() {
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {
         let env = build_valid_env_bn254(label_for_syscall(num));
-        let _ = run_verify(num, &mut host, &mut vm, &env);
+        let gas = run_verify(num, &mut host, &mut vm, &env);
+        assert_eq!(gas, verify_gas(env.len()));
         assert_eq!(
             vm.register(10),
             0,
@@ -152,7 +157,8 @@ fn verify_syscalls_accepts_matching_curve_pallas() {
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {
         let env_bytes = build_valid_env_pallas(label_for_syscall(num));
-        let _ = run_verify(num, &mut host, &mut vm, &env_bytes);
+        let gas = run_verify(num, &mut host, &mut vm, &env_bytes);
+        assert_eq!(gas, verify_gas(env_bytes.len()));
         assert_eq!(vm.register(10), 1, "expected success pointer for {num:x}");
         assert_eq!(vm.register(11), 0, "expected OK status for {num:x}");
     }
@@ -178,7 +184,8 @@ fn verify_syscalls_accepts_matching_curve_bn254() {
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {
         let env_bytes = build_valid_env_bn254(label_for_syscall(num));
-        let _ = run_verify(num, &mut host, &mut vm, &env_bytes);
+        let gas = run_verify(num, &mut host, &mut vm, &env_bytes);
+        assert_eq!(gas, verify_gas(env_bytes.len()));
         assert_eq!(vm.register(10), 1, "expected success pointer for {num:x}");
         assert_eq!(vm.register(11), 0, "expected OK status for {num:x}");
     }
@@ -204,14 +211,15 @@ fn verify_syscalls_gating_returns_backend_error_when_not_ipa() {
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {
         let env_bytes = build_valid_env_pallas(label_for_syscall(num));
-        let _ = run_verify(num, &mut host, &mut vm, &env_bytes);
+        let gas = run_verify(num, &mut host, &mut vm, &env_bytes);
+        assert_eq!(gas, verify_gas(env_bytes.len()));
         assert_eq!(vm.register(10), 0, "backend mismatch must gate {num:x}");
         assert_eq!(vm.register(11), 2, "ERR_BACKEND expected for {num:x}");
     }
 }
 
 #[test]
-fn verify_syscalls_gating_returns_zero_when_k_exceeds_limit() {
+fn verify_syscalls_gating_returns_status_when_k_exceeds_limit() {
     let mut vm = IVM::new(1_000_000);
     // Host caps supported k below the envelope's requirement (k=3).
     let mut host = DefaultHost::new().with_zk_halo2_config(ivm::host::ZkHalo2Config {
@@ -230,7 +238,8 @@ fn verify_syscalls_gating_returns_zero_when_k_exceeds_limit() {
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {
         let env = build_valid_env_pallas(label_for_syscall(num));
-        let _ = run_verify(num, &mut host, &mut vm, &env);
+        let gas = run_verify(num, &mut host, &mut vm, &env);
+        assert_eq!(gas, verify_gas(env.len()));
         assert_eq!(vm.register(10), 0, "k too large must return 0 for {num:x}");
         assert_eq!(vm.register(11), 4, "ERR_K in r11");
     }
@@ -256,7 +265,8 @@ fn verify_syscalls_gating_allows_path_then_verifier_decides() {
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {
         let env = build_valid_env_pallas(label_for_syscall(num));
-        let _ = run_verify(num, &mut host, &mut vm, &env);
+        let gas = run_verify(num, &mut host, &mut vm, &env);
+        assert_eq!(gas, verify_gas(env.len()));
         // We don't assert success (1) to avoid depending on IPA math; just that it returns a defined 0/1.
         let r = vm.register(10);
         assert!(r == 0 || r == 1, "expected r10 in {{0,1}} for {num:x}");
@@ -291,7 +301,8 @@ fn verify_syscalls_allowed_curves_matrix_defined_status() {
             syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
         ] {
             let env = builder(label_for_syscall(num));
-            let _ = run_verify(num, &mut host, &mut vm, &env);
+            let gas = run_verify(num, &mut host, &mut vm, &env);
+            assert_eq!(gas, verify_gas(env.len()));
             let r10 = vm.register(10);
             let r11 = vm.register(11);
             assert!(r10 == 0 || r10 == 1, "r10 must be 0/1 for curve {name}");
@@ -322,7 +333,8 @@ fn verify_syscalls_reject_transcript_label_mismatch() {
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &bad_label_env);
         vm.memory.preload_input(0, &tlv).expect("preload input");
         vm.set_register(10, Memory::INPUT_START);
-        let _ = host.syscall(num, &mut vm).expect("syscall ok");
+        let gas = host.syscall(num, &mut vm).expect("syscall ok");
+        assert_eq!(gas, verify_gas(bad_label_env.len()));
         assert_eq!(vm.register(10), 0, "label mismatch must fail for {num:x}");
         assert_eq!(
             vm.register(11),
@@ -353,9 +365,10 @@ fn verify_syscalls_reject_over_envelope_and_proof_limits() {
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env_small);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let _ = host
+    let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
+    assert_eq!(gas, verify_gas(env_small.len()));
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), ivm::host::ERR_ENVELOPE_SIZE);
 
@@ -405,9 +418,10 @@ fn verify_syscalls_reject_over_envelope_and_proof_limits() {
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let _ = host
+    let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), ivm::host::ERR_PROOF_LEN);
 }

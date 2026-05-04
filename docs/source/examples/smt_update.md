@@ -1,6 +1,6 @@
 # Sparse Merkle Update Example
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
+This worked example illustrates how the FASTPQ V1 trace encodes a
 non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
 is binary over Poseidon2 field elements. Keys are converted to canonical
 32-byte little-endian strings, hashed to a field element, and the most
@@ -16,7 +16,7 @@ significant bits select the branch at each level.
   existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
 
 Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
+additional evidence that the interval `(alice, bob)` is empty. V1 populates
 the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
 `node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
 are Poseidon2 field elements encoded in little-endian form:

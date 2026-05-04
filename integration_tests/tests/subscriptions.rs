@@ -108,7 +108,7 @@ fn subscription_invoice_for_nft(
 async fn tick_block(client: &Client) -> Result<()> {
     let client = client.clone();
     spawn_blocking(move || {
-        client.submit_blocking(Log::new(
+        client.submit(Log::new(
             Level::DEBUG,
             "subscription trigger tick".to_string(),
         ))
@@ -120,11 +120,12 @@ async fn tick_block(client: &Client) -> Result<()> {
 async fn wait_for_invoice_status(
     client: &Client,
     nft_id: &NftId,
+    trigger_id: &TriggerId,
     status: SubscriptionInvoiceStatus,
     sync_timeout: Duration,
     poll_delay: Duration,
 ) -> Result<SubscriptionInvoice> {
-    timeout(sync_timeout, async {
+    match timeout(sync_timeout, async {
         loop {
             tick_block(client).await?;
             let invoice = spawn_blocking({
@@ -142,7 +143,100 @@ async fn wait_for_invoice_status(
         }
     })
     .await
-    .wrap_err("timed out waiting for subscription invoice")?
+    {
+        Ok(result) => result,
+        Err(elapsed) => {
+            let diagnostics = spawn_blocking({
+                let client = client.clone();
+                let nft_id = nft_id.clone();
+                let trigger_id = trigger_id.clone();
+                move || {
+                    let invoice = subscription_invoice_for_nft(&client, &nft_id)
+                        .map(|invoice| format!("{invoice:?}"))
+                        .unwrap_or_else(|err| format!("invoice query failed: {err}"));
+                    let state = subscription_state_for_nft(&client, &nft_id)
+                        .map(|state| format!("{state:?}"))
+                        .unwrap_or_else(|err| format!("state query failed: {err}"));
+                    let trigger = client
+                        .query(FindTriggers::new())
+                        .execute_all()
+                        .map(|triggers| {
+                            triggers
+                                .into_iter()
+                                .find(|trigger| trigger.id() == &trigger_id)
+                                .map(|trigger| format!("{:?}", trigger.action()))
+                                .unwrap_or_else(|| "missing".to_string())
+                        })
+                        .unwrap_or_else(|err| format!("trigger query failed: {err}"));
+                    let status = client
+                        .get_status()
+                        .map(|status| {
+                            format!(
+                                "blocks={}, blocks_non_empty={}, txs_approved={}, txs_rejected={}",
+                                status.blocks,
+                                status.blocks_non_empty,
+                                status.txs_approved,
+                                status.txs_rejected
+                            )
+                        })
+                        .unwrap_or_else(|err| format!("status query failed: {err}"));
+                    let latest_block = client
+                        .query(FindBlockHeaders)
+                        .execute_all()
+                        .map(|headers| {
+                            headers.first().map_or_else(
+                                || "latest_block=none".to_string(),
+                                |header| {
+                                    format!(
+                                        "latest_block_height={}, latest_block_time_ms={}",
+                                        header.height().get(),
+                                        header.creation_time().as_millis()
+                                    )
+                                },
+                            )
+                        })
+                        .unwrap_or_else(|err| format!("block header query failed: {err}"));
+                    let time_trigger_blocks = client
+                        .query(FindBlocks)
+                        .execute_all()
+                        .map(|blocks| {
+                            let hits = blocks
+                                .iter()
+                                .filter(|block| block.time_triggers().len() > 0)
+                                .take(3)
+                                .map(|block| {
+                                    let results = block
+                                        .results()
+                                        .map(|result| format!("{result:?}"))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    format!(
+                                        "h{} time_triggers={} results=[{}]",
+                                        block.header().height().get(),
+                                        block.time_triggers().len(),
+                                        results
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            if hits.is_empty() {
+                                "time_trigger_blocks=none".to_string()
+                            } else {
+                                format!("time_trigger_blocks={}", hits.join(" | "))
+                            }
+                        })
+                        .unwrap_or_else(|err| format!("block query failed: {err}"));
+                    format!(
+                        "{status}; {latest_block}; {time_trigger_blocks}; {state}; {invoice}; billing_trigger={trigger}"
+                    )
+                }
+            })
+            .await
+            .unwrap_or_else(|err| format!("diagnostic task failed: {err}"));
+            Err(elapsed).wrap_err(format!(
+                "timed out waiting for subscription invoice; {diagnostics}"
+            ))
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -403,6 +497,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let invoice = wait_for_invoice_status(
                 &client,
                 &nft_id,
+                &billing_trigger_id,
                 SubscriptionInvoiceStatus::Paid,
                 network.sync_timeout(),
                 poll_delay,
@@ -625,6 +720,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let invoice = wait_for_invoice_status(
                 &client,
                 &nft_id,
+                &billing_trigger_id,
                 SubscriptionInvoiceStatus::Paid,
                 network.sync_timeout(),
                 poll_delay,
@@ -829,6 +925,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let invoice = wait_for_invoice_status(
                 &client,
                 &nft_id,
+                &billing_trigger_id,
                 SubscriptionInvoiceStatus::Failed,
                 network.sync_timeout(),
                 poll_delay,

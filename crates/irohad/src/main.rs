@@ -2781,6 +2781,7 @@ mod network_relay_tests {
             epoch: 1,
             commitment: [0x13; 32],
             signer: 0,
+            bls_sig: Vec::new(),
         };
         sumeragi_msg(BlockMessage::VrfCommit(commit))
     }
@@ -2790,6 +2791,7 @@ mod network_relay_tests {
             epoch: 1,
             reveal: [0x14; 32],
             signer: 0,
+            bls_sig: Vec::new(),
         };
         sumeragi_msg(BlockMessage::VrfReveal(reveal))
     }
@@ -4479,7 +4481,10 @@ impl Iroha {
         state.set_settlement(settlement_cfg);
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
-        log_startup_trace("irohad.state.runtime_config_applied", startup_trace_started_at);
+        log_startup_trace(
+            "irohad.state.runtime_config_applied",
+            startup_trace_started_at,
+        );
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]
         {
@@ -4958,6 +4963,7 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let queue_backpressure = queue.backpressure_handle();
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -5016,7 +5022,10 @@ impl Iroha {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
         // Start FASTPQ prover lane (background STARK generation) if the backend initialises.
-        if let Some((_h, child)) = iroha_core::fastpq::lane::start(&zk_cfg.fastpq) {
+        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
+            &zk_cfg.fastpq,
+            Some(queue_backpressure),
+        ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
         // Start Network Time Service sampler with config parameters
@@ -5909,12 +5918,14 @@ pub fn read_config_and_genesis(
             "failed to apply FASTPQ Metal overrides"
         );
     }
+    #[cfg(feature = "fastpq-gpu")]
+    preflight_fastpq_bn254_poseidon_words();
 
     let stack_budget_bytes = ivm_stack_budget_bytes(&config);
     apply_concurrency_config(&config.concurrency, stack_budget_bytes);
 
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
-    // uses the configured heuristics and GPU offload policy.
+    // uses the configured archive bounds and GPU offload policy.
     apply_norito_config(&config);
 
     // Apply hardware acceleration configuration for IVM (Metal/CUDA). Defaults enable all
@@ -7448,32 +7459,10 @@ fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
     resolved
 }
 
-/// Apply Norito codec configuration (heuristics + GPU offload gate) from config.
+/// Apply Norito operational configuration from config.
 fn apply_norito_config(cfg: &Config) {
-    // Capture requested heuristics to detect configuration drift. The codec uses
-    // a fixed canonical profile; runtime overrides are no longer supported.
-    let requested = norito::core::heuristics::Heuristics {
-        min_compress_bytes_cpu: cfg.norito.min_compress_bytes_cpu,
-        min_compress_bytes_gpu: cfg.norito.min_compress_bytes_gpu,
-        zstd_level_small: cfg.norito.zstd_level_small,
-        zstd_level_large: cfg.norito.zstd_level_large,
-        zstd_level_gpu: cfg.norito.zstd_level_gpu,
-        large_threshold: cfg.norito.large_threshold,
-        aos_ncb_small_n: cfg.norito.aos_ncb_small_n,
-        ..norito::core::heuristics::Heuristics::canonical()
-    };
-    let canonical = norito::core::heuristics::Heuristics::canonical();
-    if requested != canonical {
-        iroha_logger::warn!(
-            target: "config",
-            ?requested,
-            ?canonical,
-            "Norito heuristics overrides detected in config; ignoring overrides and using canonical codec profile"
-        );
-    }
     let max_archive_len = resolve_norito_max_archive_len(cfg);
     norito::core::set_max_archive_len(max_archive_len);
-    // Gate GPU compression offload for deterministic profiles if desired.
     norito::core::hw::set_gpu_compression_allowed(cfg.norito.allow_gpu_compression);
 }
 
@@ -7807,6 +7796,21 @@ fn install_fastpq_execution_mode_probe(labels: &FastpqDeviceLabels) {
     });
 }
 
+#[cfg(feature = "fastpq-gpu")]
+fn preflight_fastpq_bn254_poseidon_words() {
+    if fastpq_prover::preflight_bn254_poseidon_word_batches() {
+        iroha_logger::info!(
+            target: "fastpq",
+            "BN254 Poseidon word-batch GPU preflight passed"
+        );
+    } else {
+        iroha_logger::debug!(
+            target: "fastpq",
+            "BN254 Poseidon word-batch GPU preflight unavailable; scalar fallback remains active"
+        );
+    }
+}
+
 #[cfg(feature = "telemetry")]
 fn install_fastpq_poseidon_probe(labels: &FastpqDeviceLabels) {
     let telemetry_labels = labels.clone();
@@ -7849,17 +7853,17 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
                     lane_buffer.clear();
                     for lane in &stats.queues {
                         lane_buffer.push(FastpqMetalQueueLaneSample {
-                            index: lane.index,
-                            dispatch_count: lane.dispatch_count,
-                            max_in_flight: lane.max_in_flight,
+                            index: lane.index as usize,
+                            dispatch_count: u64::from(lane.dispatch_count),
+                            max_in_flight: u64::from(lane.max_in_flight),
                             busy_ms: lane.busy_ms,
                             overlap_ms: lane.overlap_ms,
                         });
                     }
                     let sample = FastpqMetalQueueSample {
-                        limit: stats.limit,
-                        max_in_flight: stats.max_in_flight,
-                        dispatch_count: stats.dispatch_count,
+                        limit: u64::from(stats.limit),
+                        max_in_flight: u64::from(stats.max_in_flight),
+                        dispatch_count: u64::from(stats.dispatch_count),
                         window_ms: stats.window_ms,
                         busy_ms: stats.busy_ms,
                         overlap_ms: stats.overlap_ms,
@@ -8832,7 +8836,7 @@ fn log_norito_banner(cfg: &Config) {
     // Snapshot core settings
     let n = &cfg.norito;
     let gpu_allowed = n.allow_gpu_compression;
-    let gpu_available = norito::core::hw::has_gpu_compression();
+    let gpu_probe_status = if gpu_allowed { "deferred" } else { "disabled" };
 
     // UTF‑8 box drawing and kana render nicely in modern terminals.
     let art = r"
@@ -8849,16 +8853,11 @@ fn log_norito_banner(cfg: &Config) {
 
     // Compose settings block
     let msg = format!(
-        "\n{}\nNorito settings:\n  - min_compress_bytes_cpu: {}\n  - min_compress_bytes_gpu: {}\n  - zstd_level_small: {}\n  - zstd_level_large: {}\n  - zstd_level_gpu: {}\n  - large_threshold: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_available: {}\n",
+        "\n{}\nNorito settings:\n  - max_archive_len: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_probe: {}\n",
         art,
-        n.min_compress_bytes_cpu,
-        n.min_compress_bytes_gpu,
-        n.zstd_level_small,
-        n.zstd_level_large,
-        n.zstd_level_gpu,
-        n.large_threshold,
+        resolve_norito_max_archive_len(cfg),
         gpu_allowed,
-        gpu_available,
+        gpu_probe_status,
     );
 
     iroha_logger::info!(target: "norito", "{}", msg);
@@ -9548,7 +9547,8 @@ mod tests {
 
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 

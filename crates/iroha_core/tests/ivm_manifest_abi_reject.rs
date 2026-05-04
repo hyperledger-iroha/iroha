@@ -77,7 +77,6 @@ fn metadata_with_gas_limit(limit: u64) -> Metadata {
 fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
-        isi::smart_contract_code::RegisterSmartContractCode,
         permission,
         transaction::{Executable, TransactionBuilder},
     };
@@ -129,9 +128,9 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         provenance: None,
     }
     .signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register manifest");
+    stx1.world
+        .contract_manifests_mut_for_testing()
+        .insert(code_hash, manifest);
     stx1.apply();
     let _ = block1.commit();
 
@@ -165,7 +164,6 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
-        isi::smart_contract_code::RegisterSmartContractCode,
         permission,
         transaction::{Executable, TransactionBuilder},
     };
@@ -215,9 +213,9 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         provenance: None,
     }
     .signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register manifest");
+    stx1.world
+        .contract_manifests_mut_for_testing()
+        .insert(code_hash, manifest);
     stx1.apply();
     let _ = block1.commit();
 
@@ -244,7 +242,6 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 fn ivm_manifest_without_abi_hash_allows_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
-        isi::smart_contract_code::RegisterSmartContractCode,
         permission,
         transaction::{Executable, TransactionBuilder},
     };
@@ -292,9 +289,9 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
         provenance: None,
     }
     .signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register manifest");
+    stx1.world
+        .contract_manifests_mut_for_testing()
+        .insert(code_hash, manifest);
     stx1.apply();
     let _ = block1.commit();
 
@@ -321,7 +318,6 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
 fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
-        isi::smart_contract_code::RegisterSmartContractCode,
         permission,
         transaction::{Executable, TransactionBuilder},
     };
@@ -365,9 +361,9 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         provenance: None,
     }
     .signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register manifest");
+    stx1.world
+        .contract_manifests_mut_for_testing()
+        .insert(code_hash, manifest);
     stx1.apply();
     let _ = block1.commit();
 
@@ -394,7 +390,6 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
 fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
-        isi::smart_contract_code::RegisterSmartContractCode,
         permission,
         transaction::{Executable, TransactionBuilder},
     };
@@ -439,9 +434,9 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         provenance: None,
     }
     .signed(&kp);
-    RegisterSmartContractCode { manifest }
-        .execute(&account_id, &mut stx1)
-        .expect("register manifest");
+    stx1.world
+        .contract_manifests_mut_for_testing()
+        .insert(code_hash, manifest);
     stx1.apply();
     let _ = block1.commit();
 

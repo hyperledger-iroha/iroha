@@ -6,37 +6,23 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
     prelude::*,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+    proof::ProofAttachment,
     query::proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
-    zk::{BackendTag, OpenVerifyEnvelope},
 };
+use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_test_network::NetworkBuilder;
 
-fn halo2_attachment(nonce: u8) -> ProofAttachment {
-    // Minimal Halo2 OpenVerifyEnvelope to satisfy verification invariants.
-    let envelope = OpenVerifyEnvelope {
-        backend: BackendTag::Halo2IpaPasta,
-        circuit_id: "integration-test".to_string(),
-        vk_hash: [0u8; 32],
-        public_inputs: vec![0xde, 0xad, nonce],
-        proof_bytes: vec![0xbe, 0xef, nonce],
-        aux: Vec::new(),
-    };
-    let proof_payload =
-        norito::to_bytes(&envelope).expect("OpenVerifyEnvelope serialization must succeed");
-    let proof_box = ProofBox::new("halo2/ipa".into(), proof_payload);
-    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 9, 9]);
+fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
+    let seed = halo2_fixture_envelope(circuit_id, [0u8; 32]);
+    let vk_hash = seed
+        .vk_hash("halo2/ipa")
+        .expect("fixture must include a verifying key");
+    let fixture = halo2_fixture_envelope(circuit_id, vk_hash);
+    let proof_box = fixture.proof_box("halo2/ipa");
+    let vk_box = fixture
+        .vk_box("halo2/ipa")
+        .expect("fixture must include a verifying key");
     ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
-}
-
-fn debug_ok_attachment() -> ProofAttachment {
-    // Debug backend still expects a verifying key to satisfy attachment validation, even
-    // though the key bytes are opaque to the backend.
-    ProofAttachment::new_inline(
-        "debug/ok".into(),
-        ProofBox::new("debug/ok".into(), vec![0x01]),
-        VerifyingKeyBox::new("debug/ok".into(), vec![0x02]),
-    )
 }
 
 #[test]
@@ -44,7 +30,9 @@ fn proof_query_scenarios() -> Result<()> {
     use iroha::data_model::query::proof::prelude::FindProofRecordsByBackend;
 
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_config_layer(|layer| {
+            layer.write(["zk", "halo2", "enabled"], true);
+        }),
         stringify!(proof_query_scenarios),
     )?
     else {
@@ -54,7 +42,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_lists_after_verify
     {
-        let attachment = halo2_attachment(0);
+        let attachment = halo2_attachment("halo2/ipa:tiny-add");
         client.submit_blocking(iroha::data_model::isi::zk::VerifyProof::new(attachment))?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
@@ -67,7 +55,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_backend_filters
     {
-        let att1 = halo2_attachment(1);
+        let att1 = halo2_attachment("halo2/ipa:tiny-add-public");
         let att2 = iroha::data_model::proof::ProofAttachment::new_inline(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x03]),
@@ -96,11 +84,11 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_status_filters
     {
-        let att_ok = debug_ok_attachment();
+        let att_ok = halo2_attachment("halo2/ipa:tiny-add2inst-public");
         let att_bad = iroha::data_model::proof::ProofAttachment::new_inline(
-            "debug/reject".into(),
-            iroha::data_model::proof::ProofBox::new("debug/reject".into(), vec![0x20]),
-            iroha::data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![0x21]),
+            "groth16/bn254".into(),
+            iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x20]),
+            iroha::data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![0x21]),
         );
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att_ok)])?;
         client.submit_all_blocking([iroha::data_model::isi::zk::VerifyProof::new(att_bad)])?;
@@ -154,10 +142,10 @@ fn retry_records_by_status(
 }
 
 #[test]
-fn halo2_attachment_nonce_changes_proof_hash() {
-    let a = halo2_attachment(0);
-    let b = halo2_attachment(1);
+fn halo2_attachment_circuit_changes_proof_hash() {
+    let a = halo2_attachment("halo2/ipa:tiny-add");
+    let b = halo2_attachment("halo2/ipa:tiny-add-public");
     let hash_a = iroha_core::zk::hash_proof(&a.proof);
     let hash_b = iroha_core::zk::hash_proof(&b.proof);
-    assert_ne!(hash_a, hash_b, "nonce should change proof hash");
+    assert_ne!(hash_a, hash_b, "fixture circuit should change proof hash");
 }

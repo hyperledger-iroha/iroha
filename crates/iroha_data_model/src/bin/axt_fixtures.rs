@@ -10,9 +10,10 @@ use hex::{decode, encode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{
-        AssetHandle, AxtBinding, AxtDescriptorBuilder, AxtHandleFragment, AxtProofEnvelope,
-        AxtProofFragment, AxtTouchFragment, DataSpaceId, GroupBinding, HandleBudget, HandleSubject,
-        LaneId, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest, compute_descriptor_binding,
+        AssetHandle, AxtBinding, AxtDescriptorBuilder, AxtFastpqBinding, AxtHandleFragment,
+        AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, DataSpaceId, GroupBinding,
+        HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
+        compute_descriptor_binding,
     },
     testing::axt::{
         DescriptorFixture, EnvelopeFixture, HandleFixtures, PoseidonConstantsFixture,
@@ -34,6 +35,33 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/axt_poseidon_constants.json"
 );
+
+fn fixture_digest(label: &[u8], dsid: DataSpaceId) -> String {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(label);
+    payload.extend_from_slice(&dsid.as_u64().to_le_bytes());
+    encode(Hash::new(payload).as_ref())
+}
+
+fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
+    AxtFastpqBinding {
+        parameter: "fastpq-lane-balanced".to_string(),
+        source_dsid: dsid.as_u64(),
+        source_dataspace: format!("fixture-dataspace-{}", dsid.as_u64()),
+        source_receipt_id: format!("receipt-{}", fixture_digest(b"receipt", dsid)),
+        source_tx_commitment: fixture_digest(b"source-tx", dsid),
+        claim_type: "authorization".to_string(),
+        claim_digest: fixture_digest(b"claim", dsid),
+        witness_commitment: fixture_digest(b"witness", dsid),
+        policy_commitment: fixture_digest(b"policy", dsid),
+        verified_effect_type: "fixture_effect".to_string(),
+        corridor: "fixture-corridor".to_string(),
+        verifier_id: "fastpq".to_string(),
+        verifier_version: "v1".to_string(),
+        target_dsids: vec![dsid.as_u64()],
+        effect_binding: None,
+    }
+}
 
 fn encoded_account(public_key_hex: &str) -> String {
     iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
@@ -107,7 +135,7 @@ fn build_envelope_fixture(
         manifest_root: manifest_root_one,
         da_commitment: Some([0x11; 32]),
         proof: vec![0xAA, 0xBB, 0xCC, 0xDD],
-        fastpq_binding: None,
+        fastpq_binding: Some(fixture_fastpq_binding(dsid_one)),
         committed_amount: None,
         amount_commitment: None,
     })?;
@@ -116,7 +144,7 @@ fn build_envelope_fixture(
         manifest_root: manifest_root_seven,
         da_commitment: None,
         proof: vec![0xFE, 0xED, 0xFA, 0xCE],
-        fastpq_binding: None,
+        fastpq_binding: Some(fixture_fastpq_binding(dsid_seven)),
         committed_amount: None,
         amount_commitment: None,
     })?;

@@ -1,11 +1,19 @@
 //! FASTPQ-specific transcript helpers shared across the host.
 pub mod lane;
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use fastpq_prover::{
-    OperationKind, PoseidonSponge, PublicInputs, StateTransition, TransitionBatch,
+    Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PoseidonSponge,
+    PublicInputs, StateTransition, TransitionBatch,
+    gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
+    try_submit_bn254_poseidon_word_batches,
 };
+use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -34,6 +42,10 @@ pub const TRANSCRIPT_COUNT_METADATA_KEY: &str = "transcript_count";
 
 /// Canonical FASTPQ parameter name used across the host and CLI helpers.
 pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = "fastpq-lane-balanced";
+const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
+const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
+const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
+static DIGEST_ACCELERATION_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Base fields for FASTPQ public inputs shared across batches in a block.
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +62,17 @@ pub struct FastpqPublicInputsTemplate {
     pub perm_root: [u8; 32],
 }
 
+/// Local context needed to build FASTPQ batches outside the consensus commit path.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FastpqWitnessContext {
+    /// Public-input fields shared by every FASTPQ batch in the witness.
+    pub(crate) public_inputs: Option<FastpqPublicInputsTemplate>,
+    /// Hash of external transaction entrypoints in the committed block.
+    pub(crate) tx_set_hash: Option<[u8; 32]>,
+    /// Per-entry dataspace ids keyed by entrypoint hash.
+    pub(crate) entry_dataspaces: BTreeMap<Hash, [u8; 16]>,
+}
+
 impl FastpqPublicInputsTemplate {
     /// Build full public inputs using a precomputed transaction set hash.
     #[must_use]
@@ -63,6 +86,17 @@ impl FastpqPublicInputsTemplate {
             tx_set_hash,
         }
     }
+}
+
+pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
+    let enabled = !matches!(cfg.execution_mode, FastpqExecutionMode::Cpu)
+        && !matches!(cfg.poseidon_mode, FastpqPoseidonMode::Cpu);
+    DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
+}
+
+#[inline]
+fn poseidon_digest_acceleration_enabled() -> bool {
+    DIGEST_ACCELERATION_ENABLED.load(Ordering::Acquire)
 }
 
 /// Errors that can occur while mapping transfer transcripts into FASTPQ transition batches.
@@ -81,6 +115,12 @@ pub enum TranscriptBatchError {
         #[from]
         source: norito::core::Error,
     },
+    /// Transfer SMT witness materialization failed.
+    #[error("failed to attach transfer SMT witnesses")]
+    TransferWitness {
+        /// Underlying FASTPQ prover error.
+        source: fastpq_prover::Error,
+    },
     /// Execution witness does not carry precomputed FASTPQ batches.
     #[error("execution witness missing fastpq batches with public inputs")]
     MissingFastpqBatches,
@@ -96,19 +136,449 @@ pub fn authority_digest(authority: &AccountId) -> Hash {
 }
 
 /// Compute the Poseidon digest of a transfer delta preimage.
+#[inline]
 #[must_use]
 pub fn poseidon_preimage_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
-    let mut preimage = Vec::with_capacity(256);
-    append_encoded(&mut preimage, &delta.from_account);
-    append_encoded(&mut preimage, &delta.to_account);
-    append_encoded(&mut preimage, &delta.asset_definition);
-    append_encoded(&mut preimage, &delta.amount);
-    preimage.extend_from_slice(batch_hash.as_ref());
-    Hash::prehashed(halo2_poseidon::hash_bytes(&preimage))
+    let mut hasher = halo2_poseidon::PoseidonByteHasher::new();
+    append_encoded_words(&mut hasher, &delta.from_account);
+    append_encoded_words(&mut hasher, &delta.to_account);
+    append_encoded_words(&mut hasher, &delta.asset_definition);
+    append_encoded_words(&mut hasher, &delta.amount);
+    hasher.update(batch_hash.as_ref());
+    Hash::prehashed(hasher.finalize())
 }
 
-fn append_encoded<T: NoritoEncode>(buffer: &mut Vec<u8>, value: &T) {
-    buffer.extend_from_slice(&value.encode());
+#[inline]
+fn append_encoded_words<W, T>(writer: &mut W, value: &T)
+where
+    W: Write,
+    T: NoritoEncode,
+{
+    value.encode_to(writer);
+}
+
+#[inline(always)]
+fn u64_from_le_bytes(bytes: &[u8]) -> u64 {
+    debug_assert!(bytes.len() >= 8);
+    u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ])
+}
+
+#[inline(always)]
+fn partial_u64_from_le_bytes(bytes: &[u8; 8], len: usize) -> u64 {
+    debug_assert!(len <= bytes.len());
+    let word = u64::from_le_bytes(*bytes);
+    match len {
+        0 => 0,
+        8 => word,
+        _ => word & ((1u64 << (len * 8)) - 1),
+    }
+}
+
+#[derive(Debug)]
+struct PoseidonWordPacker<'a> {
+    words: &'a mut Vec<u64>,
+    pending_bytes: [u8; 8],
+    pending_len: usize,
+}
+
+impl<'a> PoseidonWordPacker<'a> {
+    #[inline]
+    fn new(words: &'a mut Vec<u64>) -> Self {
+        Self {
+            words,
+            pending_bytes: [0; 8],
+            pending_len: 0,
+        }
+    }
+
+    #[inline]
+    fn update(&mut self, mut bytes: &[u8]) {
+        if self.pending_len > 0 {
+            let needed = self.pending_bytes.len() - self.pending_len;
+            let take = needed.min(bytes.len());
+            self.pending_bytes[self.pending_len..self.pending_len + take]
+                .copy_from_slice(&bytes[..take]);
+            self.pending_len += take;
+            bytes = &bytes[take..];
+            if self.pending_len == self.pending_bytes.len() {
+                self.words.push(u64::from_le_bytes(self.pending_bytes));
+                self.pending_len = 0;
+            }
+        }
+
+        while bytes.len() >= 8 {
+            self.words.push(u64_from_le_bytes(&bytes[..8]));
+            bytes = &bytes[8..];
+        }
+
+        if !bytes.is_empty() {
+            self.pending_bytes[..bytes.len()].copy_from_slice(bytes);
+            self.pending_len = bytes.len();
+        }
+    }
+
+    #[inline]
+    fn finish(self) {
+        if self.pending_len > 0 {
+            self.words.push(partial_u64_from_le_bytes(
+                &self.pending_bytes,
+                self.pending_len,
+            ));
+        }
+    }
+}
+
+impl Write for PoseidonWordPacker<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+fn transfer_digest_words(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Vec<u64> {
+    let mut words = Vec::with_capacity(POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT);
+    append_transfer_digest_words(&mut words, delta, batch_hash);
+    words
+}
+
+fn append_transfer_digest_words(
+    words: &mut Vec<u64>,
+    delta: &TransferDeltaTranscript,
+    batch_hash: &Hash,
+) {
+    let mut packer = PoseidonWordPacker::new(words);
+    append_encoded_words(&mut packer, &delta.from_account);
+    append_encoded_words(&mut packer, &delta.to_account);
+    append_encoded_words(&mut packer, &delta.asset_definition);
+    append_encoded_words(&mut packer, &delta.amount);
+    packer.update(batch_hash.as_ref());
+    packer.finish();
+}
+
+#[derive(Debug, Default)]
+struct PoseidonDigestBatch {
+    words: Vec<u64>,
+    slices: Vec<Bn254PoseidonBatchSlice>,
+}
+
+impl PoseidonDigestBatch {
+    fn with_capacity(digest_count: usize) -> Self {
+        Self {
+            words: Vec::with_capacity(
+                digest_count.saturating_mul(POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT),
+            ),
+            slices: Vec::with_capacity(digest_count),
+        }
+    }
+
+    fn push(&mut self, delta: &TransferDeltaTranscript, batch_hash: &Hash) {
+        let offset = self.words.len();
+        append_transfer_digest_words(&mut self.words, delta, batch_hash);
+        self.slices.push(Bn254PoseidonBatchSlice::new(
+            offset,
+            self.words.len() - offset,
+        ));
+    }
+
+    fn try_hash_gpu(&self) -> Option<Vec<Hash>> {
+        if self.slices.len() < DIGEST_FINALIZE_GPU_THRESHOLD
+            || !poseidon_digest_acceleration_enabled()
+        {
+            return None;
+        }
+        try_hash_bn254_poseidon_word_batches(&self.words, &self.slices)
+            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
+    }
+
+    fn try_submit_gpu(&self) -> Option<PendingBn254PoseidonWordBatch> {
+        if self.slices.len() < DIGEST_FINALIZE_GPU_THRESHOLD
+            || !poseidon_digest_acceleration_enabled()
+        {
+            return None;
+        }
+        try_submit_bn254_poseidon_word_batches(&self.words, &self.slices)
+    }
+
+    fn hash_cpu(&self) -> Vec<Hash> {
+        self.slices
+            .iter()
+            .map(|slice| {
+                let offset = slice.offset();
+                let end = offset + slice.len();
+                Hash::prehashed(halo2_poseidon::hash_u64_words_bytes(
+                    &self.words[offset..end],
+                ))
+            })
+            .collect()
+    }
+}
+
+/// Pending FASTPQ transfer transcript digest batch.
+pub(crate) struct PendingTransferTranscriptDigests {
+    digest_count: usize,
+    batch: PoseidonDigestBatch,
+    pending: PendingBn254PoseidonWordBatch,
+}
+
+impl PendingTransferTranscriptDigests {
+    fn into_digests(self) -> Vec<Hash> {
+        let Self { batch, pending, .. } = self;
+        pending
+            .wait()
+            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
+            .unwrap_or_else(|| batch.hash_cpu())
+    }
+}
+
+/// Fill missing single-delta transcript digests before block or witness data is exposed.
+pub(crate) fn finalize_transfer_transcript_digests_in_map(
+    transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
+) {
+    let pending = try_submit_transfer_transcript_digests_in_map(transcripts);
+    finalize_transfer_transcript_digests_in_map_with_pending(transcripts, pending);
+}
+
+/// Fill missing single-delta transcript digests using a previously submitted GPU batch.
+pub(crate) fn finalize_transfer_transcript_digests_in_map_with_pending(
+    transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
+    pending: Option<PendingTransferTranscriptDigests>,
+) {
+    let digest_count = transcripts
+        .values()
+        .map(|entries| missing_single_delta_transcript_count(entries))
+        .sum::<usize>();
+    if digest_count == 0 {
+        return;
+    }
+    if let Some(pending) = pending {
+        if pending.digest_count == digest_count {
+            let digests = pending.into_digests();
+            let mut digests = digests.into_iter();
+            for entries in transcripts.values_mut() {
+                apply_transfer_transcript_digests(entries, &mut digests);
+            }
+            debug_assert!(
+                digests.next().is_none(),
+                "FASTPQ transcript digest batch output count must match inputs",
+            );
+            return;
+        }
+        debug_assert_eq!(
+            pending.digest_count, digest_count,
+            "pending FASTPQ transcript digest batch must match current transcript map",
+        );
+    }
+    if digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD
+        && try_finalize_transfer_transcript_digests_in_map_batched(transcripts, digest_count)
+    {
+        return;
+    }
+    if digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+
+        transcripts
+            .values_mut()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|entries| finalize_transfer_transcripts_serial(entries));
+    } else {
+        for entries in transcripts.values_mut() {
+            finalize_transfer_transcripts_serial(entries);
+        }
+    }
+}
+
+/// Submit missing single-delta transcript digests without waiting for completion.
+pub(crate) fn try_submit_transfer_transcript_digests_in_map(
+    transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
+) -> Option<PendingTransferTranscriptDigests> {
+    if !poseidon_digest_acceleration_enabled() {
+        return None;
+    }
+    let digest_count = transcripts
+        .values()
+        .map(|entries| missing_single_delta_transcript_count(entries))
+        .sum::<usize>();
+    if digest_count < DIGEST_FINALIZE_GPU_THRESHOLD {
+        return None;
+    }
+    let mut batch = PoseidonDigestBatch::with_capacity(digest_count);
+    for entries in transcripts.values() {
+        collect_transfer_transcript_digests(entries, &mut batch);
+    }
+    let pending = batch.try_submit_gpu()?;
+    Some(PendingTransferTranscriptDigests {
+        digest_count,
+        batch,
+        pending,
+    })
+}
+
+/// Fill missing single-delta transcript digests in witness bundles.
+pub(crate) fn finalize_transfer_transcript_bundle_digests_in_place(
+    bundles: &mut [TransferTranscriptBundle],
+) {
+    let digest_count = bundles
+        .iter()
+        .map(|bundle| missing_single_delta_transcript_count(&bundle.transcripts))
+        .sum::<usize>();
+    if digest_count == 0 {
+        return;
+    }
+    if digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD
+        && try_finalize_transfer_transcript_bundle_digests_batched(bundles, digest_count)
+    {
+        return;
+    }
+    if digest_count >= DIGEST_FINALIZE_PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+
+        bundles
+            .par_iter_mut()
+            .for_each(|bundle| finalize_transfer_transcripts_serial(&mut bundle.transcripts));
+    } else {
+        for bundle in bundles {
+            finalize_transfer_transcripts_serial(&mut bundle.transcripts);
+        }
+    }
+}
+
+fn try_finalize_transfer_transcript_digests_in_map_batched(
+    transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
+    digest_count: usize,
+) -> bool {
+    if !poseidon_digest_acceleration_enabled() {
+        return false;
+    }
+    debug_assert!(digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD);
+    let mut batch = PoseidonDigestBatch::with_capacity(digest_count);
+    for entries in transcripts.values() {
+        collect_transfer_transcript_digests(entries, &mut batch);
+    }
+    let digests = batch.try_hash_gpu().unwrap_or_else(|| batch.hash_cpu());
+    let mut digests = digests.into_iter();
+    for entries in transcripts.values_mut() {
+        apply_transfer_transcript_digests(entries, &mut digests);
+    }
+    debug_assert!(
+        digests.next().is_none(),
+        "FASTPQ transcript digest batch output count must match inputs",
+    );
+    true
+}
+
+fn try_finalize_transfer_transcript_bundle_digests_batched(
+    bundles: &mut [TransferTranscriptBundle],
+    digest_count: usize,
+) -> bool {
+    if !poseidon_digest_acceleration_enabled() {
+        return false;
+    }
+    debug_assert!(digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD);
+    let mut batch = PoseidonDigestBatch::with_capacity(digest_count);
+    for bundle in bundles.iter() {
+        collect_transfer_transcript_digests(&bundle.transcripts, &mut batch);
+    }
+    let digests = batch.try_hash_gpu().unwrap_or_else(|| batch.hash_cpu());
+    let mut digests = digests.into_iter();
+    for bundle in bundles {
+        apply_transfer_transcript_digests(&mut bundle.transcripts, &mut digests);
+    }
+    debug_assert!(
+        digests.next().is_none(),
+        "FASTPQ transcript digest batch output count must match inputs",
+    );
+    true
+}
+
+fn missing_single_delta_transcript_count(transcripts: &[TransferTranscript]) -> usize {
+    transcripts
+        .iter()
+        .filter(|transcript| needs_transfer_transcript_digest(transcript))
+        .count()
+}
+
+fn is_single_delta_transcript(transcript: &TransferTranscript) -> bool {
+    matches!(transcript.deltas.as_slice(), [_])
+}
+
+fn needs_transfer_transcript_digest(transcript: &TransferTranscript) -> bool {
+    transcript.poseidon_preimage_digest.is_none() && is_single_delta_transcript(transcript)
+}
+
+fn collect_transfer_transcript_digests(
+    transcripts: &[TransferTranscript],
+    batch: &mut PoseidonDigestBatch,
+) {
+    for transcript in transcripts {
+        if transcript.poseidon_preimage_digest.is_some() {
+            continue;
+        }
+        let [delta] = transcript.deltas.as_slice() else {
+            continue;
+        };
+        batch.push(delta, &transcript.batch_hash);
+    }
+}
+
+fn apply_transfer_transcript_digests(
+    transcripts: &mut [TransferTranscript],
+    digests: &mut impl Iterator<Item = Hash>,
+) {
+    for transcript in transcripts {
+        if needs_transfer_transcript_digest(transcript) {
+            let digest = digests
+                .next()
+                .expect("FASTPQ transcript digest batch output missing digest");
+            set_transfer_transcript_digest(transcript, digest);
+        }
+    }
+}
+
+fn finalize_transfer_transcripts_serial(transcripts: &mut [TransferTranscript]) {
+    for transcript in transcripts {
+        finalize_transfer_transcript_digest(transcript);
+    }
+}
+
+fn finalize_transfer_transcript_digest(transcript: &mut TransferTranscript) {
+    let [delta] = transcript.deltas.as_slice() else {
+        return;
+    };
+    if transcript.poseidon_preimage_digest.is_some() {
+        #[cfg(debug_assertions)]
+        {
+            let existing = transcript
+                .poseidon_preimage_digest
+                .expect("digest presence checked above");
+            debug_assert_eq!(
+                existing,
+                poseidon_preimage_digest(delta, &transcript.batch_hash),
+                "precomputed FASTPQ transfer transcript digest must match canonical digest",
+            );
+        }
+        return;
+    }
+    let digest = poseidon_preimage_digest(delta, &transcript.batch_hash);
+    set_transfer_transcript_digest(transcript, digest);
+}
+
+fn set_transfer_transcript_digest(transcript: &mut TransferTranscript, digest: Hash) {
+    if let Some(existing) = transcript.poseidon_preimage_digest {
+        debug_assert_eq!(
+            existing, digest,
+            "precomputed FASTPQ transfer transcript digest must match canonical digest",
+        );
+    } else {
+        transcript.poseidon_preimage_digest = Some(digest);
+    }
 }
 
 /// Build a FASTPQ public input template for the supplied block witness.
@@ -221,9 +691,7 @@ fn hash_field_with_domain(domain: &[u8], values: &[u64]) -> u64 {
 fn domain_seed(domain: &[u8]) -> u64 {
     let digest = Hash::new(domain);
     let bytes = digest.as_ref();
-    let mut chunk = [0u8; 8];
-    chunk.copy_from_slice(&bytes[..8]);
-    let raw = u64::from_le_bytes(chunk);
+    let raw = u64_from_le_bytes(bytes);
     let reduced = u128::from(raw) % u128::from(fastpq_prover::FIELD_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits u64")
 }
@@ -274,8 +742,21 @@ pub fn batch_from_transcripts<'a, I>(
 where
     I: IntoIterator<Item = &'a TransferTranscript>,
 {
-    let transcripts: Vec<TransferTranscript> = transcripts.into_iter().cloned().collect();
+    let mut transcripts: Vec<TransferTranscript> = transcripts.into_iter().cloned().collect();
+    let transfer_roots = if transcripts.is_empty() {
+        None
+    } else {
+        Some(
+            attach_transfer_smt_witnesses(&mut transcripts)
+                .map_err(|source| TranscriptBatchError::TransferWitness { source })?,
+        )
+    };
+    finalize_transfer_transcripts_serial(&mut transcripts);
     let mut batch = TransitionBatch::new(parameter_set, public_inputs_from_dto(&public_inputs));
+    if let Some((old_root, new_root)) = transfer_roots {
+        batch.public_inputs.old_root = old_root;
+        batch.public_inputs.new_root = new_root;
+    }
     for transcript in &transcripts {
         append_transcript(&mut batch, transcript)?;
     }
@@ -572,7 +1053,7 @@ mod tests {
         let digest = authority_digest(&ALICE_ID);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "c03a53264d90b3d5825626599268d2ad8a2016f42730ee80d7b9f63b83c42989"
+            "e1e0bb25f044ba013bfb99711a2f409472d1f941b68e6716a677ac6d1bcd5fcb"
         );
     }
 
@@ -591,14 +1072,137 @@ mod tests {
             from_balance_after: Numeric::from(158u32),
             to_balance_before: Numeric::from(1u32),
             to_balance_after: Numeric::from(43u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x11; 32]);
+        let mut encoded_preimage = Vec::new();
+        encoded_preimage.extend_from_slice(&delta.from_account.encode());
+        encoded_preimage.extend_from_slice(&delta.to_account.encode());
+        encoded_preimage.extend_from_slice(&delta.asset_definition.encode());
+        encoded_preimage.extend_from_slice(&delta.amount.encode());
+        encoded_preimage.extend_from_slice(batch_hash.as_ref());
+        let mut streamed_preimage = Vec::new();
+        delta.from_account.encode_to(&mut streamed_preimage);
+        delta.to_account.encode_to(&mut streamed_preimage);
+        delta.asset_definition.encode_to(&mut streamed_preimage);
+        delta.amount.encode_to(&mut streamed_preimage);
+        streamed_preimage.extend_from_slice(batch_hash.as_ref());
+        assert_eq!(streamed_preimage, encoded_preimage);
         let digest = poseidon_preimage_digest(&delta, &batch_hash);
         assert_eq!(
+            digest,
+            Hash::prehashed(halo2_poseidon::hash_bytes(&encoded_preimage))
+        );
+        assert_eq!(
             hex::encode(digest.as_ref()),
-            "a3d862221d5d238c9a8e97f978b75431c6f44adef6debffb3b6baeb741aeac01"
+            "e18ad4e6b7fc5a63b849db3f3d8da27fe551fee68954e849b8c253a18efd1623"
+        );
+    }
+
+    #[test]
+    fn poseidon_word_packer_matches_little_endian_chunks() {
+        for len in [0usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65] {
+            let input = (0..len)
+                .map(|idx| (idx as u8).wrapping_mul(17).wrapping_add(3))
+                .collect::<Vec<_>>();
+            let mut words = Vec::new();
+            {
+                let mut packer = PoseidonWordPacker::new(&mut words);
+                for chunk in input.chunks(5) {
+                    packer.update(chunk);
+                }
+                packer.finish();
+            }
+            let expected = input
+                .chunks(8)
+                .map(|chunk| {
+                    let mut word = [0u8; 8];
+                    word[..chunk.len()].copy_from_slice(chunk);
+                    u64::from_le_bytes(word)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(words, expected, "len {len}");
+        }
+    }
+
+    #[test]
+    fn transfer_digest_word_writer_matches_streaming_oracle() {
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        let encoded_preimage = encoded_transfer_digest_preimage(delta, &transcript.batch_hash);
+        let words = transfer_digest_words(delta, &transcript.batch_hash);
+        assert_eq!(
+            halo2_poseidon::hash_u64_words_bytes(&words),
+            halo2_poseidon::hash_bytes(&encoded_preimage)
+        );
+        assert_eq!(
+            poseidon_preimage_digest(delta, &transcript.batch_hash),
+            Hash::prehashed(halo2_poseidon::hash_bytes(&encoded_preimage))
+        );
+    }
+
+    #[test]
+    fn poseidon_digest_batch_cpu_hash_matches_single_digest() {
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        let mut batch = PoseidonDigestBatch::with_capacity(1);
+        batch.push(delta, &transcript.batch_hash);
+
+        assert_eq!(
+            batch.hash_cpu(),
+            vec![poseidon_preimage_digest(delta, &transcript.batch_hash)]
+        );
+        assert!(
+            batch.try_hash_gpu().is_none(),
+            "single digest should stay below the GPU threshold"
+        );
+    }
+
+    #[test]
+    fn finalize_transfer_transcripts_fills_only_single_delta_digests() {
+        let mut single = sample_transcript();
+        let expected = poseidon_preimage_digest(&single.deltas[0], &single.batch_hash);
+        let mut multi = sample_transcript();
+        multi.deltas.push(multi.deltas[0].clone());
+
+        let mut map = BTreeMap::new();
+        map.insert(
+            Hash::prehashed([0x77; 32]),
+            vec![single.clone(), multi.clone()],
+        );
+        finalize_transfer_transcript_digests_in_map(&mut map);
+
+        let entries = map.values().next().expect("entries");
+        assert_eq!(entries[0].poseidon_preimage_digest, Some(expected));
+        assert!(entries[1].poseidon_preimage_digest.is_none());
+
+        single.poseidon_preimage_digest = Some(expected);
+        let mut bundles = vec![TransferTranscriptBundle {
+            entry_hash: Hash::prehashed([0x78; 32]),
+            transcripts: vec![single],
+        }];
+        finalize_transfer_transcript_bundle_digests_in_place(&mut bundles);
+        assert_eq!(
+            bundles[0].transcripts[0].poseidon_preimage_digest,
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn missing_single_delta_transcript_count_ignores_precomputed_and_multi_delta() {
+        let mut precomputed = sample_transcript();
+        precomputed.poseidon_preimage_digest = Some(poseidon_preimage_digest(
+            &precomputed.deltas[0],
+            &precomputed.batch_hash,
+        ));
+        let missing = sample_transcript();
+        let mut multi = sample_transcript();
+        multi.deltas.push(multi.deltas[0].clone());
+
+        assert_eq!(
+            missing_single_delta_transcript_count(&[precomputed, missing, multi]),
+            1
         );
     }
 
@@ -766,7 +1370,48 @@ mod tests {
             .expect("transfer metadata");
         let decoded: Vec<TransferTranscript> =
             decode_from_bytes(encoded).expect("decode transcripts");
-        assert_eq!(decoded, vec![transcript]);
+        let mut expected = transcript;
+        fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(std::slice::from_mut(
+            &mut expected,
+        ))
+        .expect("attach expected witnesses");
+        expected.poseidon_preimage_digest = Some(poseidon_preimage_digest(
+            &expected.deltas[0],
+            &expected.batch_hash,
+        ));
+        assert_eq!(decoded, vec![expected]);
+    }
+
+    #[test]
+    fn batch_from_transcripts_attaches_transfer_smt_witnesses() {
+        let transcript = sample_transcript();
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .expect("batch");
+        let encoded = batch
+            .metadata
+            .get(TRANSFER_TRANSCRIPTS_METADATA_KEY)
+            .expect("transfer metadata");
+        let decoded: Vec<TransferTranscript> =
+            decode_from_bytes(encoded).expect("decode transcripts");
+        let delta = &decoded[0].deltas[0];
+        assert_eq!(delta.from_smt_witness.path_bits.len(), 4);
+        assert_eq!(delta.from_smt_witness.siblings.len(), 32);
+        assert_eq!(delta.to_smt_witness.path_bits.len(), 4);
+        assert_eq!(delta.to_smt_witness.siblings.len(), 32);
+        assert_ne!(batch.public_inputs.old_root, [0; 32]);
+        assert_ne!(batch.public_inputs.new_root, [0; 32]);
+        fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
+            .expect("transfer transcript rows verify");
+        fastpq_prover::gadgets::transfer::transcripts_to_witnesses(
+            &decoded,
+            &batch.public_inputs.old_root,
+            &batch.public_inputs.new_root,
+        )
+        .expect("transfer SMT witnesses verify");
     }
 
     #[test]
@@ -1054,12 +1699,25 @@ mod tests {
                 from_balance_after: Numeric::from(158u32),
                 to_balance_before: Numeric::from(1u32),
                 to_balance_after: Numeric::from(43u32),
-                from_merkle_proof: None,
-                to_merkle_proof: None,
+                from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+                to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
             }],
             authority_digest: authority_digest(&ALICE_ID),
             poseidon_preimage_digest: None,
         }
+    }
+
+    fn encoded_transfer_digest_preimage(
+        delta: &TransferDeltaTranscript,
+        batch_hash: &Hash,
+    ) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        delta.from_account.encode_to(&mut encoded);
+        delta.to_account.encode_to(&mut encoded);
+        delta.asset_definition.encode_to(&mut encoded);
+        delta.amount.encode_to(&mut encoded);
+        encoded.extend_from_slice(batch_hash.as_ref());
+        encoded
     }
 
     fn sample_bundle(entry_hash: Hash) -> TransferTranscriptBundle {

@@ -171,32 +171,8 @@ IVM/Крипто был ике ядроға сираттағы аккалет һ
 
 | Ялан | Ғәҙәттәгесә | Маҡсат |
 |-------|---------|----------|
-| `min_compress_bytes_cpu` | `256` байт | Был түбәндә, файҙалы йөкләмәләр skip zstd тулыһынса ҡотолоу өсөн накладной. |
-| `min_compress_bytes_gpu` | Norito байт (1МиБ) | Түләүҙәр йәки өҫтөндә был сиккә күсеү GPU zstd ҡасан `norito::core::hw::has_gpu_compression()` дөрөҫ. |
-| `zstd_level_small` / `zstd_level_large` | ```
-$ cargo xtask acceleration-state
-Acceleration Configuration
---------------------------
-enable_simd: yes
-enable_metal: yes
-enable_cuda: no
-max_gpus: 1
-merkle_min_leaves_gpu: 8192
-merkle_min_leaves_metal: 8192
-merkle_min_leaves_cuda: auto
-prefer_cpu_sha2_max_leaves_aarch64: auto
-prefer_cpu_sha2_max_leaves_x86: auto
-
-Backend Status
---------------
-Backend Supported  Configured  Available  ParityOK  Last error
-SIMD    yes        yes         yes        yes       -
-Metal   yes        yes         yes        yes       -
-CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
-``` X / `3` | Процессор ҡыҫыу кимәле өсөн <32KiB һәм ≥32KiB файҙалы йөкләмәләр ярашлы. |
-| `zstd_level_gpu` | `1` | Консерватив GPU кимәлендә латентлыҡ эҙмә-эҙлекле һаҡлау өсөн, шул уҡ ваҡытта команда сираттарын тултырыу. |
-| `large_threshold` | `32_768` байттар | Ҙурлыҡ сиге араһында “бәләкәй” һәм “ҙур” процессор zstd кимәлдәре. |
-| `aos_ncb_small_n` | `64` рәттәре | Был рәт адаптив кодерҙары аҫтында зонд һәм AoS һәм NCB макеттары иң бәләкәй файҙалы йөк йыйыу өсөн. |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` рәттәре | 1–2 рәт булғанда буш күҙәнәктәр булғанда u32/ид дельта кодлауын мөмкинлек бирә. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Дельтас бер тапҡыр ғына тибеп, кәмендә ике рәт бар. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | Бөтә дельта трансформациялары ла тәртипле индереүҙәр өсөн ғәҙәттәгесә эшләй. |
@@ -209,7 +185,7 @@ CUDA    no         no          no         no        policy disabled (no CUDA lib
 бер ҡасан да ҡарар ҡабул итеү, тип үҙгәртер ине сым форматында, һәм сиктәре нығытылған
 бер релиз. Ҡасан профилләштереү яҡшыраҡ өҙөлгән мәрәй асып, Norito яңыртыу .
 канон `Heuristics::canonical` тормошҡа ашырыу һәм `docs/source/benchmarks.md` плюс
-`status.md` версияланған дәлилдәр менән бер рәттән үҙгәреште теркәй.GPU zstd ярҙамсыһы шул уҡ `min_compress_bytes_gpu` өҙөклөктө үтәй, хатта ҡасан да булһа.
+`status.md` версияланған дәлилдәр менән бер рәттән үҙгәреште теркәй.GPU zstd ярҙамсыһы Norito's compiled GPU cutoff үтәй, хатта ҡасан да булһа.
 туранан-тура шылтырата (мәҫәлән, `norito::core::gpu_zstd::encode_all` аша), шул тиклем бәләкәй
 файҙалы йөктәр һәр ваҡыт процессор юлында ҡала, ҡарамаҫтан, GPU доступность.
 

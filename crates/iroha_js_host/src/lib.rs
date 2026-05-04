@@ -1,5 +1,15 @@
 //! Native bindings exposed to the JavaScript SDK.
-#![allow(clippy::missing_errors_doc)]
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::implicit_clone,
+    clippy::missing_errors_doc,
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_lines,
+    clippy::unnecessary_wraps
+)]
 
 macro_rules! norito_json {
     ({ $($key:literal : $value:expr),* $(,)? }) => {{
@@ -12679,6 +12689,8 @@ mod tests {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            signed_transaction_hash: None,
             submitted_at_ms: 42,
             submitted_at_height: 7,
             signer: key_pair.public_key().clone(),

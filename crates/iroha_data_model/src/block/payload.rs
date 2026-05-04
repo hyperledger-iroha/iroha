@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, vec::Vec};
+use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
 use iroha_data_model_derive::model;
@@ -26,7 +26,7 @@ mod model {
     use crate::{consensus::PreviousRosterEvidence, da::commitment::DaCommitmentBundle};
 
     /// Core contents of a block.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, Decode)]
+    #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -35,7 +35,12 @@ mod model {
     pub(crate) struct BlockPayload {
         /// Essential metadata for a block in the chain.
         pub header: BlockHeader,
-        /// External transactions as source of the state, forming the first half of the transaction entrypoints.
+        /// Legacy in-memory cache of signed external transactions.
+        ///
+        /// New V1 wire stores external transaction entrypoints once in
+        /// [`Self::external_entrypoints`]; this vector is kept for constructors
+        /// and older in-process call sites only.
+        #[norito(skip)]
         pub transactions: Vec<SignedTransaction>,
         /// External transaction entrypoints in consensus order.
         ///
@@ -44,13 +49,6 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Vec::is_empty")]
         pub external_entrypoints: Vec<TransactionEntrypoint>,
-        /// Durable execution context for external entrypoints.
-        ///
-        /// New committed blocks include this context so replay does not need to
-        /// re-derive route-dependent execution inputs from the current WSV.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
-        pub execution_context: Option<BlockExecutionContextBundle>,
         /// Optional DA commitment bundle embedded in this block.
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
@@ -67,20 +65,26 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub previous_roster_evidence: Option<PreviousRosterEvidence>,
+        /// Durable execution context for external entrypoints.
+        ///
+        /// New committed blocks include this context so replay does not need to
+        /// re-derive route-dependent execution inputs from the current WSV.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub execution_context: Option<BlockExecutionContextBundle>,
     }
 
     /// Secondary block state resulting from execution.
-    #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, Default, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct BlockResult {
-        /// External transaction entrypoints in execution order.
+        /// Legacy in-memory copy of external transaction entrypoints.
         ///
-        /// Older blocks leave this empty and reconstruct the order from the legacy
-        /// signed-transaction payload vector.
-        #[norito(default)]
+        /// New V1 wire stores these on [`BlockPayload`] only.
+        #[norito(skip)]
         pub external_entrypoints: Vec<TransactionEntrypoint>,
         /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.
         pub time_triggers: Vec<TimeTriggerEntrypoint>,
@@ -104,6 +108,92 @@ mod model {
 
 pub use self::model::{BlockPayload, BlockResult};
 
+impl PartialEq for BlockPayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header
+            && self.external_entrypoints == other.external_entrypoints
+            && self.execution_context == other.execution_context
+            && self.da_commitments == other.da_commitments
+            && self.da_proof_policies == other.da_proof_policies
+            && self.da_pin_intents == other.da_pin_intents
+            && self.previous_roster_evidence == other.previous_roster_evidence
+    }
+}
+
+impl Eq for BlockPayload {}
+
+impl PartialOrd for BlockPayload {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BlockPayload {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (
+            &self.header,
+            &self.external_entrypoints,
+            &self.execution_context,
+            &self.da_commitments,
+            &self.da_proof_policies,
+            &self.da_pin_intents,
+            &self.previous_roster_evidence,
+        )
+            .cmp(&(
+                &other.header,
+                &other.external_entrypoints,
+                &other.execution_context,
+                &other.da_commitments,
+                &other.da_proof_policies,
+                &other.da_pin_intents,
+                &other.previous_roster_evidence,
+            ))
+    }
+}
+
+impl PartialEq for BlockResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.time_triggers == other.time_triggers
+            && self.merkle == other.merkle
+            && self.result_merkle == other.result_merkle
+            && self.transaction_results == other.transaction_results
+            && self.fastpq_transcripts == other.fastpq_transcripts
+            && self.axt_envelopes == other.axt_envelopes
+            && self.axt_policy_snapshot == other.axt_policy_snapshot
+    }
+}
+
+impl Eq for BlockResult {}
+
+impl PartialOrd for BlockResult {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BlockResult {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (
+            &self.time_triggers,
+            &self.merkle,
+            &self.result_merkle,
+            &self.transaction_results,
+            &self.fastpq_transcripts,
+            &self.axt_envelopes,
+            &self.axt_policy_snapshot,
+        )
+            .cmp(&(
+                &other.time_triggers,
+                &other.merkle,
+                &other.result_merkle,
+                &other.transaction_results,
+                &other.fastpq_transcripts,
+                &other.axt_envelopes,
+                &other.axt_policy_snapshot,
+            ))
+    }
+}
+
 impl fmt::Display for BlockPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({})", self.header)
@@ -117,7 +207,12 @@ impl fmt::Display for BlockResult {
 }
 
 impl SignedBlock {
-    fn external_entrypoints_slice(&self) -> Option<&[TransactionEntrypoint]> {
+    /// Borrow external entrypoints in execution order when the block stores them explicitly.
+    ///
+    /// Older in-memory blocks may only carry the legacy signed-transaction vector; callers should
+    /// fall back to [`Self::external_transactions`] in that case.
+    #[inline]
+    pub fn external_entrypoints_slice(&self) -> Option<&[TransactionEntrypoint]> {
         if self.payload.external_entrypoints.is_empty() {
             self.result.as_ref().and_then(|result| {
                 (!result.external_entrypoints.is_empty())
@@ -260,12 +355,10 @@ impl SignedBlock {
             .iter()
             .map(TransactionEntrypoint::hash)
             .collect::<MerkleTree<TransactionEntrypoint>>();
-        self.payload.external_entrypoints.clone_from(&entrypoints);
         self.payload.header.merkle_root = merkle.root();
         if let Some(result) = self.result.as_mut() {
-            result.external_entrypoints = entrypoints;
-            result.merkle = result
-                .external_entrypoints
+            result.external_entrypoints.clear();
+            result.merkle = entrypoints
                 .iter()
                 .map(TransactionEntrypoint::hash)
                 .chain(
@@ -278,6 +371,7 @@ impl SignedBlock {
                 )
                 .collect();
         }
+        self.payload.external_entrypoints = entrypoints;
     }
 
     /// Check whether the block has entrypoints or deterministic artifacts.
@@ -411,6 +505,19 @@ impl SignedBlock {
         self.result_ref().transaction_results.iter()
     }
 
+    /// Transaction entrypoints paired with their execution results.
+    ///
+    /// The returned index is the canonical entrypoint/result index in the block.
+    #[inline]
+    pub fn entrypoint_results(
+        &self,
+    ) -> impl Iterator<Item = (usize, TransactionEntrypoint, &TransactionResult)> + '_ {
+        self.entrypoints_cloned()
+            .zip(self.results())
+            .enumerate()
+            .map(|(index, (entrypoint, result))| (index, entrypoint, result))
+    }
+
     /// FASTPQ transfer transcripts grouped by transaction entrypoint hash.
     #[inline]
     pub fn fastpq_transcripts(&self) -> &BTreeMap<Hash, Vec<TransferTranscript>> {
@@ -463,9 +570,12 @@ impl<'a> ExternalTransactionIterator<'a> {
                     .iter()
                     .filter_map(|entry| match entry {
                         TransactionEntrypoint::External(tx) => Some(tx),
-                        TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => {
-                            None
+                        TransactionEntrypoint::SealedReveal(reveal) => {
+                            Some(reveal.signed_transaction())
                         }
+                        TransactionEntrypoint::SealedCommitment(_)
+                        | TransactionEntrypoint::PrivateKaigi(_)
+                        | TransactionEntrypoint::Time(_) => None,
                     })
                     .collect()
             },

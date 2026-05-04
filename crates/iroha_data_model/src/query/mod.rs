@@ -1813,6 +1813,12 @@ impl CommittedTransaction {
             TransactionEntrypoint::External(entrypoint) => {
                 entrypoint.inject_instructions(additions.clone());
             }
+            TransactionEntrypoint::SealedCommitment(_) => {}
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                entrypoint
+                    .signed_transaction
+                    .inject_instructions(additions.clone());
+            }
             TransactionEntrypoint::PrivateKaigi(entrypoint) => {
                 entrypoint.inject_instructions(additions.clone());
             }

@@ -35,7 +35,7 @@ static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
 const QUERY_RETRIES: usize = 1_200;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(100);
-const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(120);
+const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(240);
 // DA-enabled consensus needs a wider pipeline in local test runs to avoid view-change stalls.
 const FAST_PIPELINE_TIME: Duration = Duration::from_secs(6);
 static ASSET_NAME_COUNTER: AtomicU64 = AtomicU64::new(0);

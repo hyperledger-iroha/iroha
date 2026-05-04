@@ -1419,6 +1419,8 @@ pub mod torii {
     pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(10);
     /// Default maximum number of concurrent public Soracloud local-read executions.
     pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
+    pub const SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
     /// Default signed Soracloud mutation rate per account+origin every second.
     pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(8);
     /// Default signed Soracloud mutation burst per account+origin.
@@ -1449,8 +1451,8 @@ pub mod torii {
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
     /// Default global pre-auth connection cap (pre-RLIMIT clamp).
     pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
-    /// Default per-IP pre-auth connection cap (None disables per-IP caps).
-    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = None;
+    /// Default per-IP pre-auth connection cap.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(64usize));
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -1992,6 +1994,38 @@ pub mod torii {
         pub const RATE_PER_MINUTE: Option<u32> = Some(240);
         /// Optional MCP request burst budget.
         pub const BURST: Option<u32> = Some(120);
+    }
+
+    /// CORS defaults surfaced via `torii.cors`.
+    pub mod cors {
+        /// Enable CORS response headers.
+        pub const ENABLED: bool = false;
+        /// Default maximum preflight cache age in seconds.
+        pub const MAX_AGE_SECS: u64 = 3_600;
+
+        /// Origins allowed to make browser cross-origin requests.
+        #[must_use]
+        pub fn allowed_origins() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// HTTP methods allowed in CORS preflight responses.
+        #[must_use]
+        pub fn allowed_methods() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Request headers allowed in CORS preflight responses.
+        #[must_use]
+        pub fn allowed_headers() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Response headers exposed to browser clients.
+        #[must_use]
+        pub fn exposed_headers() -> Vec<String> {
+            Vec::new()
+        }
     }
     /// Default poll interval (seconds) for Taikai anchor uploads.
     pub const DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS: u64 = 30;
@@ -2604,18 +2638,6 @@ pub mod concurrency {
 
 /// Norito codec defaults.
 pub mod norito {
-    /// Minimum payload size (bytes) to attempt CPU zstd.
-    pub const MIN_COMPRESS_BYTES_CPU: usize = 256;
-    /// Minimum payload size (bytes) to attempt GPU zstd when available.
-    pub const MIN_COMPRESS_BYTES_GPU: usize = 1024 * 1024;
-    /// zstd level for medium-size payloads.
-    pub const ZSTD_LEVEL_SMALL: i32 = 1;
-    /// zstd level for large payloads.
-    pub const ZSTD_LEVEL_LARGE: i32 = 3;
-    /// GPU zstd level (kept conservative to reduce latency).
-    pub const ZSTD_LEVEL_GPU: i32 = 1;
-    /// Size threshold distinguishing small vs large for CPU zstd level.
-    pub const LARGE_THRESHOLD: usize = 32 * 1024;
     /// Allow GPU compression offload when compiled and available.
     pub const ALLOW_GPU_COMPRESSION: bool = true;
     /// Hard upper bound on Norito archive length after decompression (bytes).
@@ -2625,9 +2647,6 @@ pub mod norito {
     /// aligns with the RBC store cap to avoid rejecting persisted consensus
     /// payloads.
     pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 1 GiB
-    /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
-    /// Inputs with `n <= AOS_NCB_SMALL_N` are encoded with a two-pass probe (AoS vs NCB, pick smaller).
-    pub const AOS_NCB_SMALL_N: usize = 64;
 }
 
 /// Hardware acceleration defaults (Metal/CUDA usage in IVM and helpers).
@@ -3530,7 +3549,7 @@ pub mod soranet {
         use std::time::Duration;
 
         /// Enable the VPN tunnel by default.
-        pub const ENABLED: bool = true;
+        pub const ENABLED: bool = false;
         /// Fixed cell size (bytes).
         pub const CELL_SIZE_BYTES: u16 = 1_024;
         /// Flow label width (bits).
@@ -3555,6 +3574,49 @@ pub mod soranet {
         pub const EXIT_CLASS: &str = "standard";
         /// Default meter family identifier.
         pub const METER_FAMILY: &str = "soranet.vpn.standard";
+        /// Default full-tunnel IPv4 route pushed to clients.
+        pub const DEFAULT_IPV4_ROUTE: &str = "0.0.0.0/0";
+        /// Default full-tunnel IPv6 route pushed to clients.
+        pub const DEFAULT_IPV6_ROUTE: &str = "::/0";
+        /// Default DNS server pushed to clients.
+        pub const DEFAULT_DNS_SERVER: &str = "1.1.1.1";
+        /// Default prepaid lease fee in nano-XOR.
+        pub const LEASE_FEE_NANOS: u64 = 1_000_000;
+        /// Default settlement grace after disconnect before escrow is refundable.
+        pub const SETTLEMENT_GRACE_SECS: u64 = 60;
+
+        /// XOR asset definition used for VPN escrow.
+        pub fn fee_asset_id() -> String {
+            "xor#universal.universal".to_string()
+        }
+
+        /// Account that receives VPN escrow payments before receipt settlement.
+        pub fn escrow_account_id() -> String {
+            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+        }
+
+        /// Default operator account used when an enabled deployment does not override it.
+        pub fn operator_account_id() -> String {
+            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+        }
+
+        /// Default client routes.
+        pub fn route_pushes() -> Vec<String> {
+            vec![
+                DEFAULT_IPV4_ROUTE.to_string(),
+                DEFAULT_IPV6_ROUTE.to_string(),
+            ]
+        }
+
+        /// Default routes excluded from the tunnel.
+        pub fn excluded_routes() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Default DNS servers.
+        pub fn dns_servers() -> Vec<String> {
+            vec![DEFAULT_DNS_SERVER.to_string()]
+        }
 
         /// Returns the default guard refresh cadence.
         #[must_use]
@@ -3648,6 +3710,10 @@ mod tests {
         assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(5));
         assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(10));
         assert_eq!(torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get(), 32);
+        assert_eq!(
+            torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES.get(),
+            64 * 1024 * 1024
+        );
         assert_eq!(
             torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC,
             Some(8)

@@ -73,7 +73,14 @@ public struct ConfidentialEncryptedPayload: Equatable, Sendable {
                                                                              ciphertext: ciphertext) {
             return native
         }
-        throw ConfidentialEncryptedPayloadError.bridgeUnavailable
+        var payload = Data()
+        payload.reserveCapacity(1 + ephemeralPublicKey.count + nonce.count + 5 + ciphertext.count)
+        payload.append(version)
+        payload.append(ephemeralPublicKey)
+        payload.append(nonce)
+        Self.appendVarint(UInt64(ciphertext.count), into: &payload)
+        payload.append(ciphertext)
+        return payload
     }
 
     public func noritoEnvelope(flags: UInt8 = 0x04) throws -> Data {
@@ -108,6 +115,15 @@ public struct ConfidentialEncryptedPayload: Equatable, Sendable {
                                                 ephemeralPublicKey: ephemeral,
                                                 nonce: nonce,
                                                 ciphertext: ciphertext)
+    }
+
+    private static func appendVarint(_ value: UInt64, into buffer: inout Data) {
+        var remaining = value
+        while remaining >= 0x80 {
+            buffer.append(UInt8(remaining & 0x7F) | 0x80)
+            remaining >>= 7
+        }
+        buffer.append(UInt8(remaining))
     }
 }
 

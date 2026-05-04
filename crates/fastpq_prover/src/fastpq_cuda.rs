@@ -13,6 +13,11 @@ use core::{convert::TryFrom, ffi::c_void, ptr::NonNull};
 use crate::bn254::{self, BN254_LIMBS};
 #[cfg(feature = "fastpq-gpu")]
 use crate::trace::PoseidonColumnSlice;
+#[cfg(feature = "fastpq-gpu")]
+use crate::{
+    bn254_poseidon::Bn254PoseidonBatchSlice,
+    bn254_poseidon_params::{bn254_limbs_to_bytes, bn254_poseidon_width3_params},
+};
 /// Result alias for CUDA operations.
 pub type Result<T> = core::result::Result<T, CudaBackendError>;
 
@@ -58,6 +63,14 @@ const POSEIDON_STATE_WIDTH: usize = 3;
 const POSEIDON_RATE: usize = 2;
 
 #[cfg(feature = "fastpq-gpu")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Bn254PoseidonCudaSlice {
+    offset: u32,
+    len: u32,
+}
+
+#[cfg(feature = "fastpq-gpu")]
 pub(crate) struct PendingCudaDispatch {
     handle: Option<NonNull<c_void>>,
 }
@@ -92,7 +105,7 @@ impl Drop for PendingCudaDispatch {
 #[cfg(all(feature = "fastpq-gpu", not(fastpq_cuda_unavailable)))]
 #[allow(unsafe_code)]
 mod native {
-    use super::{CudaBackendError, Result};
+    use super::{Bn254PoseidonCudaSlice, CudaBackendError, Result};
     use crate::bn254::BN254_LIMBS;
     use crate::trace::PoseidonColumnSlice;
     use core::{ffi::c_void, ptr};
@@ -177,6 +190,17 @@ mod native {
             slices: *const PoseidonColumnSlice,
             column_count: usize,
             block_count: usize,
+            out_hashes: *mut u64,
+        ) -> i32;
+        fn fastpq_bn254_poseidon_hash_words_cuda(
+            words: *const u64,
+            word_count: usize,
+            slices: *const Bn254PoseidonCudaSlice,
+            batch_count: usize,
+            round_constants: *const u64,
+            round_constant_len: usize,
+            mds: *const u64,
+            mds_len: usize,
             out_hashes: *mut u64,
         ) -> i32;
     }
@@ -405,10 +429,36 @@ mod native {
         };
         map_cuda(code)
     }
+
+    pub(super) fn bn254_poseidon_hash_words(
+        words: &[u64],
+        slices: &[Bn254PoseidonCudaSlice],
+        round_constants: &[u64],
+        mds: &[u64],
+        out: &mut [u64],
+    ) -> Result<()> {
+        // SAFETY: the caller validated descriptor ranges and output shape and passes stable slices.
+        let code = unsafe {
+            fastpq_bn254_poseidon_hash_words_cuda(
+                words.as_ptr(),
+                words.len(),
+                slices.as_ptr(),
+                slices.len(),
+                round_constants.as_ptr(),
+                round_constants.len(),
+                mds.as_ptr(),
+                mds.len(),
+                out.as_mut_ptr(),
+            )
+        };
+        map_cuda(code)
+    }
 }
 
 #[cfg(any(not(feature = "fastpq-gpu"), fastpq_cuda_unavailable))]
 mod native {
+    #[cfg(feature = "fastpq-gpu")]
+    use super::Bn254PoseidonCudaSlice;
     use super::{CudaBackendError, Result};
     use crate::bn254::BN254_LIMBS;
     #[cfg(feature = "fastpq-gpu")]
@@ -532,6 +582,17 @@ mod native {
         _slices: &[PoseidonColumnSlice],
         _column_count: usize,
         _block_count: usize,
+        _out: &mut [u64],
+    ) -> Result<()> {
+        Err(CudaBackendError::Unavailable)
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    pub(super) fn bn254_poseidon_hash_words(
+        _words: &[u64],
+        _slices: &[Bn254PoseidonCudaSlice],
+        _round_constants: &[u64],
+        _mds: &[u64],
         _out: &mut [u64],
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
@@ -893,6 +954,61 @@ pub fn fastpq_poseidon_hash_columns_fused(
     native::poseidon_hash_columns_fused(payloads, slices, column_count, block_count, out)
 }
 
+#[cfg(feature = "fastpq-gpu")]
+pub(crate) fn fastpq_bn254_poseidon_hash_words(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> Result<Vec<[u8; 32]>> {
+    if slices.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut cuda_slices = Vec::with_capacity(slices.len());
+    for slice in slices {
+        let end = slice
+            .offset()
+            .checked_add(slice.len())
+            .ok_or(CudaBackendError::InvalidInput(
+                "BN254 Poseidon slice range overflows",
+            ))?;
+        if end > words.len() {
+            return Err(CudaBackendError::InvalidInput(
+                "BN254 Poseidon slice exceeds flattened word buffer",
+            ));
+        }
+        cuda_slices.push(Bn254PoseidonCudaSlice {
+            offset: u32::try_from(slice.offset()).map_err(|_| {
+                CudaBackendError::InvalidInput("BN254 Poseidon word offset exceeds u32::MAX")
+            })?,
+            len: u32::try_from(slice.len()).map_err(|_| {
+                CudaBackendError::InvalidInput("BN254 Poseidon word length exceeds u32::MAX")
+            })?,
+        });
+    }
+
+    let params = bn254_poseidon_width3_params();
+    let staged_words = if words.is_empty() { &[0u64][..] } else { words };
+    let output_len =
+        slices
+            .len()
+            .checked_mul(BN254_LIMBS)
+            .ok_or(CudaBackendError::InvalidInput(
+                "BN254 Poseidon output length overflows",
+            ))?;
+    let mut output = vec![0u64; output_len];
+    native::bn254_poseidon_hash_words(
+        staged_words,
+        &cuda_slices,
+        &params.round_constants,
+        &params.mds,
+        &mut output,
+    )?;
+    Ok(output
+        .chunks_exact(BN254_LIMBS)
+        .map(bn254_limbs_to_bytes)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_zkp_halo2::Bn254Scalar;
@@ -982,6 +1098,17 @@ mod tests {
                 got: 4,
             })
         );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn bn254_poseidon_words_rejects_out_of_bounds_slice_before_backend_call() {
+        let err = super::fastpq_bn254_poseidon_hash_words(
+            &[1, 2],
+            &[crate::bn254_poseidon::Bn254PoseidonBatchSlice::new(1, 2)],
+        )
+        .expect_err("out-of-bounds slice rejected");
+        assert!(matches!(err, CudaBackendError::InvalidInput(_)));
     }
 
     #[test]

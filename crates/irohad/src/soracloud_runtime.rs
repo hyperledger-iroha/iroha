@@ -68,10 +68,9 @@ use iroha_data_model::{
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
-        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1,
-        SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1,
-        SoraModelPrivacyModeV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1,
+        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
+        SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
+        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
         SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
@@ -314,14 +313,18 @@ fn soracloud_runtime_submission_metadata(state: &State) -> Metadata {
 }
 
 fn explicit_soracloud_runtime_gas_asset_id() -> Option<String> {
-    ["IROHA_SORACLOUD_GAS_ASSET_ID", "IROHA_SORAFS_GAS_ASSET_ID", "IROHA_GAS_ASSET_ID"]
-        .into_iter()
-        .find_map(|key| {
-            std::env::var(key)
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-        })
+    [
+        "IROHA_SORACLOUD_GAS_ASSET_ID",
+        "IROHA_SORAFS_GAS_ASSET_ID",
+        "IROHA_GAS_ASSET_ID",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn default_soracloud_runtime_gas_asset_id(state: &State) -> Option<String> {
@@ -1193,16 +1196,17 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             ));
         };
 
-        let mailbox_payload_tlv = match mailbox_payload_tlv_bytes(&request.mailbox_message.payload_bytes) {
-            Ok(tlv_bytes) => tlv_bytes,
-            Err(error) => {
-                return Ok(deterministic_mailbox_failure_result(
-                    request,
-                    vm_error_label(&error),
-                    SoraServiceHealthStatusV1::Degraded,
-                ));
-            }
-        };
+        let mailbox_payload_tlv =
+            match mailbox_payload_tlv_bytes(&request.mailbox_message.payload_bytes) {
+                Ok(tlv_bytes) => tlv_bytes,
+                Err(error) => {
+                    return Ok(deterministic_mailbox_failure_result(
+                        request,
+                        vm_error_label(&error),
+                        SoraServiceHealthStatusV1::Degraded,
+                    ));
+                }
+            };
         let public_inputs = match ordered_mailbox_public_inputs(
             &mailbox_payload_tlv,
             request.execution_sequence,
@@ -1579,14 +1583,20 @@ impl SoracloudIvmHost {
         if self.handler_class() == SoraServiceHandlerClassV1::PrivateUpdate {
             Ok(())
         } else {
-            Err(VMError::NotImplemented { syscall })
+            Err(VMError::metered_not_implemented(
+                ivm::gas::G_SORACLOUD,
+                syscall,
+            ))
         }
     }
 
     fn require_mutating_runtime(&self, _syscall: u32) -> Result<(), VMError> {
         match self.handler_class() {
             SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate => Ok(()),
-            _ => Err(VMError::PermissionDenied),
+            _ => Err(VMError::metered(
+                ivm::gas::G_SORACLOUD,
+                VMError::PermissionDenied,
+            )),
         }
     }
 
@@ -1595,21 +1605,32 @@ impl SoracloudIvmHost {
         vm: &mut IVM,
         expected_operation: SoracloudHostOperationV1,
         syscall: u32,
-    ) -> Result<SoracloudHostRequestPayloadV1, VMError> {
-        let tlv = vm.memory.validate_tlv(vm.register(10))?;
+    ) -> Result<(SoracloudHostRequestPayloadV1, usize), VMError> {
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .map_err(|err| VMError::metered(ivm::gas::G_SORACLOUD, err))?;
+        let request_bytes = tlv.payload.len();
+        let request_gas =
+            ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         if tlv.type_id != PointerType::SoracloudRequest {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: tlv.type_id_raw(),
-            });
+            return Err(VMError::metered(
+                request_gas,
+                VMError::AbiTypeNotAllowed {
+                    abi: vm.abi_version(),
+                    type_id: tlv.type_id_raw(),
+                },
+            ));
         }
         let envelope = norito::decode_from_bytes::<SoracloudHostRequestEnvelopeV1>(tlv.payload)
-            .map_err(|_| VMError::NoritoInvalid)?;
-        envelope.validate().map_err(|_| VMError::NoritoInvalid)?;
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        envelope
+            .validate()
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
         if envelope.operation != expected_operation {
-            return Err(VMError::NotImplemented { syscall });
+            return Err(VMError::metered_not_implemented(request_gas, syscall));
         }
-        Ok(envelope.payload)
+        Ok((envelope.payload, request_bytes))
     }
 
     fn write_response(
@@ -1617,18 +1638,31 @@ impl SoracloudIvmHost {
         vm: &mut IVM,
         operation: SoracloudHostOperationV1,
         payload: SoracloudHostResponsePayloadV1,
-    ) -> Result<(), VMError> {
+        request_bytes: usize,
+    ) -> Result<u64, VMError> {
         let envelope = SoracloudHostResponseEnvelopeV1 {
             schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
             operation,
             payload,
         };
-        envelope.validate().map_err(|_| VMError::NoritoInvalid)?;
-        let payload_bytes = norito::to_bytes(&envelope).map_err(|_| VMError::NoritoInvalid)?;
+        let request_gas =
+            ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
+        envelope
+            .validate()
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        let payload_bytes = norito::to_bytes(&envelope)
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        let gas = ivm::gas::syscall_byte_gas(
+            ivm::gas::G_SORACLOUD,
+            request_bytes,
+            payload_bytes.len(),
+        );
         let tlv = make_pointer_tlv(PointerType::SoracloudResponse, &payload_bytes);
-        let ptr = vm.alloc_input_tlv(&tlv)?;
+        let ptr = vm
+            .alloc_input_tlv(&tlv)
+            .map_err(|err| VMError::metered(gas, err))?;
         vm.set_register(10, ptr);
-        Ok(())
+        Ok(gas)
     }
 
     fn binding(&self, binding_name: &Name) -> Result<&SoraStateBindingV1, VMError> {
@@ -2068,14 +2102,20 @@ impl IVMHost for SoracloudIvmHost {
         match number {
             ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT => self.read_public_input(vm),
             SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
-                let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::ReadCommittedState,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::ReadCommittedState,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
                 let entry = self
                     .committed_entries
@@ -2096,52 +2136,90 @@ impl IVMHost for SoracloudIvmHost {
                     SoracloudHostResponsePayloadV1::ReadCommittedState(
                         SoracloudReadCommittedStateResponseV1 { entry },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => {
-                let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::EmitStateMutation,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::EmitStateMutation,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.stage_state_mutation(request)?;
+                let response = self.stage_state_mutation(request).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        err.into_unmetered(),
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EmitStateMutation,
                     SoracloudHostResponsePayloadV1::EmitStateMutation(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => {
-                let SoracloudHostRequestPayloadV1::EmitMailboxMessage(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::EmitMailboxMessage,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::EmitMailboxMessage,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::EmitMailboxMessage(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.stage_outbound_mailbox_message(request)?;
+                let response = self.stage_outbound_mailbox_message(request).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        err.into_unmetered(),
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EmitMailboxMessage,
                     SoracloudHostResponsePayloadV1::EmitMailboxMessage(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_APPEND_JOURNAL => {
-                let SoracloudHostRequestPayloadV1::AppendJournal(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?;
+                let SoracloudHostRequestPayloadV1::AppendJournal(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                self.require_mutating_runtime(number)?;
+                self.require_mutating_runtime(number)
+                    .map_err(|err| VMError::metered(ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0), err))?;
                 let artifact_hash = Self::stage_artifact(
                     &mut self.staged_journal,
                     request.artifact_path,
@@ -2153,20 +2231,27 @@ impl IVMHost for SoracloudIvmHost {
                     SoracloudHostResponsePayloadV1::AppendJournal(
                         SoracloudAppendJournalResponseV1 { artifact_hash },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => {
-                let SoracloudHostRequestPayloadV1::PublishCheckpoint(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::PublishCheckpoint,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::PublishCheckpoint,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::PublishCheckpoint(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                self.require_mutating_runtime(number)?;
+                self.require_mutating_runtime(number)
+                    .map_err(|err| VMError::metered(ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0), err))?;
                 let artifact_hash = Self::stage_artifact(
                     &mut self.staged_checkpoint,
                     request.artifact_path,
@@ -2178,49 +2263,85 @@ impl IVMHost for SoracloudIvmHost {
                     SoracloudHostResponsePayloadV1::PublishCheckpoint(
                         SoracloudPublishCheckpointResponseV1 { artifact_hash },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_CONFIG => {
-                let SoracloudHostRequestPayloadV1::ReadConfig(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadConfig, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadConfig, number)?;
+                let SoracloudHostRequestPayloadV1::ReadConfig(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.read_service_config(&request.config_name)?;
+                let response = self.read_service_config(&request.config_name).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
+                        err,
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadConfig,
                     SoracloudHostResponsePayloadV1::ReadConfig(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
-                let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::ReadSecretEnvelope,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::ReadSecretEnvelope,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
                 let response = self.read_service_secret_envelope(&request.secret_name);
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadSecretEnvelope,
                     SoracloudHostResponsePayloadV1::ReadSecretEnvelope(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_SECRET => {
                 self.require_private_runtime(number)?;
-                let SoracloudHostRequestPayloadV1::ReadSecret(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadSecret, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadSecret, number)?;
+                let SoracloudHostRequestPayloadV1::ReadSecret(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let payload_bytes = self.read_material("secrets", &request.secret_name)?;
+                let payload_bytes = self
+                    .read_material("secrets", &request.secret_name)
+                    .map_err(|err| {
+                        VMError::metered(
+                            ivm::gas::syscall_byte_gas(
+                                ivm::gas::G_SORACLOUD,
+                                request_bytes,
+                                0,
+                            ),
+                            err,
+                        )
+                    })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadSecret,
@@ -2228,17 +2349,35 @@ impl IVMHost for SoracloudIvmHost {
                         found: payload_bytes.is_some(),
                         payload_bytes: payload_bytes.unwrap_or_default(),
                     }),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_CREDENTIAL => {
                 self.require_private_runtime(number)?;
-                let SoracloudHostRequestPayloadV1::ReadCredential(request) = self
-                    .read_request_payload(vm, SoracloudHostOperationV1::ReadCredential, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadCredential, number)?;
+                let SoracloudHostRequestPayloadV1::ReadCredential(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let payload_bytes = self.read_material("credentials", &request.credential_name)?;
+                let payload_bytes = self
+                    .read_material("credentials", &request.credential_name)
+                    .map_err(|err| {
+                        VMError::metered(
+                            ivm::gas::syscall_byte_gas(
+                                ivm::gas::G_SORACLOUD,
+                                request_bytes,
+                                0,
+                            ),
+                            err,
+                        )
+                    })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadCredential,
@@ -2248,22 +2387,34 @@ impl IVMHost for SoracloudIvmHost {
                             payload_bytes: payload_bytes.unwrap_or_default(),
                         },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_EGRESS_FETCH => {
-                let SoracloudHostRequestPayloadV1::EgressFetch(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::EgressFetch, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::EgressFetch, number)?;
+                let SoracloudHostRequestPayloadV1::EgressFetch(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.egress_fetch(request)?;
+                let response = self.egress_fetch(request).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
+                        err.into_unmetered(),
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EgressFetch,
                     SoracloudHostResponsePayloadV1::EgressFetch(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             _ => self.core_host.syscall(number, vm),
         }
@@ -3828,9 +3979,9 @@ impl SoracloudRuntimeManager {
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
         {
             Some(root_volume) => (
-                ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)
+                ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, root_volume)
                     .wrap_err("prepare Inrou mutable PortableVm root disk")?,
-                "raw",
+                "qcow2",
             ),
             None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
         };
@@ -3858,8 +4009,11 @@ impl SoracloudRuntimeManager {
             &user_data,
         )
         .wrap_err("write PortableVm cloud-init documents")?;
-        stage_portable_vm_metadata_bundle(&cloud_init_root, &PathBuf::from(&plan.bundle_cache_path))
-            .wrap_err("stage PortableVm app bundle for metadata download")?;
+        stage_portable_vm_metadata_bundle(
+            &cloud_init_root,
+            &PathBuf::from(&plan.bundle_cache_path),
+        )
+        .wrap_err("stage PortableVm app bundle for metadata download")?;
         let metadata_server = start_portable_vm_metadata_server(&cloud_init_root)
             .wrap_err("start PortableVm cloud-init metadata server")?;
         let datasource_base_url = metadata_server.datasource_base_url();
@@ -5096,12 +5250,13 @@ impl SoracloudRuntimeManager {
             && sorafs_node.is_enabled()
             && let Ok(manifest) = sorafs_node.manifest_metadata_by_digest(&manifest_digest)
         {
-            let content_length = usize::try_from(manifest.content_length()).wrap_err_with(|| {
-                format!(
-                    "convert committed SoraFS manifest {} content length to usize",
-                    hex::encode(manifest_digest)
-                )
-            })?;
+            let content_length =
+                usize::try_from(manifest.content_length()).wrap_err_with(|| {
+                    format!(
+                        "convert committed SoraFS manifest {} content length to usize",
+                        hex::encode(manifest_digest)
+                    )
+                })?;
             let payload = sorafs_node
                 .read_payload_range(manifest.manifest_id(), 0, content_length)
                 .wrap_err_with(|| {
@@ -5291,28 +5446,28 @@ impl SoracloudRuntimeManager {
         let manifest_digest = parse_sorafs_manifest_digest_hex(&artifact.manifest_digest_hex)?;
         let view = self.state.view();
         let remote_sources = collect_remote_hydration_sources(&view, &self.state);
-        let hydrated =
-            self.read_committed_sorafs_directory_payload_by_digest(
-                &view,
-                &remote_sources,
-                manifest_digest,
-            )?;
+        let hydrated = self.read_committed_sorafs_directory_payload_by_digest(
+            &view,
+            &remote_sources,
+            manifest_digest,
+        )?;
         drop(view);
 
         if let Some((payload, files)) = hydrated {
             let inrou_root = bundle_root.join("inrou");
-            materialize_sorafs_payload_files(&payload, &files, &inrou_root).wrap_err_with(|| {
-                format!(
-                    "hydrate published Inrou guest-image artifact {} into {}",
-                    artifact.manifest_digest_hex,
-                    inrou_root.display()
-                )
-            })?;
+            materialize_sorafs_payload_files(&payload, &files, &inrou_root).wrap_err_with(
+                || {
+                    format!(
+                        "hydrate published Inrou guest-image artifact {} into {}",
+                        artifact.manifest_digest_hex,
+                        inrou_root.display()
+                    )
+                },
+            )?;
             return Ok(());
         }
 
-        if let Some(host_paths) =
-            inrou_guest_image_host_paths_from_env(selected_guest_isa, image)?
+        if let Some(host_paths) = inrou_guest_image_host_paths_from_env(selected_guest_isa, image)?
         {
             iroha_logger::warn!(
                 guest_isa = selected_guest_isa.as_str(),
@@ -6084,20 +6239,18 @@ fn execute_query_local_read(
         )
     })?;
     let metadata_tlv = local_read_request_metadata_tlv_bytes(request)?;
-    let public_inputs =
-        local_read_public_inputs(&body_tlv, &metadata_tlv, request.observed_height).map_err(
-            |error| {
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Internal,
-                    format!(
-                        "prepare Soracloud query public inputs for service `{}` handler `{}`: {}",
-                        request.service_name,
-                        request.handler_name,
-                        vm_error_label(&error),
-                    ),
-                )
-            },
-        )?;
+    let public_inputs = local_read_public_inputs(&body_tlv, &metadata_tlv, request.observed_height)
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "prepare Soracloud query public inputs for service `{}` handler `{}`: {}",
+                    request.service_name,
+                    request.handler_name,
+                    vm_error_label(&error),
+                ),
+            )
+        })?;
 
     let committed_entries =
         collect_committed_service_state_entries(view, request.service_name.as_str());
@@ -6427,6 +6580,13 @@ fn json_value_from_tlv(tlv_bytes: &[u8]) -> Result<norito::json::Value, VMError>
     }
 }
 
+fn json_pointer_response_payload(payload: &[u8]) -> Vec<u8> {
+    norito::decode_from_bytes::<Json>(payload).map_or_else(
+        |_| payload.to_vec(),
+        |json| json.get().as_bytes().to_vec(),
+    )
+}
+
 fn trigger_event_json_tlv(fields: norito::json::Map) -> Result<Vec<u8>, VMError> {
     let value = norito::json::Value::Object(fields);
     let json = Json::from_norito_value_ref(&value).map_err(|_| VMError::DecodeError)?;
@@ -6461,7 +6621,14 @@ fn local_read_public_inputs(
     )?;
     insert_public_input_aliases(
         &mut inputs,
-        &["_request_body", "request_body", "body", "payload", "arg0", "param0"],
+        &[
+            "_request_body",
+            "request_body",
+            "body",
+            "payload",
+            "arg0",
+            "param0",
+        ],
         body_tlv,
     )?;
     insert_public_input_aliases(
@@ -6512,7 +6679,14 @@ fn ordered_mailbox_public_inputs(
     )?;
     insert_public_input_aliases(
         &mut inputs,
-        &["_request_body", "request_body", "body", "payload", "arg0", "param0"],
+        &[
+            "_request_body",
+            "request_body",
+            "body",
+            "payload",
+            "arg0",
+            "param0",
+        ],
         payload_tlv,
     )?;
     let execution_sequence_tlv = public_input_int_tlv(execution_sequence)?;
@@ -6593,10 +6767,19 @@ fn decode_vm_output(
             ),
         )
     })?;
-    let content_type = match tlv.type_id {
-        PointerType::Json => Some("application/json".to_owned()),
-        PointerType::Blob => Some("application/octet-stream".to_owned()),
-        PointerType::NoritoBytes => Some("application/x-norito".to_owned()),
+    let (response_bytes, content_type) = match tlv.type_id {
+        PointerType::Json => (
+            json_pointer_response_payload(tlv.payload),
+            Some("application/json".to_owned()),
+        ),
+        PointerType::Blob => (
+            tlv.payload.to_vec(),
+            Some("application/octet-stream".to_owned()),
+        ),
+        PointerType::NoritoBytes => (
+            tlv.payload.to_vec(),
+            Some("application/x-norito".to_owned()),
+        ),
         other => {
             return Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Internal,
@@ -6607,7 +6790,7 @@ fn decode_vm_output(
             ));
         }
     };
-    Ok((tlv.payload.to_vec(), content_type))
+    Ok((response_bytes, content_type))
 }
 
 fn execute_generated_hf_local_read(
@@ -9591,20 +9774,19 @@ fn build_runtime_snapshot(
                     && lease_volumes
                         .iter()
                         .all(|volume| current_sequence < volume.lease_expires_sequence));
-            let local_inrou_assignments =
-                if local_inrou_hosting_enabled
-                    && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
-                {
-                    local_inrou_replica_placements(
-                        world,
-                        &service_name,
-                        &service_version,
-                        local_validator_account_id,
-                        local_peer_id,
-                    )
-                } else {
-                    Vec::new()
-                };
+            let local_inrou_assignments = if local_inrou_hosting_enabled
+                && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+            {
+                local_inrou_replica_placements(
+                    world,
+                    &service_name,
+                    &service_version,
+                    local_validator_account_id,
+                    local_peer_id,
+                )
+            } else {
+                Vec::new()
+            };
             let hosted_http_runtime_state = if bundle.container.runtime
                 == SoraContainerRuntimeV1::Inrou
                 && !local_inrou_assignments.is_empty()
@@ -10411,7 +10593,7 @@ fn make_pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 
 fn vm_error_label(error: &VMError) -> &'static str {
-    match error {
+    match error.as_unmetered() {
         VMError::OutOfGas => "out_of_gas",
         VMError::OutOfMemory => "out_of_memory",
         VMError::MemoryAccessViolation { .. } => "memory_access_violation",
@@ -10427,6 +10609,8 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::AssertionFailed => "assertion_failed",
         VMError::ExceededMaxCycles => "exceeded_max_cycles",
         VMError::InvalidMetadata => "invalid_metadata",
+        VMError::InvalidVectorLength { .. } => "invalid_vector_length",
+        VMError::MissingHalt => "missing_halt",
         VMError::VectorExtensionDisabled => "vector_disabled",
         VMError::ZkExtensionDisabled => "zk_disabled",
         VMError::NullifierAlreadyUsed => "nullifier_used",
@@ -10437,6 +10621,7 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::NoritoInvalid => "norito_invalid",
         VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
         VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
+        VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
     }
 }
 
@@ -11547,6 +11732,7 @@ fn resolve_inrou_bundle_member_path(
     Ok(canonical)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ensure_inrou_root_disk(
     base_rootfs_image_path: &Path,
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
@@ -11996,7 +12182,10 @@ fn serve_portable_vm_metadata_request(
     Ok(())
 }
 
-fn stage_portable_vm_metadata_bundle(seed_root: &Path, bundle_cache_path: &Path) -> eyre::Result<()> {
+fn stage_portable_vm_metadata_bundle(
+    seed_root: &Path,
+    bundle_cache_path: &Path,
+) -> eyre::Result<()> {
     let bundle_path = seed_root.join(INROU_PORTABLE_BUNDLE_METADATA_MEMBER);
     fs::create_dir_all(
         bundle_path
@@ -12385,6 +12574,34 @@ fn planned_inrou_tap_firewall_rules(
             context: "install Inrou egress masquerade rule",
         });
     }
+    rules.push(InrouTapFirewallRuleSpec {
+        args: vec![
+            "-I".to_owned(),
+            "INPUT".to_owned(),
+            "1".to_owned(),
+            "-i".to_owned(),
+            tap_name.to_owned(),
+            "-m".to_owned(),
+            "conntrack".to_owned(),
+            "--ctstate".to_owned(),
+            "RELATED,ESTABLISHED".to_owned(),
+            "-j".to_owned(),
+            "ACCEPT".to_owned(),
+        ],
+        context: "install Inrou established host-input rule",
+    });
+    rules.push(InrouTapFirewallRuleSpec {
+        args: vec![
+            "-I".to_owned(),
+            "INPUT".to_owned(),
+            "3".to_owned(),
+            "-i".to_owned(),
+            tap_name.to_owned(),
+            "-j".to_owned(),
+            "DROP".to_owned(),
+        ],
+        context: "install Inrou host-input default-drop rule",
+    });
     if firewall_plan.installs_return_rule() {
         rules.push(InrouTapFirewallRuleSpec {
             args: vec![
@@ -12416,7 +12633,18 @@ fn planned_inrou_tap_firewall_rules(
             ],
             context: "install Inrou forward-out rule",
         }),
-        InrouTapFirewallPlan::Isolated => {}
+        InrouTapFirewallPlan::Isolated => rules.push(InrouTapFirewallRuleSpec {
+            args: vec![
+                "-I".to_owned(),
+                "FORWARD".to_owned(),
+                "1".to_owned(),
+                "-i".to_owned(),
+                tap_name.to_owned(),
+                "-j".to_owned(),
+                "DROP".to_owned(),
+            ],
+            context: "install Inrou isolated forward-drop rule",
+        }),
         InrouTapFirewallPlan::Allowlist(endpoints) => {
             rules.push(InrouTapFirewallRuleSpec {
                 args: vec![
@@ -12679,7 +12907,8 @@ fn build_inrou_user_data(
         prepare_script.push_str("bundle_root=");
         prepare_script.push_str(&shell_single_quote(INROU_PORTABLE_BUNDLE_GUEST_ROOT));
         prepare_script.push('\n');
-        prepare_script.push_str("bundle_marker='/var/lib/soracloud/materialization/.bundle_hash'\n");
+        prepare_script
+            .push_str("bundle_marker='/var/lib/soracloud/materialization/.bundle_hash'\n");
         prepare_script.push_str("bundle_entrypoint=");
         prepare_script.push_str(&shell_single_quote(&guest_entrypoint));
         prepare_script.push('\n');
@@ -12833,7 +13062,8 @@ fn build_inrou_user_data(
     prepare_script.push_str("    found = set()\n");
     prepare_script.push_str("    for table in ('/proc/net/tcp', '/proc/net/tcp6'):\n");
     prepare_script.push_str("        try:\n");
-    prepare_script.push_str("            lines = open(table, encoding='ascii').read().splitlines()[1:]\n");
+    prepare_script
+        .push_str("            lines = open(table, encoding='ascii').read().splitlines()[1:]\n");
     prepare_script.push_str("        except OSError:\n");
     prepare_script.push_str("            continue\n");
     prepare_script.push_str("        for line in lines:\n");
@@ -12862,7 +13092,8 @@ fn build_inrou_user_data(
     prepare_script.push_str("                target = os.readlink(f'{fd_dir}/{fd}')\n");
     prepare_script.push_str("            except OSError:\n");
     prepare_script.push_str("                continue\n");
-    prepare_script.push_str("            if target.startswith('socket:[') and target[8:-1] in inodes:\n");
+    prepare_script
+        .push_str("            if target.startswith('socket:[') and target[8:-1] in inodes:\n");
     prepare_script.push_str("                pids.add(int(pid))\n");
     prepare_script.push_str("                break\n");
     prepare_script.push_str("    return pids\n");
@@ -12874,7 +13105,9 @@ fn build_inrou_user_data(
     prepare_script.push_str("        if pid == 1:\n");
     prepare_script.push_str("            continue\n");
     prepare_script.push_str("        try:\n");
-    prepare_script.push_str("            comm = open(f'/proc/{pid}/comm', encoding='utf-8').read().strip()\n");
+    prepare_script.push_str(
+        "            comm = open(f'/proc/{pid}/comm', encoding='utf-8').read().strip()\n",
+    );
     prepare_script.push_str("        except OSError:\n");
     prepare_script.push_str("            comm = 'unknown'\n");
     prepare_script.push_str("        print(f'Inrou prepare: terminating {comm} pid {pid} on port {port}', flush=True)\n");
@@ -13178,8 +13411,7 @@ fn copy_inrou_guest_image_member(
 ) -> eyre::Result<()> {
     let destination = bundle_root.join(strip_leading_slashes(declared_path));
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).wrap_err_with(|| format!("create {}", parent.display()))?;
     }
     fs::copy(source, &destination).wrap_err_with(|| {
         format!(
@@ -13540,9 +13772,7 @@ fn parse_sorafs_manifest_digest_hex(raw: &str) -> eyre::Result<[u8; 32]> {
     })
 }
 
-fn storage_file_dto_layout(
-    file: &StorageStoredFileDto,
-) -> eyre::Result<SorafsHydratedFileLayout> {
+fn storage_file_dto_layout(file: &StorageStoredFileDto) -> eyre::Result<SorafsHydratedFileLayout> {
     Ok(SorafsHydratedFileLayout {
         path: file.path.clone(),
         offset: file.offset,
@@ -13589,8 +13819,7 @@ fn materialize_sorafs_payload_files(
         }
         let target = sorafs_hydrated_file_target(target_root, &file.path)?;
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .wrap_err_with(|| format!("create {}", parent.display()))?;
+            fs::create_dir_all(parent).wrap_err_with(|| format!("create {}", parent.display()))?;
         }
         write_bytes_atomic(&target, &payload[start..end])
             .wrap_err_with(|| format!("write {}", target.display()))?;
@@ -16128,10 +16357,8 @@ mod tests {
         config.inrou.proxy_only = true;
         config.inrou.max_concurrent_vms =
             std::num::NonZeroUsize::new(7).expect("nonzero inrou vm limit");
-        config = config.with_local_host_identity(
-            ALICE_ID.clone(),
-            "12D3KooWProxyOnlyRuntimeHostAdvert",
-        );
+        config =
+            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWProxyOnlyRuntimeHostAdvert");
         let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
 
         assert_eq!(manager.hosted_http_concurrency_limit(), 0);
@@ -19193,30 +19420,30 @@ mod tests {
             world
                 .soracloud_inrou_service_placements_mut_for_testing()
                 .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
-                        schema_version:
-                            iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                        service_name: bundle.service.service_name.clone(),
-                        service_version: bundle.service.service_version.clone(),
-                        desired_replica_count: bundle.service.replicas.get(),
-                        eligible_validator_count: 1,
-                        placements: vec![SoraInrouReplicaPlacementV1 {
-                            replica_slot: 1,
-                            validator_account_id: ALICE_ID.clone(),
-                            peer_id: local_peer_id.to_owned(),
-                            selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
-                            selected_guest_isa: current_host_inrou_guest_isa(),
-                            selected_geography_tag: None,
-                            selection_latency_ms: None,
-                        }],
-                        reconciled_at_ms: 1,
-                        last_error: None,
-                    },
-                );
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    service_version: bundle.service.service_version.clone(),
+                    desired_replica_count: bundle.service.replicas.get(),
+                    eligible_validator_count: 1,
+                    placements: vec![SoraInrouReplicaPlacementV1 {
+                        replica_slot: 1,
+                        validator_account_id: ALICE_ID.clone(),
+                        peer_id: local_peer_id.to_owned(),
+                        selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+                        selected_guest_isa: current_host_inrou_guest_isa(),
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
+                    }],
+                    reconciled_at_ms: 1,
+                    last_error: None,
+                },
+            );
         }
 
         let temp_dir = tempfile::tempdir()?;
@@ -19233,9 +19460,11 @@ mod tests {
         assert_eq!(capabilities.len(), 1);
         assert!(capabilities[0].capability.proxy_only);
         assert_eq!(capabilities[0].capability.max_hosted_replica_capacity, 0);
-        assert!(mutation_sink
-            .submitted_inrou_replica_runtime_states()
-            .is_empty());
+        assert!(
+            mutation_sink
+                .submitted_inrou_replica_runtime_states()
+                .is_empty()
+        );
         let snapshot = manager.snapshot.read().clone();
         let plan = snapshot
             .services
@@ -20998,17 +21227,28 @@ mod tests {
             test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
             BTreeMap::new(),
         );
+        let secret_error = public_host
+            .require_private_runtime(SYSCALL_SORACLOUD_READ_SECRET)
+            .expect_err("public handlers cannot read secrets");
+        assert_eq!(secret_error.metered_gas(), Some(ivm::gas::G_SORACLOUD));
         assert!(matches!(
-            public_host.require_private_runtime(SYSCALL_SORACLOUD_READ_SECRET),
-            Err(VMError::NotImplemented {
+            secret_error.as_unmetered(),
+            VMError::NotImplemented {
                 syscall: SYSCALL_SORACLOUD_READ_SECRET
-            })
+            }
         ));
+        let credential_error = public_host
+            .require_private_runtime(SYSCALL_SORACLOUD_READ_CREDENTIAL)
+            .expect_err("public handlers cannot read credentials");
+        assert_eq!(
+            credential_error.metered_gas(),
+            Some(ivm::gas::G_SORACLOUD)
+        );
         assert!(matches!(
-            public_host.require_private_runtime(SYSCALL_SORACLOUD_READ_CREDENTIAL),
-            Err(VMError::NotImplemented {
+            credential_error.as_unmetered(),
+            VMError::NotImplemented {
                 syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL
-            })
+            }
         ));
         Ok(())
     }
@@ -21121,8 +21361,7 @@ mod tests {
         let metadata_bytes = norito::to_bytes(&metadata_json).expect("metadata norito bytes");
         let metadata_tlv = make_pointer_tlv(PointerType::Json, &metadata_bytes);
 
-        let inputs =
-            local_read_public_inputs(&body_tlv, &metadata_tlv, 42).expect("public inputs");
+        let inputs = local_read_public_inputs(&body_tlv, &metadata_tlv, 42).expect("public inputs");
         let trigger_event_tlv = inputs
             .get(&public_input_name("trigger_event_json").expect("input name"))
             .expect("trigger event public input");
@@ -21295,6 +21534,47 @@ mod tests {
     }
 
     #[test]
+    fn resolve_inrou_allowlist_endpoints_deduplicates_ipv4_entries() -> Result<()> {
+        let endpoints = resolve_inrou_allowlist_endpoints(&[
+            SoraNetworkAllowlistEntryV1::new(" 127.0.0.1 ", [443, 443]),
+            SoraNetworkAllowlistEntryV1::new("127.0.0.1", [443]),
+        ])?;
+
+        assert_eq!(
+            endpoints,
+            vec![InrouTapResolvedAllowlistEndpoint {
+                host: "127.0.0.1".to_owned(),
+                address: "127.0.0.1".parse().expect("valid IPv4"),
+                port: 443,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_inrou_allowlist_endpoints_rejects_ipv6_only_literals() {
+        let error =
+            resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new("::1", [443])])
+                .expect_err("IPv6-only allowlist entries should fail closed");
+        let message = error.to_string();
+        assert!(message.contains("no IPv4 endpoints"));
+        assert!(message.contains("::1"));
+    }
+
+    #[test]
+    fn resolve_inrou_allowlist_endpoints_rejects_empty_port_lists() {
+        let error = resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
+            "127.0.0.1",
+            Vec::<u16>::new(),
+        )])
+        .expect_err("allowlist entries without ports should fail closed");
+        let message = error.to_string();
+        assert!(message.contains("no IPv4 endpoints"));
+        assert!(message.contains("127.0.0.1"));
+        assert!(message.contains("[]"));
+    }
+
+    #[test]
     fn inrou_tap_firewall_plan_rejects_allowlist_without_ipv4_endpoints() {
         let error = inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
             SoraNetworkAllowlistEntryV1::new("::1", [443]),
@@ -21323,23 +21603,51 @@ mod tests {
                 },
             ]),
         );
-        assert_eq!(rules.len(), 6);
+        assert_eq!(rules.len(), 8);
         assert_eq!(
             rules[0].context,
             "install Inrou shared-storage ingress rule"
         );
         assert_eq!(rules[1].context, "install Inrou egress masquerade rule");
-        assert_eq!(rules[2].context, "install Inrou return-traffic rule");
+        assert_eq!(
+            rules[2].context,
+            "install Inrou established host-input rule"
+        );
         assert_eq!(
             rules[3].context,
+            "install Inrou host-input default-drop rule"
+        );
+        assert_eq!(rules[4].context, "install Inrou return-traffic rule");
+        assert_eq!(
+            rules[5].context,
             "install Inrou allowlist default-drop rule"
         );
-        assert_eq!(rules[4].context, "install Inrou allowlist forward rule");
-        assert_eq!(rules[5].context, "install Inrou allowlist forward rule");
-        assert_eq!(rules[4].args[8], "127.0.0.1");
-        assert_eq!(rules[4].args[10], "443");
-        assert_eq!(rules[5].args[8], "127.0.0.2");
-        assert_eq!(rules[5].args[10], "8443");
+        assert_eq!(rules[6].context, "install Inrou allowlist forward rule");
+        assert_eq!(rules[7].context, "install Inrou allowlist forward rule");
+        assert_eq!(rules[6].args[8], "127.0.0.1");
+        assert_eq!(rules[6].args[10], "443");
+        assert_eq!(rules[7].args[8], "127.0.0.2");
+        assert_eq!(rules[7].args[10], "8443");
+    }
+
+    #[test]
+    fn planned_inrou_tap_firewall_rules_allowlist_empty_keeps_default_drop() {
+        let rules = planned_inrou_tap_firewall_rules(
+            "irtest0",
+            "172.31.10.2/32",
+            &InrouTapFirewallPlan::Allowlist(Vec::new()),
+        );
+
+        assert_eq!(rules.len(), 6);
+        assert_eq!(
+            rules[5].context,
+            "install Inrou allowlist default-drop rule"
+        );
+        assert_eq!(rules[5].args[0], "-I");
+        assert_eq!(rules[5].args[1], "FORWARD");
+        assert_eq!(rules[5].args[4], "irtest0");
+        assert_eq!(rules[5].args[5], "-j");
+        assert_eq!(rules[5].args[6], "DROP");
     }
 
     #[test]
@@ -21349,13 +21657,59 @@ mod tests {
             "172.31.10.2/32",
             &InrouTapFirewallPlan::Isolated,
         );
-        assert_eq!(rules.len(), 1);
+        assert_eq!(rules.len(), 4);
         assert_eq!(
             rules[0].context,
             "install Inrou shared-storage ingress rule"
         );
         assert_eq!(rules[0].args[1], "INPUT");
-        assert_eq!(rules[0].args[7], "2049");
+        assert_eq!(rules[0].args[8], "2049");
+        assert_eq!(
+            rules[1].context,
+            "install Inrou established host-input rule"
+        );
+        assert_eq!(rules[1].args[1], "INPUT");
+        assert_eq!(
+            rules[2].context,
+            "install Inrou host-input default-drop rule"
+        );
+        assert_eq!(rules[2].args[1], "INPUT");
+        assert_eq!(rules[3].context, "install Inrou isolated forward-drop rule");
+        assert_eq!(rules[3].args[1], "FORWARD");
+        assert_eq!(rules[3].args[6], "DROP");
+    }
+
+    #[test]
+    fn planned_inrou_tap_firewall_rules_open_policy_keeps_return_path_before_forward_out() {
+        let rules = planned_inrou_tap_firewall_rules(
+            "irtest0",
+            "172.31.10.2/32",
+            &InrouTapFirewallPlan::Open,
+        );
+
+        assert_eq!(rules.len(), 6);
+        assert_eq!(
+            rules[0].context,
+            "install Inrou shared-storage ingress rule"
+        );
+        assert_eq!(rules[1].context, "install Inrou egress masquerade rule");
+        assert_eq!(
+            rules[2].context,
+            "install Inrou established host-input rule"
+        );
+        assert_eq!(
+            rules[3].context,
+            "install Inrou host-input default-drop rule"
+        );
+        assert_eq!(rules[4].context, "install Inrou return-traffic rule");
+        assert_eq!(rules[5].context, "install Inrou forward-out rule");
+        assert_eq!(rules[4].args[1], "FORWARD");
+        assert_eq!(rules[4].args[3], "-o");
+        assert_eq!(rules[4].args[4], "irtest0");
+        assert_eq!(rules[5].args[1], "FORWARD");
+        assert_eq!(rules[5].args[3], "-i");
+        assert_eq!(rules[5].args[4], "irtest0");
+        assert_eq!(rules[5].args[6], "ACCEPT");
     }
 
     #[test]
@@ -21717,6 +22071,67 @@ mod tests {
         assert!(args.contains("raw"));
         assert!(args.contains(base_rootfs_image_path.display().to_string().as_str()));
         assert!(args.contains(root_disk_path.display().to_string().as_str()));
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_root_disk_reuses_existing_overlay_without_qemu_img() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume");
+        let root_disk_path =
+            PathBuf::from(&root_volume.local_materialization_dir).join("rootfs.qcow2");
+        fs::create_dir_all(root_disk_path.parent().expect("root disk parent"))?;
+        fs::write(&root_disk_path, b"existing-overlay")?;
+
+        let qemu_img = temp_dir.path().join("qemu-img");
+        fs::write(&qemu_img, "#!/bin/sh\nexit 99\n")?;
+        fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
+        let missing_base_rootfs = temp_dir.path().join("missing-base-rootfs.ext4");
+
+        let reused = ensure_inrou_portable_root_disk(&qemu_img, &missing_base_rootfs, root_volume)?;
+
+        assert_eq!(reused, root_disk_path);
+        assert_eq!(fs::read(&reused)?, b"existing-overlay");
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_root_disk_rejects_base_larger_than_budget() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let base_rootfs_image_path = temp_dir.path().join("base-rootfs.ext4");
+        fs::write(&base_rootfs_image_path, b"larger-than-budget")?;
+        let mut root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume")
+            .clone();
+        root_volume.max_total_bytes = 4;
+        let qemu_img = temp_dir.path().join("missing-qemu-img");
+
+        let error =
+            ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, &root_volume)
+                .expect_err("oversized base rootfs should fail before qemu-img runs");
+
+        let message = error.to_string();
+        assert!(message.contains("exceeds root lease budget"));
+        assert!(message.contains(root_volume.volume_name.as_str()));
+        let root_disk_path =
+            PathBuf::from(&root_volume.local_materialization_dir).join("rootfs.qcow2");
+        assert!(
+            !root_disk_path.exists(),
+            "oversized base rootfs must not leave a qcow2 overlay behind"
+        );
         Ok(())
     }
 

@@ -4,11 +4,11 @@
   "schemas": [
     {
       "name": "ConnectJournalRecordV1",
-      "hash_hex": "bcf2f58a15121190bcf2f58a15121190"
+      "hash_hex": "94edb5aca5951d6089a2a6305326429e"
     },
     {
       "name": "iroha.android.transaction.Payload.v1",
-      "hash_hex": "6ed8e247a89bb3f46ed8e247a89bb3f4"
+      "hash_hex": "a10f147c098dab6591261e71d2a18d08"
     }
   ]
 }

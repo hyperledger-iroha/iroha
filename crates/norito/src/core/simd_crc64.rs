@@ -53,6 +53,12 @@ pub fn hardware_crc64(data: &[u8]) -> u64 {
 pub(super) const GPU_MIN_DEFAULT: usize = 192 * 1024;
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
 pub(super) static GPU_MIN_LEN: AtomicUsize = AtomicUsize::new(0);
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+static GPU_VALIDATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+const GPU_VALIDATE_INITIAL_CALLS: usize = 4;
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+const GPU_VALIDATE_INTERVAL: usize = 257;
 
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
 pub(super) fn gpu_min_len() -> usize {
@@ -97,6 +103,44 @@ fn try_gpu_crc64(data: &[u8]) -> Option<u64> {
         GpuBackend::Custom(lib) => unsafe { lib.compute(data) },
         GpuBackend::Unavailable => None,
     }
+    .and_then(|gpu| {
+        if should_validate_gpu_crc() {
+            let expected = crc64_fallback(data);
+            if gpu != expected {
+                *guard = GpuBackend::Unavailable;
+                return None;
+            }
+        }
+        Some(gpu)
+    })
+}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+fn should_validate_gpu_crc() -> bool {
+    let call = GPU_VALIDATE_CALLS
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    call <= GPU_VALIDATE_INITIAL_CALLS || call % GPU_VALIDATE_INTERVAL == 0
+}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+#[cfg(test)]
+fn reset_gpu_crc_validation_counter() {
+    GPU_VALIDATE_CALLS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+fn check_gpu_crc_sample(func: GpuFn, sample: &[u8]) -> Result<(), GpuSelfTestFailure> {
+    let expected = crc64_fallback(sample);
+    let mut actual = 0u64;
+    let rc = unsafe { func(sample.as_ptr(), sample.len(), &mut actual) };
+    if rc != 0 {
+        return Err(GpuSelfTestFailure::HelperError(rc));
+    }
+    if actual != expected {
+        return Err(GpuSelfTestFailure::Mismatch { expected, actual });
+    }
+    Ok(())
 }
 
 #[cfg(not(any(feature = "metal-crc64", feature = "cuda-crc64")))]
@@ -106,12 +150,14 @@ fn try_gpu_crc64(_data: &[u8]) -> Option<u64> {
 
 #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
 fn crc64_pclmul_runtime(data: &[u8]) -> u64 {
-    crc64_runtime_detect(data)
+    // SAFETY: selected only after `has_x86_accel` proves the required target features.
+    unsafe { crc64_pclmul(data) }
 }
 
 #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
 fn crc64_pmull_runtime(data: &[u8]) -> u64 {
-    crc64_runtime_detect(data)
+    // SAFETY: selected only after `has_aarch64_accel` proves the required target features.
+    unsafe { crc64_pmull(data) }
 }
 
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
@@ -156,18 +202,34 @@ fn gpu_crc64_self_test(func: GpuFn) -> Result<(), GpuSelfTestFailure> {
     const SAMPLES: &[&[u8]] = &[SAMPLE_A, SAMPLE_B, SAMPLE_C];
 
     for sample in SAMPLES {
-        let expected = crc64_fallback(sample);
-        let mut actual = 0u64;
-        let rc = unsafe { func(sample.as_ptr(), sample.len(), &mut actual) };
-        if rc != 0 {
-            return Err(GpuSelfTestFailure::HelperError(rc));
-        }
-        if actual != expected {
-            return Err(GpuSelfTestFailure::Mismatch { expected, actual });
-        }
+        check_gpu_crc_sample(func, sample)?;
+    }
+
+    for &len in &[
+        16 * 1024 - 1,
+        16 * 1024,
+        16 * 1024 + 1,
+        GPU_MIN_DEFAULT,
+        GPU_MIN_DEFAULT + 17,
+        512 * 1024 + 31,
+    ] {
+        let sample = gpu_crc_self_test_payload(len, len as u64 ^ 0x4e4f_5249_544f_4750);
+        check_gpu_crc_sample(func, &sample)?;
     }
 
     Ok(())
+}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+fn gpu_crc_self_test_payload(len: usize, mut seed: u64) -> Vec<u8> {
+    let mut out = vec![0u8; len];
+    for byte in &mut out {
+        seed ^= seed << 7;
+        seed ^= seed >> 9;
+        seed ^= seed << 8;
+        *byte = seed as u8;
+    }
+    out
 }
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), unix))]
@@ -291,7 +353,6 @@ unsafe fn load_metal_crc64() -> Option<GpuLib> {
     const RTLD_LAZY: c_int = 1;
     unsafe extern "C" {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
-        fn dlclose(handle: *mut c_void) -> c_int;
         fn objc_autoreleasePoolPush() -> *mut c_void;
         fn objc_autoreleasePoolPop(pool: *mut c_void);
     }
@@ -525,30 +586,55 @@ pub(super) fn reset_gpu_backend_for_tests() {
         *cache.lock().expect("crc64 gpu backend cache poisoned") = GpuBackend::Unavailable;
     }
     GPU_MIN_LEN.store(0, Ordering::Relaxed);
+    reset_gpu_crc_validation_counter();
 }
 
 #[cfg(feature = "simd-accel")]
 fn detect_best_impl() -> fn(&[u8]) -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
-        if has_x86_accel() {
+        if has_x86_accel() && crc64_candidate_matches_reference(crc64_pclmul_runtime) {
             return crc64_pclmul_runtime;
         }
     }
 
     #[cfg(target_arch = "aarch64")]
     {
-        if has_aarch64_accel() {
+        if has_aarch64_accel() && crc64_candidate_matches_reference(crc64_pmull_runtime) {
             return crc64_pmull_runtime;
         }
     }
 
-    crc64_fallback
+    crc64_runtime_detect
 }
 
 #[cfg(not(feature = "simd-accel"))]
 fn detect_best_impl() -> fn(&[u8]) -> u64 {
     crc64_fallback
+}
+
+#[cfg(feature = "simd-accel")]
+fn crc64_candidate_matches_reference(candidate: fn(&[u8]) -> u64) -> bool {
+    let mut large = vec![0u8; 8192];
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    for byte in &mut large {
+        seed ^= seed << 7;
+        seed ^= seed >> 9;
+        seed ^= seed << 8;
+        *byte = seed as u8;
+    }
+    for sample in [
+        &b""[..],
+        &b"123456789"[..],
+        &b"norito-crc64-simd-startup-check"[..],
+        &large[..],
+        &large[3..],
+    ] {
+        if candidate(sample) != crc64_fallback(sample) {
+            return false;
+        }
+    }
+    true
 }
 
 // Metal/CUDA accelerators are loaded dynamically from optional helper
@@ -1086,9 +1172,12 @@ mod tests {
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     use std::sync::atomic::Ordering;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
-    use std::{fs, path::PathBuf, process::Command};
+    use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 
     use super::*;
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg(feature = "simd-accel")]
     fn fallback_ptr() -> usize {
@@ -1183,6 +1272,7 @@ mod tests {
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     #[test]
     fn gpu_min_len_defaults_and_env_override() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
         unsafe { std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES") };
         GPU_MIN_LEN.store(0, Ordering::Relaxed);
         assert_eq!(gpu_min_len(), GPU_MIN_DEFAULT);
@@ -1195,6 +1285,21 @@ mod tests {
         unsafe {
             std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
         }
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc_validation_schedule_checks_initial_and_interval_calls() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
+        reset_gpu_crc_validation_counter();
+
+        for _ in 0..GPU_VALIDATE_INITIAL_CALLS {
+            assert!(should_validate_gpu_crc());
+        }
+        for _ in (GPU_VALIDATE_INITIAL_CALLS + 1)..GPU_VALIDATE_INTERVAL {
+            assert!(!should_validate_gpu_crc());
+        }
+        assert!(should_validate_gpu_crc());
     }
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
@@ -1214,6 +1319,20 @@ mod tests {
             return -1;
         }
         unsafe { *out = 0 };
+        0
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    unsafe extern "C" fn crc64_large_bad_stub(data: *const u8, len: usize, out: *mut u64) -> i32 {
+        if data.is_null() || out.is_null() {
+            return -1;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        let mut crc = crc64_fallback(bytes);
+        if len >= GPU_MIN_DEFAULT {
+            crc ^= 1;
+        }
+        unsafe { *out = crc };
         0
     }
 
@@ -1238,10 +1357,51 @@ mod tests {
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     #[test]
+    fn gpu_crc64_self_test_rejects_large_only_mismatch() {
+        let err = gpu_crc64_self_test(crc64_large_bad_stub)
+            .expect_err("crc64 helper with large-payload mismatch must fail self-test");
+        assert!(matches!(err, GpuSelfTestFailure::Mismatch { .. }));
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
     fn gpu_crc64_self_test_rejects_helper_errors() {
         let err = gpu_crc64_self_test(crc64_error_stub)
             .expect_err("crc64 helper with non-zero return code must fail self-test");
         assert_eq!(err, GpuSelfTestFailure::HelperError(7));
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc_sample_mismatch_falls_back_and_disables_backend() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
+        unsafe {
+            std::env::remove_var("NORITO_CRC64_GPU_LIB");
+            std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
+        }
+        reset_gpu_backend_for_tests();
+        GPU_MIN_LEN.store(1, Ordering::Relaxed);
+        {
+            let mut backend = gpu_backend()
+                .lock()
+                .expect("crc64 gpu backend cache poisoned");
+            *backend = GpuBackend::Custom(GpuLib {
+                handle: std::ptr::null_mut(),
+                func: crc64_bad_stub,
+            });
+        }
+
+        let payload = b"payload that cannot have a zero crc64";
+        reset_gpu_crc_validation_counter();
+        assert_eq!(try_gpu_crc64(payload), None);
+        assert!(matches!(
+            *gpu_backend()
+                .lock()
+                .expect("crc64 gpu backend cache poisoned"),
+            GpuBackend::Unavailable
+        ));
+
+        reset_gpu_backend_for_tests();
     }
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
@@ -1302,6 +1462,7 @@ mod tests {
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     #[test]
     fn gpu_crc64_can_load_env_stub() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
         let tmp_dir =
             std::env::temp_dir().join(format!("norito_crc64_stub_{}", std::process::id()));
         let lib_path = build_crc64_stub(&tmp_dir);
