@@ -933,9 +933,8 @@ impl Actor {
             .max(self.frontier_slot_lag_window())
             .max(Duration::from_millis(1));
         let hard_yield_age = min_yield_age.saturating_mul(3);
-        let owner_commit_qc_cached = self
-            .cached_commit_qc_for_block(owner_hash, height, owner_view)
-            .is_some();
+        let owner_qc_observed =
+            self.same_height_block_has_observed_qc(owner_hash, height, owner_view);
         let owner_slot_evidence = self
             .frontier_slot
             .as_ref()
@@ -991,8 +990,7 @@ impl Actor {
             if let Some((owner_age, frontier_commit_qc_observed, competing_quorum_locked)) =
                 owner_slot_evidence
             {
-                let protected_owner = owner_commit_qc_cached
-                    || frontier_commit_qc_observed
+                let protected_owner = owner_qc_observed
                     || local_vote_consensus_locked
                     || competing_quorum_locked
                     || commit_inflight_live;
@@ -1001,9 +999,8 @@ impl Actor {
                 let stale_unprotected_owner = owner_age >= min_yield_age && !protected_owner;
                 let recovery_exhausted = owner_age >= hard_yield_age;
                 if (stale_unprotected_owner || recovery_exhausted)
-                    && !owner_commit_qc_cached
+                    && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
-                    && (!frontier_commit_qc_observed || recovery_exhausted)
                     && !local_vote_consensus_locked
                     && !commit_inflight_live
                 {
@@ -1047,7 +1044,7 @@ impl Actor {
                     owner_slot_present = owner_slot_evidence.is_some(),
                     owner_slot_age_ms = ?owner_slot_evidence.map(|(age, _, _)| age.as_millis()),
                     hard_yield_age_ms = hard_yield_age.as_millis(),
-                    owner_commit_qc_cached,
+                    owner_qc_observed,
                     owner_pending_commit_qc_observed,
                     local_vote_consensus_locked,
                     commit_inflight_live,
@@ -1085,7 +1082,7 @@ impl Actor {
                 )
             });
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
-        if owner_commit_qc_cached
+        if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
             || ((local_vote_blocks || competing_quorum_locked) && !recovery_exhausted)
@@ -1108,7 +1105,7 @@ impl Actor {
                     min_yield_age_ms = min_yield_age.as_millis(),
                     hard_yield_age_ms = hard_yield_age.as_millis(),
                     recovery_exhausted,
-                    owner_commit_qc_cached,
+                    owner_qc_observed,
                     frontier_commit_qc_observed,
                     frontier_commit_qc_blocks_yield,
                     local_vote_consensus_locked,
@@ -1196,13 +1193,32 @@ impl Actor {
     ) -> bool {
         self.locked_qc
             .is_some_and(|locked| locked.height >= proposal_height)
+            || self.same_height_block_has_observed_qc(
+                existing_vote.block_hash,
+                proposal_height,
+                existing_vote.view,
+            )
+    }
+
+    fn same_height_block_has_observed_qc(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.pending_block_has_qc(block_hash, height, view)
             || self
-                .cached_commit_qc_for_block(
-                    existing_vote.block_hash,
-                    proposal_height,
-                    existing_vote.view,
-                )
-                .is_some()
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .filter(|pending| pending.height == height && pending.view == view)
+                .is_some_and(PendingBlock::commit_qc_observed)
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view == view
+                    && slot.block_hash == block_hash
+                    && slot.quorum_progress.commit_qc_observed
+            })
     }
 
     fn local_same_height_vote_has_hard_lock(
@@ -1241,6 +1257,19 @@ impl Actor {
             .map(|state| now.saturating_duration_since(state.entered_at))
     }
 
+    fn same_height_vote_recovery_view_gap_exhausted(
+        &self,
+        subject_view: u64,
+        proposal_view: u64,
+        total_validators: usize,
+    ) -> bool {
+        let view_gap = proposal_view.saturating_sub(subject_view);
+        let min_view_gap = u64::try_from(total_validators.saturating_mul(8))
+            .unwrap_or(u64::MAX)
+            .max(8);
+        view_gap >= min_view_gap
+    }
+
     pub(super) fn local_same_height_vote_blocks_fresh_proposal(
         &self,
         proposal_height: u64,
@@ -1269,7 +1298,12 @@ impl Actor {
         let hard_stale_age = min_stale_age.saturating_mul(3);
         let recovery_exhausted = self
             .stale_same_height_recovery_age(proposal_height, existing_vote.view, now)
-            .is_some_and(|age| age >= hard_stale_age);
+            .is_some_and(|age| age >= hard_stale_age)
+            || self.same_height_vote_recovery_view_gap_exhausted(
+                existing_vote.view,
+                proposal_view,
+                self.effective_commit_topology().len(),
+            );
         if let Some(pending) = self
             .pending
             .pending_blocks
@@ -1384,27 +1418,58 @@ impl Actor {
         if let Some(lock) =
             self.same_height_vote_lock_blocking_candidate(proposal_height, view, None)
         {
-            let _ = self.seed_frontier_slot_from_same_height_evidence(
-                proposal_height,
-                view,
-                now,
-                "vote_locked_same_height",
-                false,
-            );
-            warn!(
-                height = proposal_height,
-                view,
-                epoch = proposal_epoch,
-                locked_block = %lock.block_hash,
-                locked_view = lock.view,
-                locked_votes = lock.vote_count,
-                conflicting_voters = lock.conflicting_voters,
-                candidate_possible_votes = lock.candidate_possible_votes,
-                required = lock.required,
-                total_validators = lock.total_validators,
-                "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
-            );
-            return Ok(false);
+            let min_stale_age = self
+                .quorum_timeout(self.runtime_da_enabled())
+                .max(self.frontier_slot_lag_window())
+                .max(Duration::from_millis(1));
+            let hard_stale_age = min_stale_age.saturating_mul(3);
+            let recovery_exhausted = self
+                .stale_same_height_recovery_age(proposal_height, lock.view, now)
+                .is_some_and(|age| age >= hard_stale_age)
+                || self.same_height_vote_recovery_view_gap_exhausted(
+                    lock.view,
+                    view,
+                    lock.total_validators,
+                );
+            let qc_observed =
+                self.same_height_block_has_observed_qc(lock.block_hash, proposal_height, lock.view);
+            if recovery_exhausted && !qc_observed {
+                info!(
+                    height = proposal_height,
+                    view,
+                    epoch = proposal_epoch,
+                    locked_block = %lock.block_hash,
+                    locked_view = lock.view,
+                    locked_votes = lock.vote_count,
+                    conflicting_voters = lock.conflicting_voters,
+                    candidate_possible_votes = lock.candidate_possible_votes,
+                    required = lock.required,
+                    total_validators = lock.total_validators,
+                    "allowing fresh proposal after exhausted same-height vote lock without QC"
+                );
+            } else {
+                let _ = self.seed_frontier_slot_from_same_height_evidence(
+                    proposal_height,
+                    view,
+                    now,
+                    "vote_locked_same_height",
+                    false,
+                );
+                warn!(
+                    height = proposal_height,
+                    view,
+                    epoch = proposal_epoch,
+                    locked_block = %lock.block_hash,
+                    locked_view = lock.view,
+                    locked_votes = lock.vote_count,
+                    conflicting_voters = lock.conflicting_voters,
+                    candidate_possible_votes = lock.candidate_possible_votes,
+                    required = lock.required,
+                    total_validators = lock.total_validators,
+                    "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
+                );
+                return Ok(false);
+            }
         }
         if let Some(existing_vote) = self.local_same_height_vote(proposal_height, proposal_epoch) {
             if !self.local_same_height_vote_blocks_fresh_proposal(
@@ -3118,6 +3183,17 @@ impl Actor {
         let topology_peers = self.roster_for_live_vote_with_mode(tracked_height, consensus_mode);
         let active_topology_peers = topology_peers.clone();
         let tracked_view = self.phase_tracker.current_view(tracked_height).unwrap_or(0);
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let frontier_proposal_ingress_deferring = self.config.resilience.enabled
+            && tracked_height == committed_height.saturating_add(1)
+            && tracked_view > 0
+            && self.frontier_proposal_ingress_defer_active(
+                tracked_height,
+                tracked_view,
+                now,
+                queue_depths,
+                self.frontier_ingress_drain_grace(self.runtime_da_enabled()),
+            );
         if self.proposal_gated_by_missing_dependencies(tracked_height)
             && !allow_dependency_gated_reproposal
         {
@@ -3431,6 +3507,25 @@ impl Actor {
                     }
                 }
             }
+        }
+
+        if candidate.is_none() && frontier_proposal_ingress_deferring {
+            self.maybe_rebroadcast_new_view_votes(tracked_height, now);
+            self.subsystems.propose.pacemaker.next_deadline = now
+                .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+                .unwrap_or(now);
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                committed_height,
+                queue_len = pending_queue_len,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "deferring committed-QC frontier fallback while proposal ingress drains"
+            );
+            return false;
         }
 
         if candidate.is_none()
@@ -3984,6 +4079,36 @@ impl Actor {
         if height == self.committed_height_snapshot().saturating_add(1) && view_idx > 0 {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             if Self::frontier_consensus_ingress_queued(queue_depths) {
+                if self.frontier_proposal_ingress_defer_active(
+                    height,
+                    view_idx,
+                    now,
+                    queue_depths,
+                    self.frontier_ingress_drain_grace(da_enabled),
+                ) {
+                    self.subsystems.propose.pacemaker.next_deadline = now
+                        .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+                        .unwrap_or(now);
+                    debug!(
+                        height,
+                        view = view_idx,
+                        vote_rx_depth = queue_depths.vote_rx,
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                        block_rx_depth = queue_depths.block_rx,
+                        queue_len = pending_queue_len,
+                        "deferring fresh frontier proposal while proposal ingress drains"
+                    );
+                    self.warn_resilience_frontier_proposal_deferred(
+                        height,
+                        view_idx,
+                        "proposal_ingress_draining",
+                        highest_qc,
+                        pending_queue_len,
+                        now,
+                    );
+                    return false;
+                }
                 let view_age = self.phase_tracker.view_age(height, now).unwrap_or_default();
                 let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
                 let proposal_starved =
