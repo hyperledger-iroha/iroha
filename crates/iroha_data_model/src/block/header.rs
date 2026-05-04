@@ -73,11 +73,6 @@ mod model {
         /// Optional hash covering previous-height roster evidence embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
         pub prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
-        /// Optional hash covering durable execution context embedded in the block payload.
-        #[getset(get_copy = "pub", set = "pub")]
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
-        pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
         /// Optional SCCP commitment root finalized in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub sccp_commitment_root: Option<[u8; 32]>,
@@ -90,6 +85,11 @@ mod model {
         /// Optional digest advertising the confidential feature set applied in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub confidential_features: Option<ConfidentialFeatureDigest>,
+        /// Optional hash covering durable execution context embedded in the block payload.
+        #[getset(get_copy = "pub", set = "pub")]
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     }
 
     /// The validator index and its corresponding signature on the block header.
@@ -712,11 +712,12 @@ mod tests {
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
-        codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
+        codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
 
     use super::*;
+    use crate::block::ExternalExecutionContext;
 
     struct SamplePayload {
         payload: Vec<u8>,
@@ -1025,6 +1026,54 @@ mod tests {
             base,
             header.hash(),
             "omitting execution context must preserve the legacy header hash"
+        );
+    }
+
+    #[test]
+    fn header_decodes_legacy_payload_without_execution_context_hash() {
+        #[derive(norito::codec::Encode)]
+        struct LegacyBlockHeader {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
+            da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
+            da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
+            da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            sccp_commitment_root: Option<[u8; 32]>,
+            creation_time_ms: u64,
+            view_change_index: u64,
+            confidential_features: Option<ConfidentialFeatureDigest>,
+        }
+
+        let legacy = LegacyBlockHeader {
+            height: nonzero!(7_u64),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
+            sccp_commitment_root: Some([0x42; 32]),
+            creation_time_ms: 123,
+            view_change_index: 2,
+            confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
+        };
+        let bytes = legacy.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded =
+            BlockHeader::decode_all(&mut cursor).expect("decode legacy BlockHeader payload");
+
+        assert_eq!(decoded.height(), nonzero!(7_u64));
+        assert_eq!(decoded.execution_context_hash(), None);
+        assert_eq!(decoded.sccp_commitment_root(), Some([0x42; 32]));
+        assert_eq!(decoded.creation_time(), Duration::from_millis(123));
+        assert_eq!(decoded.view_change_index(), 2);
+        assert_eq!(
+            decoded.confidential_features(),
+            Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
         );
     }
 

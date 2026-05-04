@@ -2234,6 +2234,7 @@ mod chained {
                 );
                 builder = builder.with_da_proof_policies(Some(default_policies));
             }
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
                 let default_context = builder
                     .0
@@ -11548,7 +11549,7 @@ pub(crate) mod valid {
 
             let err = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
+                match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
                     &state.chain_id,
@@ -11558,8 +11559,10 @@ pub(crate) mod valid {
                     &time_source,
                     false,
                     false,
-                )
-                .expect_err("live block without execution context must be rejected")
+                ) {
+                    Ok(_) => panic!("live block without execution context must be rejected"),
+                    Err(err) => err,
+                }
             };
             assert!(matches!(
                 err,
@@ -11616,7 +11619,7 @@ pub(crate) mod valid {
 
             let err = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
+                match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
                     &state.chain_id,
@@ -11626,8 +11629,12 @@ pub(crate) mod valid {
                     &time_source,
                     false,
                     false,
-                )
-                .expect_err("live block with mismatched execution context must be rejected")
+                ) {
+                    Ok(_) => {
+                        panic!("live block with mismatched execution context must be rejected")
+                    }
+                    Err(err) => err,
+                }
             };
             assert!(matches!(
                 err,

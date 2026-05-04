@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -135,10 +135,20 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Targeted follow-ups
 
-- Extend Kura replay parity coverage beyond the new committed execution context checks.
-  - Add a multi-block replay fixture that replays committed blocks into a fresh state and compares `canonical_state_snapshot_bytes_for_tests(...)` against the originally committed WSV.
-  - Include route-sensitive asset, alias, and domain-owned state surfaces without relying on environment toggles or sidecars.
-  - Keep the fixture on the replay-specific validation entrypoint so legacy blocks without embedded context remain covered separately from newly proposed blocks.
+- Broaden Kura replay determinism beyond the focused unit corridor.
+  - Add a real 4-peer restart integration test that commits route-sensitive
+    asset, account, alias, and domain-owned state, rebuilds from Kura, and
+    compares canonical WSV snapshot bytes across the restarted peers.
+  - Add golden old-block Norito fixtures produced by a pre-context binary,
+    rather than only synthesized absent-field decode tests.
+  - Profile the post-commit canonical WSV checkpoint hash under sustained load
+    and either record the accepted overhead or replace it with a cheaper
+    committed state-root path.
+  - Decide whether a failed post-commit WSV checkpoint write should escalate the
+    peer immediately after the block is committed, instead of only logging and
+    failing later replay.
+  - If operators need a network-authenticated replay proof, promote the WSV root
+    from a local Kura sidecar into block-committed or certificate-bound metadata.
 - Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.
   - Add an integration test proving a user-signed enable/disable update can mutate the subscription NFT created by onboarding.
   - If a non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.
