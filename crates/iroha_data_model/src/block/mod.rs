@@ -53,11 +53,14 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
 pub mod builder;
 #[doc = "Consensus message types shared by Sumeragi implementations."]
 pub mod consensus;
+#[doc = "Durable execution context committed by block headers."]
+pub mod execution_context;
 #[doc = "Block header structures and helpers."]
 pub mod header;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 
+pub use execution_context::{BlockExecutionContextBundle, ExternalExecutionContext};
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 
@@ -120,6 +123,7 @@ impl SignedBlock {
                 header,
                 transactions,
                 external_entrypoints,
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -151,6 +155,7 @@ impl SignedBlock {
                 header,
                 transactions,
                 external_entrypoints,
+                execution_context: None,
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -467,6 +472,7 @@ impl SignedBlock {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
@@ -483,6 +489,7 @@ impl SignedBlock {
             header,
             transactions,
             external_entrypoints: external_entrypoints.clone(),
+            execution_context: None,
             da_commitments: None,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
@@ -1279,7 +1286,7 @@ mod tests {
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
-        nexus::LaneId,
+        nexus::{DataSpaceId, LaneId},
         query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
         sorafs::pin_registry::ManifestDigest,
         transaction::{TransactionBuilder, signed::TransactionEntrypoint},
@@ -1307,6 +1314,34 @@ mod tests {
     }
 
     #[test]
+    fn block_payload_ordering_includes_execution_context() {
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let payload = BlockPayload {
+            header,
+            transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
+            execution_context: None,
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            previous_roster_evidence: None,
+        };
+        let mut with_context = payload.clone();
+        with_context.execution_context = Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                    [0xC7; Hash::LENGTH],
+                )),
+                LaneId::new(1),
+                DataSpaceId::new(2),
+            ),
+        ]));
+
+        assert_ne!(payload, with_context);
+        assert_ne!(payload.cmp(&with_context), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
     fn signed_block_is_empty_without_entrypoints_or_artifacts() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let block = SignedBlock {
@@ -1315,6 +1350,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1341,6 +1377,7 @@ mod tests {
                 header,
                 transactions: vec![tx.clone()],
                 external_entrypoints: vec![entrypoint.clone()],
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1384,6 +1421,7 @@ mod tests {
             header,
             transactions: Vec::new(),
             external_entrypoints: Vec::new(),
+            execution_context: None,
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
@@ -1448,6 +1486,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1468,6 +1507,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1490,6 +1530,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1532,6 +1573,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
             sccp_commitment_root: None,
             creation_time_ms: 123_456_789_000,
             view_change_index: 123,
@@ -1582,6 +1624,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1637,6 +1680,7 @@ mod tests {
                 header,
                 transactions: vec![tx.clone()],
                 external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1680,6 +1724,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1725,6 +1770,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1763,6 +1809,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1798,6 +1845,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1862,6 +1910,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1946,6 +1995,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1978,6 +2028,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -2008,6 +2059,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -2042,6 +2094,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -2118,6 +2171,7 @@ mod tests {
                 header,
                 transactions: Vec::new(),
                 external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,

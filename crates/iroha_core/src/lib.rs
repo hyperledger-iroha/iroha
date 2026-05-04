@@ -312,8 +312,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::RbcInitRequest(_)
                 | BlockMessage::RbcChunkRequest(_)
                 | BlockMessage::RbcInit(_)
-                | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
                 | BlockMessage::ConsensusParams(_)
                 | BlockMessage::KuraReplicaAdvert(_)
                 | BlockMessage::ExecWitness(_)
@@ -326,7 +324,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::BlockBodyResponse(_) => {
                     T::ConsensusPayload
                 }
-                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
+                BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_)
+                | BlockMessage::RbcReady(_)
+                | BlockMessage::RbcDeliver(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
@@ -850,7 +851,7 @@ mod tests {
         let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcReady(ready),
         )));
-        assert_eq!(ready_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(ready_msg.topic(), NetworkTopic::ConsensusChunk);
 
         let deliver = RbcDeliver {
             block_hash,
@@ -866,7 +867,7 @@ mod tests {
         let deliver_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::RbcDeliver(deliver),
         )));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::Consensus);
+        assert_eq!(deliver_msg.topic(), NetworkTopic::ConsensusChunk);
     }
 
     #[test]

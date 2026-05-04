@@ -9947,21 +9947,29 @@ pub mod isi {
             ) {
                 Some(owner) if owner == *authority => false,
                 Some(owner) => {
-                    return Err(InstructionExecutionError::InvariantViolation(
+                    if state_transaction.replay_compatibility {
+                        false
+                    } else {
+                        return Err(InstructionExecutionError::InvariantViolation(
                         format!(
                             "active SNS domain-name lease for `{canonical_id}` is owned by `{owner}`, not `{authority}`"
                         )
                         .into(),
                     ));
+                    }
                 }
                 None if bootstrap_domain_name_lease => true,
                 None => {
-                    return Err(InstructionExecutionError::InvariantViolation(
+                    if state_transaction.replay_compatibility {
+                        false
+                    } else {
+                        return Err(InstructionExecutionError::InvariantViolation(
                         format!(
                             "active SNS domain-name lease is required before registering `{canonical_id}`"
                         )
                         .into(),
                     ));
+                    }
                 }
             };
             let selector =
@@ -12420,6 +12428,37 @@ pub mod isi {
             assert!(
                 err.to_string().contains("active SNS domain-name lease"),
                 "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn replay_allows_legacy_domain_registration_without_active_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            {
+                let mut block_hashes = state.block_hashes.block();
+                block_hashes.push_for_tests(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::prehashed([0x51; Hash::LENGTH]),
+                    ),
+                );
+                block_hashes.commit_for_tests();
+            }
+            let block = new_dummy_block_non_genesis();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.replay_compatibility = true;
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased", "world").expect("domain");
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("replay must preserve legacy committed domain registration");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain should be stored during replay"
             );
         }
 

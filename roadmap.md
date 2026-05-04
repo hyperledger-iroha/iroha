@@ -59,6 +59,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     dir. The stale IVM/Kotodama, Space Directory, lane commitment, Norito
     instruction, and streaming RANS fixtures uncovered by those targets have
     been regenerated.
+    The full `core_api` target is green again as of 2026-05-04 after repairing
+    private-entrypoint hash handling and widening the slow asset/sealed-reveal
+    liveness paths (`171` passed, `4` ignored).
   - Broader `cargo test --workspace` remains for an uncontended validation
     window.
 - Carry the RAM-LFE API/proof hardening through the remaining signing and clean
@@ -301,10 +304,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
     stale OpenAPI manifest-signature suppression in generated version indexes;
     `versions.json` has been refreshed in explicit unsigned mode pending the
     operator signature.
-  - Keep the broader `cargo test --workspace` corridor open. The static
-    OpenAPI JSON and version index are refreshed in explicit unsigned mode; an
-    operator still needs to regenerate the manifest with the OpenAPI signing
-    key or detached signature envelope.
+  - Keep the broader `cargo test --workspace` corridor open. The repaired
+    `events_and_triggers`, `queries_and_proofs`, `nexus_and_streaming`,
+    unstable-network, and `core_api` targets are green individually as of
+    2026-05-04. The Sora governance runtime-upgrade path now hashes prepared
+    transaction entrypoints from the actual canonical signed payload bytes and
+    confirms Torii status with explicit auto scope, but the full workspace
+    command still needs an uncontended end-to-end pass. The static OpenAPI JSON
+    and version index are refreshed in explicit unsigned mode; an operator
+    still needs to regenerate the manifest with the OpenAPI signing key or
+    detached signature envelope.
 - Carry the Torii exposure-hardening slice through the next clean Cargo
   validation corridor.
   - `cargo fmt --all` and `cargo check -p iroha_config -p iroha_torii` are
@@ -501,9 +510,47 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Ed25519/Curve25519 parse and verification, Norito transaction/transfer
     encode/decode, metadata hashing, allocation/copy traffic, and SHA-256/CRC64
     helpers. A first queue-lock slice now releases `push_remove_lock` before
-    post-enqueue backpressure/gossip/event/wake side effects; rerun the release
-    20k gate/profile after the host is no longer contended before treating it
-    as a throughput win.
+    post-enqueue backpressure/gossip/event/wake side effects. The follow-up
+    bottleneck fix repairs the post-queue-lock execution-context mismatch,
+    moves RBC READY/DELIVER traffic onto the consensus-chunk lane, gives chunk
+    traffic a turn after each high-priority payload frame, caches prepared
+    metadata JSON depth, and keeps prepared metadata depth checks on the
+    static-validation hot path. The clean rebuilt
+    `20k TPS` / `120s` `fastpq-gpu` gate at
+    `dist/izanami-prebuilt-20k-fastpq-gpu-bottleneckfix-120s-20260504-183724`
+    accepted and succeeded all `2,400,000` submissions with no safety failures
+    and reached `37,000` strict-approved transactions at height `11`, but queue
+    saturation remained (`854,344 / 2,400,000`). The matching sampled profile at
+    `dist/izanami-profile-20k-fastpq-gpu-bottleneckfix-peer-sampled-30s-20260504-184154`
+    shows no scalar FASTPQ/Poseidon fallback; the next bottlenecks are block
+    validation and serialization costs: Ed25519/Curve25519 verification math,
+    Norito compact-length and transaction/transfer encode/decode,
+    allocator/reallocation and copy traffic, SHA-256/Blake2/CRC64 helpers,
+    `resolve_streaming_metadata`, and pipeline access/overlay preparation.
+    A final prepared-hash cleanup after that profile avoids temporary
+    signed-transaction byte vectors while preparing hashes/lengths and reuses
+    prepared payload/signed hashes in validation cache and signature-batch
+    paths. The current-code `20k TPS` / `120s` rerun at
+    `dist/izanami-prebuilt-20k-fastpq-gpu-return-current-120s-20260504-194602`
+    covered that cleanup: Izanami exited `0`, accepted and succeeded all
+    `2,400,000` submissions, recorded no safety failures, and had submit
+    latency `p50=6ms`, `p95=21ms`, `p99=99ms`, `max=269ms`. Strict progress
+    was lower than the previous gate at `32,956` approved transactions at
+    height `10`, with queue saturation still high (`883,791 / 2,400,000`) and
+    commit-pipeline EMA `592ms`. Treat the 20k ingress path as restored; the
+    committed-throughput target still needs the next validation/serialization
+    hotspot pass. The fresh current-code profiles refine that target: the
+    immediate `30s` sample at
+    `dist/izanami-profile-20k-fastpq-gpu-current-peer-sampled-30s-20260504-195325`
+    shows FASTPQ Metal pipeline creation still happens on the first proof hot
+    path, while the delayed post-warm `60s` sample at
+    `dist/izanami-profile-20k-fastpq-gpu-current-peer-postwarm-sampled-60s-20260504-195720`
+    moves the steady-state bottleneck back to validation and serialization.
+    Prioritize moving Metal context/pipeline preflight out of the first proof,
+    then reduce Ed25519/public-key parse and verify work, Norito transaction and
+    transfer encode/decode/length accounting, allocation/copy churn, and
+    queue-admission/world-view preparation. Do not spend the next pass on
+    scalar FASTPQ/Poseidon fallback unless a later profile reintroduces it.
   - Avoid repeating the rejected process-wide Ed25519 public-key parse cache
     approach without new evidence: the 2026-05-03 sharded shared-cache
     experiment regressed short-gate commit progress and was backed out. Keep
@@ -712,6 +759,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
   native `OpenVpnLeaseEscrow` and `SettleVpnLease` transactions, then retire
   the legacy in-memory receipt endpoint after a public relay/helper/Torii
   canary.
+- Extend Kura replay parity coverage beyond the new committed execution context
+  checks.
+  - Add a multi-block replay fixture that replays committed blocks into a fresh
+    state and compares `canonical_state_snapshot_bytes_for_tests(...)` against
+    the originally committed WSV.
+  - Include route-sensitive asset, alias, and domain-owned state surfaces
+    without relying on environment toggles or sidecars.
+  - Keep the fixture on the replay-specific validation entrypoint so legacy
+    blocks without embedded context remain covered separately from newly
+    proposed blocks.
 - Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.
   - Add an integration test proving a user-signed enable/disable update can mutate the subscription NFT created by onboarding.
   - If a non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.

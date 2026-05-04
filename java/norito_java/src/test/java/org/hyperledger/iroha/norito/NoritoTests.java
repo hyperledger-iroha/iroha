@@ -27,6 +27,7 @@ public final class NoritoTests {
     testSchemaHashCanonicalPath();
     testEncodeDecodeUInt();
     testEncodeDecodeString();
+    testTransparentAdapterDelegatesWithoutFieldFrame();
     testEncodeDecodeSequence();
     testSequenceAdapterEncoding();
     testByteVecAdapterRoundtrip();
@@ -272,6 +273,25 @@ public final class NoritoTests {
     byte[] encoded = NoritoCodec.encode("こんにちは", "iroha.test.Greeting", adapter);
     String decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.Greeting");
     assert decoded.equals("こんにちは");
+  }
+
+  private static void testTransparentAdapterDelegatesWithoutFieldFrame() {
+    TypeAdapter<WrappedString> adapter =
+        NoritoAdapters.transparent(
+            NoritoAdapters.stringAdapter(), WrappedString::value, WrappedString::new);
+    NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    adapter.encode(encoder, new WrappedString("mibank"));
+
+    byte[] encoded = encoder.toByteArray();
+    NoritoDecoder rawDecoder = new NoritoDecoder(encoded, NoritoHeader.COMPACT_LEN);
+    String raw = NoritoAdapters.stringAdapter().decode(rawDecoder);
+    assert raw.equals("mibank") : "transparent adapter must encode exactly like the inner type";
+    assert rawDecoder.remaining() == 0 : "transparent adapter must not add a field frame";
+
+    NoritoDecoder wrappedDecoder = new NoritoDecoder(encoded, NoritoHeader.COMPACT_LEN);
+    WrappedString decoded = adapter.decode(wrappedDecoder);
+    assert decoded.value().equals("mibank") : "transparent adapter must wrap decoded inner value";
+    assert wrappedDecoder.remaining() == 0 : "transparent adapter must consume the inner payload";
   }
 
   private static void testEncodeDecodeSequence() {
@@ -1268,6 +1288,8 @@ public final class NoritoTests {
       return observed;
     }
   }
+
+  private record WrappedString(String value) {}
 
   private static String toHex(byte[] data) {
     StringBuilder sb = new StringBuilder(data.length * 2);

@@ -49,6 +49,8 @@
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
 use core::fmt;
+#[cfg(feature = "bls")]
+use std::sync::LazyLock;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -58,9 +60,11 @@ use std::{
 };
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
+#[cfg(feature = "bls")]
+use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId,
-    account::{AccountId, rekey::AccountAlias},
+    account::{AccountController, AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -92,7 +96,31 @@ use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(feature = "telemetry")]
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
+#[cfg(feature = "bls")]
+use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
+use sha2::Digest as _;
+
+#[cfg(feature = "bls")]
+fn bls_pop_from_metadata(
+    metadata: &Metadata,
+    key: &iroha_data_model::name::Name,
+) -> Option<Vec<u8>> {
+    let json = metadata.get(key)?;
+    let val: JsonValue = norito::json::from_str(json.get()).ok()?;
+    match val {
+        JsonValue::String(s) => hex::decode(s).ok(),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "bls")]
+fn bls_small_pop_from_metadata(
+    metadata: &Metadata,
+    key: &iroha_data_model::name::Name,
+) -> Option<Vec<u8>> {
+    bls_pop_from_metadata(metadata, key)
+}
 
 /// Convert overlay build errors into transaction rejection reasons with stable labels.
 fn map_overlay_error(
@@ -1755,6 +1783,8 @@ pub enum BlockValidationError {
     },
     /// The merkle root does not match the computed one.
     MerkleRootMismatch,
+    /// Execution context invalid: {0}
+    ExecutionContextInvalid(String),
     /// Cannot accept a transaction
     TransactionAccept(#[from] AcceptTransactionFail),
     /// Mismatch between the actual and expected topology. Expected: {expected:?}, actual: {actual:?}
@@ -2112,6 +2142,7 @@ mod pending {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                execution_context: None,
             })
         }
     }
@@ -2132,6 +2163,7 @@ mod chained {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+        pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
     impl BlockBuilder<Chained> {
@@ -2182,6 +2214,19 @@ mod chained {
             self
         }
 
+        /// Attach durable execution context and update the header hash accordingly.
+        #[must_use]
+        pub fn with_execution_context(
+            mut self,
+            context: Option<BlockExecutionContextBundle>,
+        ) -> Self {
+            let context = context.filter(|bundle| !bundle.is_empty());
+            let hash = context.as_ref().map(HashOf::new);
+            self.0.header.set_execution_context_hash(hash);
+            self.0.execution_context = context;
+            self
+        }
+
         /// Attach an SCCP commitment root to the block header.
         #[must_use]
         pub fn with_sccp_commitment_root(mut self, root: Option<[u8; 32]>) -> Self {
@@ -2214,6 +2259,23 @@ mod chained {
                 );
                 builder = builder.with_da_proof_policies(Some(default_policies));
             }
+            if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
+                let default_context = builder
+                    .0
+                    .transactions
+                    .iter()
+                    .map(|tx| {
+                        ExternalExecutionContext::new(
+                            tx.hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                builder = builder.with_execution_context(Some(BlockExecutionContextBundle::new(
+                    default_context,
+                )));
+            }
             let signature = BlockSignature::new(
                 signatory_idx,
                 SignatureOf::from_hash(private_key, builder.0.header.hash()),
@@ -2227,6 +2289,7 @@ mod chained {
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
                 previous_roster_evidence: builder.0.previous_roster_evidence,
+                execution_context: builder.0.execution_context,
             })
         }
 
@@ -2253,6 +2316,7 @@ mod new {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+        pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
     impl NewBlock {
@@ -2318,6 +2382,7 @@ mod new {
                 da_proof_policies: self.da_proof_policies,
                 da_pin_intents: self.da_pin_intents,
                 previous_roster_evidence: self.previous_roster_evidence,
+                execution_context: self.execution_context,
             }
         }
     }
@@ -2342,6 +2407,7 @@ mod new {
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
             signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
+            signed_block.set_execution_context(block.execution_context);
             signed_block
         }
     }
@@ -2968,6 +3034,7 @@ pub(crate) mod valid {
     #[cfg(not(feature = "telemetry"))]
     type MetricsRef<'a> = ();
 
+    #[derive(Debug)]
     struct StaticValidationData {
         expected_block_height: usize,
         max_clock_drift: Duration,
@@ -4379,6 +4446,8 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
+                false,
+                false,
             )
         }
 
@@ -4398,6 +4467,7 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
+            skip_tx_signature_validation: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -4410,6 +4480,8 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
+                skip_tx_signature_validation,
+                true,
             )
         }
 
@@ -4437,6 +4509,8 @@ pub(crate) mod valid {
                 soft_fork,
                 Some(timings),
                 false,
+                false,
+                false,
             )
         }
 
@@ -4452,6 +4526,8 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
+            skip_tx_signature_validation: bool,
+            replay_compatibility: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4482,6 +4558,7 @@ pub(crate) mod valid {
                     soft_fork,
                     time_source,
                     skip_block_signatures,
+                    replay_compatibility,
                 ) {
                     Ok(data) => {
                         if let Some(timings) = timings.as_deref_mut() {
@@ -4538,6 +4615,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                skip_tx_signature_validation,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -4603,6 +4681,7 @@ pub(crate) mod valid {
             } else {
                 state.block(block.header())
             };
+            state_block.replay_compatibility = replay_compatibility;
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
@@ -4695,6 +4774,7 @@ pub(crate) mod valid {
                     soft_fork,
                     time_source,
                     false,
+                    false,
                 ) {
                     Ok(data) => data,
                     Err(error) => {
@@ -4736,6 +4816,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                false,
                 metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -4851,6 +4932,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             time_source: &TimeSource,
             skip_block_signatures: bool,
+            allow_missing_legacy_context: bool,
         ) -> Result<StaticValidationData, BlockValidationError> {
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
@@ -4913,6 +4995,11 @@ pub(crate) mod valid {
                 block,
                 block.header().height().get(),
                 actual_prev_block_hash,
+            )?;
+            Self::validate_execution_context_with_state(
+                block,
+                state,
+                allow_missing_legacy_context,
             )?;
 
             let nexus = state.nexus();
@@ -5071,6 +5158,154 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
+            BlockValidationError::ExecutionContextInvalid(message.into())
+        }
+
+        fn validate_execution_context_header(
+            block: &SignedBlock,
+        ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
+            match (
+                block.header().execution_context_hash(),
+                block.execution_context(),
+            ) {
+                (None, None) => Ok(None),
+                (Some(_), None) => Err(Self::execution_context_error(
+                    "header references execution context but payload is missing",
+                )),
+                (None, Some(_)) => Err(Self::execution_context_error(
+                    "payload includes execution context but header hash is absent",
+                )),
+                (Some(expected), Some(bundle)) => {
+                    let actual = HashOf::new(bundle);
+                    if actual != expected {
+                        return Err(Self::execution_context_error(
+                            "execution context hash mismatch",
+                        ));
+                    }
+                    Ok(Some(bundle))
+                }
+            }
+        }
+
+        fn validate_execution_context_alignment(
+            block: &SignedBlock,
+            bundle: &BlockExecutionContextBundle,
+        ) -> Result<(), BlockValidationError> {
+            let expected_len = block.external_entrypoint_count();
+            if bundle.external.len() != expected_len {
+                return Err(Self::execution_context_error(format!(
+                    "execution context length mismatch: expected {expected_len}, got {}",
+                    bundle.external.len()
+                )));
+            }
+
+            for (idx, (entrypoint, context)) in block
+                .external_entrypoints_cloned()
+                .zip(bundle.external.iter())
+                .enumerate()
+            {
+                let expected = entrypoint.hash();
+                if context.entrypoint_hash != expected {
+                    return Err(Self::execution_context_error(format!(
+                        "execution context entrypoint hash mismatch at index {idx}"
+                    )));
+                }
+            }
+
+            Ok(())
+        }
+
+        fn validate_execution_context_with_state(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+            allow_missing_legacy_context: bool,
+        ) -> Result<(), BlockValidationError> {
+            let bundle = Self::validate_execution_context_header(block)?;
+            let context_required = !allow_missing_legacy_context
+                && !block.header().is_genesis()
+                && block.external_entrypoint_count() != 0;
+            let Some(bundle) = bundle else {
+                return if context_required {
+                    Err(Self::execution_context_error(
+                        "missing execution context for external entrypoints",
+                    ))
+                } else {
+                    Ok(())
+                };
+            };
+
+            Self::validate_execution_context_alignment(block, bundle)?;
+            if allow_missing_legacy_context || block.header().is_genesis() {
+                return Ok(());
+            }
+
+            let nexus = state.nexus();
+            for (idx, (entrypoint, context)) in block
+                .external_entrypoints_cloned()
+                .zip(bundle.external.iter())
+                .enumerate()
+            {
+                let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                    Cow::Owned(entrypoint),
+                );
+                let decision = evaluate_policy_with_catalog_and_world(
+                    &nexus.routing_policy,
+                    &nexus.lane_catalog,
+                    &nexus.dataspace_catalog,
+                    &accepted,
+                    state.world(),
+                )
+                .map_err(|err| {
+                    Self::execution_context_error(format!(
+                        "execution context routing cannot be resolved at index {idx}: {err}"
+                    ))
+                })?;
+                if decision.lane_id != context.lane_id
+                    || decision.dataspace_id != context.dataspace_id
+                {
+                    return Err(Self::execution_context_error(format!(
+                        "execution context routing mismatch at index {idx}: expected lane {} dataspace {}, got lane {} dataspace {}",
+                        decision.lane_id.as_u32(),
+                        decision.dataspace_id.as_u64(),
+                        context.lane_id.as_u32(),
+                        context.dataspace_id.as_u64(),
+                    )));
+                }
+            }
+
+            Ok(())
+        }
+
+        fn embedded_routing_decisions_for_signed_transactions(
+            block: &SignedBlock,
+            tx_count: usize,
+        ) -> Option<Vec<crate::queue::RoutingDecision>> {
+            let bundle = match Self::validate_execution_context_header(block) {
+                Ok(Some(bundle)) => bundle,
+                Ok(None) => return None,
+                Err(error) => {
+                    warn!(%error, "ignoring invalid embedded execution context during unchecked execution");
+                    return None;
+                }
+            };
+            if let Err(error) = Self::validate_execution_context_alignment(block, bundle) {
+                warn!(%error, "ignoring misaligned embedded execution context during unchecked execution");
+                return None;
+            }
+
+            let decisions = block
+                .external_entrypoints_cloned()
+                .zip(bundle.external.iter())
+                .filter_map(|(entrypoint, context)| {
+                    matches!(entrypoint, TransactionEntrypoint::External(_)).then(|| {
+                        crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
+                    })
+                })
+                .collect::<Vec<_>>();
+            (decisions.len() == tx_count).then_some(decisions)
+        }
+
         fn committed_heights_for_prepared_transactions(
             prepared_txs: &[PreparedBlockTransaction],
             transactions: &impl TransactionsReadOnly,
@@ -5130,6 +5365,7 @@ pub(crate) mod valid {
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
+            skip_tx_signature_validation: bool,
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
@@ -5361,7 +5597,32 @@ pub(crate) mod valid {
                     .map(BlockValidationError::TransactionAccept);
                 }
 
-                let stateless = if crate::tx::is_heartbeat_transaction(tx) {
+                let signature_override = skip_tx_signature_validation.then_some(Ok(()));
+                let stateless = if let Some(signature_override) = signature_override {
+                    if crate::tx::is_heartbeat_transaction(tx) {
+                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            Some(signature_override),
+                            &prepared.metadata,
+                        )
+                    } else {
+                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            Some(signature_override),
+                            &prepared.metadata,
+                        )
+                    }
+                } else if crate::tx::is_heartbeat_transaction(tx) {
                     if ed25519_prechecked[idx] {
                         AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                                 tx,
@@ -5472,6 +5733,7 @@ pub(crate) mod valid {
                 soft_fork,
                 time_source,
                 false,
+                false,
             )?;
             let prepared_txs = Self::prepare_external_transactions(block);
             let committed_heights = Self::committed_heights_for_prepared_transactions(
@@ -5502,6 +5764,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                false,
                 metrics,
             )?;
             if let Some(context) = cache_context {
@@ -5843,6 +6106,8 @@ pub(crate) mod valid {
             let fraud_cfg = &state_block.fraud_monitoring;
             let cache_cap = state_block.pipeline.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !is_genesis_block;
+            let now_ms = block_creation_time.as_millis();
+            let mut cached_ok = vec![false; txs.len()];
             let max_clock_drift_ms = max_clock_drift.as_millis();
             let cache_context = if cache_enabled {
                 Some(crate::state::StatelessValidationContext::new(
@@ -5854,9 +6119,40 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            let routing_results: Vec<_> = if workers > 1 {
-                if let Some(pool) = pool.as_ref() {
-                    pool.install(|| {
+            if let Some(cache_context) = cache_context.as_ref() {
+                let mut cache = state_block.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(cache_context.clone());
+                for (idx, prepared) in prepared_txs.iter().enumerate() {
+                    if cache.get_ok(&prepared.metadata.signed_hash, now_ms) {
+                        cached_ok[idx] = true;
+                    }
+                }
+            }
+            let embedded_routing =
+                Self::embedded_routing_decisions_for_signed_transactions(block, txs.len());
+            let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
+                (decisions, vec![None; txs.len()])
+            } else {
+                let routing_results: Vec<_> = if workers > 1 {
+                    if let Some(pool) = pool.as_ref() {
+                        pool.install(|| {
+                            txs.par_iter()
+                                .map(|tx| {
+                                    let accepted = crate::tx::AcceptedTransaction::new_unchecked(
+                                        Cow::Borrowed(*tx),
+                                    );
+                                    evaluate_policy_with_catalog_and_world(
+                                        routing_policy,
+                                        lane_catalog,
+                                        dataspace_catalog,
+                                        &accepted,
+                                        &state_block.world,
+                                    )
+                                })
+                                .collect()
+                        })
+                    } else {
                         txs.par_iter()
                             .map(|tx| {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
@@ -5871,9 +6167,9 @@ pub(crate) mod valid {
                                 )
                             })
                             .collect()
-                    })
+                    }
                 } else {
-                    txs.par_iter()
+                    txs.iter()
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
@@ -5886,38 +6182,507 @@ pub(crate) mod valid {
                             )
                         })
                         .collect()
-                }
-            } else {
-                txs.iter()
-                    .map(|tx| {
-                        let accepted =
-                            crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                        evaluate_policy_with_catalog_and_world(
-                            routing_policy,
-                            lane_catalog,
-                            dataspace_catalog,
-                            &accepted,
-                            &state_block.world,
-                        )
-                    })
-                    .collect()
-            };
-            let mut routing_decisions = Vec::with_capacity(routing_results.len());
-            let mut routing_errors = Vec::with_capacity(routing_results.len());
-            for routing in routing_results {
-                match routing {
-                    Ok(decision) => {
-                        routing_decisions.push(decision);
-                        routing_errors.push(None);
+                };
+                let mut routing_decisions = Vec::with_capacity(routing_results.len());
+                let mut routing_errors = Vec::with_capacity(routing_results.len());
+                for routing in routing_results {
+                    match routing {
+                        Ok(decision) => {
+                            routing_decisions.push(decision);
+                            routing_errors.push(None);
+                        }
+                        Err(err) => {
+                            routing_decisions.push(crate::queue::RoutingDecision::default());
+                            routing_errors.push(Some(err));
+                        }
                     }
-                    Err(err) => {
-                        routing_decisions.push(crate::queue::RoutingDecision::default());
-                        routing_errors.push(Some(err));
+                }
+                (routing_decisions, routing_errors)
+            };
+            let mut signature_overrides: Vec<
+                Option<Result<(), crate::tx::SignatureVerificationFail>>,
+            > = vec![None; txs.len()];
+            let signature_result_for_tx = |tx: &SignedTransaction| {
+                crate::tx::AcceptedTransaction::signature_verification_result(tx)
+            };
+            let malformed_signature = |tx: &SignedTransaction, detail: &str| {
+                Err(crate::tx::SignatureVerificationFail::new(
+                    tx.signature().clone(),
+                    crate::tx::SignatureRejectionCode::MalformedSignature,
+                    detail.to_string(),
+                ))
+            };
+
+            let sig_batch_start = if skip_stateless_checks {
+                None
+            } else {
+                timings.as_ref().map(|_| Instant::now())
+            };
+            if !skip_stateless_checks {
+                // Ed25519 deterministic micro-batching for stateless pre-pass.
+                {
+                    #[derive(Clone)]
+                    struct EdItem {
+                        idx: usize,
+                        pk: [u8; 32],
+                        msg: [u8; 32],
+                        sig: [u8; 64],
+                    }
+                    let mut items: Vec<EdItem> = Vec::new();
+                    for (idx, tx) in txs.iter().enumerate() {
+                        if cached_ok[idx] {
+                            continue;
+                        }
+                        let AccountController::Single(signatory) = tx.authority().controller()
+                        else {
+                            continue;
+                        };
+                        if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+                            continue;
+                        }
+                        let (_algo, pk_bytes) = signatory.to_bytes();
+                        if pk_bytes.len() != 32 {
+                            signature_overrides[idx] =
+                                Some(malformed_signature(tx, "bad signature or key length"));
+                            continue;
+                        }
+                        let sig_bytes = tx.signature().payload().payload();
+                        if sig_bytes.len() != 64 {
+                            signature_overrides[idx] =
+                                Some(malformed_signature(tx, "bad signature or key length"));
+                            continue;
+                        }
+                        let h = prepared_txs[idx].metadata.payload_hash;
+                        let mut msg = [0u8; 32];
+                        msg.copy_from_slice(h.as_ref());
+                        let mut pk = [0u8; 32];
+                        pk.copy_from_slice(pk_bytes);
+                        let mut sig = [0u8; 64];
+                        sig.copy_from_slice(sig_bytes);
+                        items.push(EdItem { idx, pk, msg, sig });
+                    }
+                    let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
+                        state_block.pipeline.signature_batch_max_ed25519
+                    } else {
+                        state_block.pipeline.signature_batch_max
+                    };
+                    if cap > 0 && !items.is_empty() {
+                        let derive_seed = |slice: &[&EdItem]| -> [u8; 32] {
+                            let mut tuples: Vec<Vec<u8>> = slice
+                                .iter()
+                                .map(|it| {
+                                    let mut v = Vec::with_capacity(32 + 32 + 64);
+                                    v.extend_from_slice(&it.pk);
+                                    v.extend_from_slice(&it.msg);
+                                    v.extend_from_slice(&it.sig);
+                                    v
+                                })
+                                .collect();
+                            tuples.sort_unstable();
+                            let mut hasher = sha2::Sha256::new();
+                            hasher.update(b"iroha:ecc_batch:v1:ed25519");
+                            for t in tuples.iter() {
+                                hasher.update(t);
+                            }
+                            let out = hasher.finalize();
+                            let mut seed = [0u8; 32];
+                            seed.copy_from_slice(&out);
+                            seed
+                        };
+                        let verify_batch_slice = |slice: &[&EdItem]| -> bool {
+                            let seed = derive_seed(slice);
+                            let msgs: Vec<&[u8]> =
+                                slice.iter().map(|it| it.msg.as_slice()).collect();
+                            let sigs: Vec<&[u8]> =
+                                slice.iter().map(|it| it.sig.as_slice()).collect();
+                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
+                            iroha_crypto::ed25519_verify_batch_deterministic(
+                                &msgs, &sigs, &pks, seed,
+                            )
+                            .is_ok()
+                        };
+                        let mut start = 0;
+                        while start < items.len() {
+                            let end = usize::min(start + cap, items.len());
+                            let batch = &items[start..end];
+                            let refs: Vec<&EdItem> = batch.iter().collect();
+                            if verify_batch_slice(&refs) {
+                                for it in batch {
+                                    signature_overrides[it.idx] = Some(Ok(()));
+                                }
+                            } else {
+                                for it in batch {
+                                    signature_overrides[it.idx] =
+                                        Some(signature_result_for_tx(txs[it.idx]));
+                                }
+                            }
+                            start = end;
+                        }
+                    }
+                }
+
+                // Secp256k1 deterministic micro-batching for stateless pre-pass.
+                {
+                    #[derive(Clone)]
+                    struct SecpItem {
+                        idx: usize,
+                        pk: Vec<u8>,
+                        msg: [u8; 32],
+                        sig: [u8; 64],
+                    }
+                    let mut items: Vec<SecpItem> = Vec::new();
+                    for (idx, tx) in txs.iter().enumerate() {
+                        if cached_ok[idx] {
+                            continue;
+                        }
+                        let AccountController::Single(signatory) = tx.authority().controller()
+                        else {
+                            continue;
+                        };
+                        if signatory.algorithm() != iroha_crypto::Algorithm::Secp256k1 {
+                            continue;
+                        }
+                        let (_algo, pk_bytes) = signatory.to_bytes();
+                        let sig_bytes = tx.signature().payload().payload();
+                        if sig_bytes.len() != 64 {
+                            signature_overrides[idx] =
+                                Some(malformed_signature(tx, "bad secp256k1 signature length"));
+                            continue;
+                        }
+                        let h = prepared_txs[idx].metadata.payload_hash;
+                        let mut msg = [0u8; 32];
+                        msg.copy_from_slice(h.as_ref());
+                        let mut sig = [0u8; 64];
+                        sig.copy_from_slice(sig_bytes);
+                        items.push(SecpItem {
+                            idx,
+                            pk: pk_bytes.to_vec(),
+                            msg,
+                            sig,
+                        });
+                    }
+                    let cap = state_block.pipeline.signature_batch_max_secp256k1;
+                    if cap > 0 && !items.is_empty() {
+                        let derive_seed = |slice: &[&SecpItem]| -> [u8; 32] {
+                            let mut tuples: Vec<Vec<u8>> = slice
+                                .iter()
+                                .map(|it| {
+                                    let mut v = Vec::with_capacity(it.pk.len() + 32 + 64);
+                                    v.extend_from_slice(&it.pk);
+                                    v.extend_from_slice(&it.msg);
+                                    v.extend_from_slice(&it.sig);
+                                    v
+                                })
+                                .collect();
+                            tuples.sort_unstable();
+                            let mut hasher = sha2::Sha256::new();
+                            hasher.update(b"iroha:ecc_batch:v1:secp256k1");
+                            for t in tuples.iter() {
+                                hasher.update(t);
+                            }
+                            let out = hasher.finalize();
+                            let mut seed = [0u8; 32];
+                            seed.copy_from_slice(&out);
+                            seed
+                        };
+                        let verify_batch_slice = |slice: &[&SecpItem]| -> bool {
+                            let seed = derive_seed(slice);
+                            let msgs: Vec<&[u8]> =
+                                slice.iter().map(|it| it.msg.as_slice()).collect();
+                            let sigs: Vec<&[u8]> =
+                                slice.iter().map(|it| it.sig.as_slice()).collect();
+                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
+                            iroha_crypto::secp256k1_verify_batch_deterministic(
+                                &msgs, &sigs, &pks, seed,
+                            )
+                            .is_ok()
+                        };
+                        let mut start = 0;
+                        while start < items.len() {
+                            let end = usize::min(start + cap, items.len());
+                            let batch = &items[start..end];
+                            let refs: Vec<&SecpItem> = batch.iter().collect();
+                            if verify_batch_slice(&refs) {
+                                for it in batch {
+                                    signature_overrides[it.idx] = Some(Ok(()));
+                                }
+                            } else {
+                                for it in batch {
+                                    signature_overrides[it.idx] =
+                                        Some(signature_result_for_tx(txs[it.idx]));
+                                }
+                            }
+                            start = end;
+                        }
+                    }
+                }
+
+                // PQC deterministic micro-batching for stateless pre-pass.
+                {
+                    #[derive(Clone)]
+                    struct PqcItem {
+                        idx: usize,
+                        pk: Vec<u8>,
+                        msg: [u8; 32],
+                        sig: Vec<u8>,
+                    }
+                    let mut items: Vec<PqcItem> = Vec::new();
+                    for (idx, tx) in txs.iter().enumerate() {
+                        if cached_ok[idx] {
+                            continue;
+                        }
+                        let AccountController::Single(signatory) = tx.authority().controller()
+                        else {
+                            continue;
+                        };
+                        if signatory.algorithm() != iroha_crypto::Algorithm::MlDsa {
+                            continue;
+                        }
+                        let (_algo, pk_bytes) = signatory.to_bytes();
+                        let h = prepared_txs[idx].metadata.payload_hash;
+                        let mut msg = [0u8; 32];
+                        msg.copy_from_slice(h.as_ref());
+                        let sig_bytes = tx.signature().payload().payload().to_vec();
+                        items.push(PqcItem {
+                            idx,
+                            pk: pk_bytes.to_vec(),
+                            msg,
+                            sig: sig_bytes,
+                        });
+                    }
+                    let cap = state_block.pipeline.signature_batch_max_pqc;
+                    if cap > 0 && !items.is_empty() {
+                        let derive_seed = |slice: &[&PqcItem]| -> [u8; 32] {
+                            let mut tuples: Vec<Vec<u8>> = slice
+                                .iter()
+                                .map(|it| {
+                                    let mut v = Vec::with_capacity(it.pk.len() + 32 + it.sig.len());
+                                    v.extend_from_slice(&it.pk);
+                                    v.extend_from_slice(&it.msg);
+                                    v.extend_from_slice(&it.sig);
+                                    v
+                                })
+                                .collect();
+                            tuples.sort_unstable();
+                            let mut hasher = sha2::Sha256::new();
+                            hasher.update(b"iroha:pqc_batch:v1:dilithium3");
+                            for t in tuples.iter() {
+                                hasher.update(t);
+                            }
+                            let out = hasher.finalize();
+                            let mut seed = [0u8; 32];
+                            seed.copy_from_slice(&out);
+                            seed
+                        };
+                        let verify_batch_slice = |slice: &[&PqcItem]| -> bool {
+                            let seed = derive_seed(slice);
+                            let msgs: Vec<&[u8]> =
+                                slice.iter().map(|it| it.msg.as_slice()).collect();
+                            let sigs: Vec<&[u8]> =
+                                slice.iter().map(|it| it.sig.as_slice()).collect();
+                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
+                            iroha_crypto::pqc_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
+                                .is_ok()
+                        };
+                        let mut start = 0;
+                        while start < items.len() {
+                            let end = usize::min(start + cap, items.len());
+                            let batch = &items[start..end];
+                            let refs: Vec<&PqcItem> = batch.iter().collect();
+                            if verify_batch_slice(&refs) {
+                                for it in batch {
+                                    signature_overrides[it.idx] = Some(Ok(()));
+                                }
+                            } else {
+                                for it in batch {
+                                    signature_overrides[it.idx] =
+                                        Some(signature_result_for_tx(txs[it.idx]));
+                                }
+                            }
+                            start = end;
+                        }
+                    }
+                }
+
+                // BLS deterministic batching for stateless pre-pass.
+                #[cfg(feature = "bls")]
+                {
+                    #[derive(Clone)]
+                    struct BlsItem {
+                        idx: usize,
+                        pk: iroha_crypto::PublicKey,
+                        pk_bytes: Vec<u8>,
+                        pop: Option<Vec<u8>>,
+                        msg: [u8; 32],
+                        sig: Vec<u8>,
+                    }
+                    static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+                        LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
+                    static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+                        LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
+                    let mut all_normal_have_pop = true;
+                    let mut all_small_have_pop = true;
+                    let mut items_normal: Vec<BlsItem> = Vec::new();
+                    let mut items_small: Vec<BlsItem> = Vec::new();
+                    for (idx, tx) in txs.iter().enumerate() {
+                        if cached_ok[idx] {
+                            continue;
+                        }
+                        let AccountController::Single(signatory) = tx.authority().controller()
+                        else {
+                            continue;
+                        };
+                        let algo = signatory.algorithm();
+                        let small = match algo {
+                            iroha_crypto::Algorithm::BlsNormal => false,
+                            iroha_crypto::Algorithm::BlsSmall => true,
+                            _ => continue,
+                        };
+                        let h = prepared_txs[idx].metadata.payload_hash;
+                        let mut msg = [0u8; 32];
+                        msg.copy_from_slice(h.as_ref());
+                        let sig_bytes = tx.signature().payload().payload().to_vec();
+                        let mut pop = None;
+                        if small {
+                            if let Some(pop_hex) =
+                                bls_small_pop_from_metadata(tx.metadata(), &BLS_POP_SMALL_KEY)
+                            {
+                                if iroha_crypto::bls_small_pop_verify(signatory, &pop_hex).is_err()
+                                {
+                                    all_small_have_pop = false;
+                                } else {
+                                    pop = Some(pop_hex);
+                                }
+                            } else {
+                                all_small_have_pop = false;
+                            }
+                        } else if let Some(pop_hex) =
+                            bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY)
+                        {
+                            if iroha_crypto::bls_normal_pop_verify(signatory, &pop_hex).is_err() {
+                                all_normal_have_pop = false;
+                            } else {
+                                pop = Some(pop_hex);
+                            }
+                        } else {
+                            all_normal_have_pop = false;
+                        }
+                        let item = BlsItem {
+                            idx,
+                            pk: signatory.clone(),
+                            pk_bytes: signatory.to_bytes().1.to_vec(),
+                            pop,
+                            msg,
+                            sig: sig_bytes,
+                        };
+                        if small {
+                            items_small.push(item);
+                        } else {
+                            items_normal.push(item);
+                        }
+                    }
+                    let cap = state_block.pipeline.signature_batch_max_bls;
+                    let mut verify_set = |items: &[BlsItem], small: bool| {
+                        if items.is_empty() {
+                            return;
+                        }
+                        let mut groups: std::collections::BTreeMap<[u8; 32], Vec<&BlsItem>> =
+                            std::collections::BTreeMap::new();
+                        for item in items {
+                            groups.entry(item.msg).or_default().push(item);
+                        }
+                        let mut singletons: Vec<&BlsItem> = Vec::new();
+                        for group in groups.values() {
+                            if group.len() == 1 {
+                                singletons.push(group[0]);
+                                continue;
+                            }
+                            let ok = {
+                                let msg = group[0].msg.as_slice();
+                                let sigs: Vec<&[u8]> =
+                                    group.iter().map(|it| it.sig.as_slice()).collect();
+                                let pks: Vec<&iroha_crypto::PublicKey> =
+                                    group.iter().map(|it| &it.pk).collect();
+                                let mut pops = Vec::with_capacity(group.len());
+                                for it in group {
+                                    let Some(pop) = it.pop.as_ref() else {
+                                        return;
+                                    };
+                                    pops.push(pop.as_slice());
+                                }
+                                if small {
+                                    iroha_crypto::bls_small_verify_aggregate_same_message(
+                                        msg, &sigs, &pks, &pops,
+                                    )
+                                    .is_ok()
+                                } else {
+                                    iroha_crypto::bls_normal_verify_aggregate_same_message(
+                                        msg, &sigs, &pks, &pops,
+                                    )
+                                    .is_ok()
+                                }
+                            };
+                            if ok {
+                                for it in group {
+                                    signature_overrides[it.idx] = Some(Ok(()));
+                                }
+                            } else {
+                                for it in group {
+                                    signature_overrides[it.idx] =
+                                        Some(signature_result_for_tx(txs[it.idx]));
+                                }
+                            }
+                        }
+                        if !singletons.is_empty() {
+                            let msgs: Vec<&[u8]> =
+                                singletons.iter().map(|it| it.msg.as_slice()).collect();
+                            let sigs: Vec<&[u8]> =
+                                singletons.iter().map(|it| it.sig.as_slice()).collect();
+                            let pks: Vec<&[u8]> =
+                                singletons.iter().map(|it| it.pk_bytes.as_slice()).collect();
+                            let ok = if small {
+                                iroha_crypto::bls_small_verify_aggregate_multi_message(
+                                    &msgs, &sigs, &pks,
+                                )
+                                .is_ok()
+                            } else {
+                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
+                                    &msgs, &sigs, &pks,
+                                )
+                                .is_ok()
+                            };
+                            if ok {
+                                for it in singletons {
+                                    signature_overrides[it.idx] = Some(Ok(()));
+                                }
+                            } else {
+                                for it in singletons {
+                                    signature_overrides[it.idx] =
+                                        Some(signature_result_for_tx(txs[it.idx]));
+                                }
+                            }
+                        }
+                    };
+                    if cap > 0 {
+                        if all_normal_have_pop {
+                            for chunk in items_normal.chunks(cap) {
+                                verify_set(chunk, false);
+                            }
+                        }
+                        if all_small_have_pop {
+                            for chunk in items_small.chunks(cap) {
+                                verify_set(chunk, true);
+                            }
+                        }
                     }
                 }
             }
             if let Some(timings) = timings.as_deref_mut() {
-                timings.execution_tx_signature_batch_ms = 0;
+                if let Some(start) = sig_batch_start {
+                    timings.execution_tx_signature_batch_ms = to_ms(start.elapsed());
+                } else if skip_stateless_checks {
+                    timings.execution_tx_signature_batch_ms = 0;
+                }
             }
 
             let stateless_start = timings.as_ref().map(|_| Instant::now());
@@ -5961,27 +6726,35 @@ pub(crate) mod valid {
                             return Some(reason);
                         }
                     }
+                    if cached_ok[idx] {
+                        return None;
+                    }
                     if skip_stateless_checks {
                         return None;
                     }
+                    let signature_override = signature_overrides
+                        .get(idx)
+                        .and_then(|override_result| override_result.as_ref().cloned());
                     let stateless = if is_heartbeat {
-                        AcceptedTransaction::validate_heartbeat_with_now_and_prepared_metadata(
+                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             &chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
+                            signature_override,
                             &prepared_txs[idx].metadata,
                         )
                     } else {
-                        AcceptedTransaction::validate_with_now_and_prepared_metadata(
+                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             &chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
+                            signature_override,
                             &prepared_txs[idx].metadata,
                         )
                     };
@@ -9032,6 +9805,7 @@ pub(crate) mod valid {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                execution_context: None,
             });
             let default_policies = crate::da::proof_policy_bundle(
                 &iroha_config::parameters::actual::LaneConfig::default(),
@@ -10348,6 +11122,7 @@ pub(crate) mod valid {
                     false,
                     &time_source,
                     false,
+                    false,
                 )
                 .expect("static state-dependent validation should succeed")
             };
@@ -10370,6 +11145,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                false,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -10428,6 +11204,7 @@ pub(crate) mod valid {
                     false,
                     &time_source,
                     false,
+                    false,
                 )
                 .expect("static state-dependent validation should succeed")
             };
@@ -10451,6 +11228,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
+                false,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
@@ -10459,6 +11237,136 @@ pub(crate) mod valid {
                 BlockValidationError::TransactionAccept(
                     AcceptTransactionFail::SignatureVerification(_)
                 )
+            ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_missing_execution_context() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (authority, signer) = gen_account_in("context-check");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            time_handle.advance(Duration::from_millis(1));
+
+            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut signed: SignedBlock = new_block.into();
+            signed.set_execution_context(None);
+
+            let err = {
+                let view = state.query_view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                    false,
+                )
+                .expect_err("live block without execution context must be rejected")
+            };
+            assert!(matches!(
+                err,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("missing execution context")
+            ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_execution_context_route_mismatch() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (authority, signer) = gen_account_in("context-check");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            time_handle.advance(Duration::from_millis(1));
+
+            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut signed: SignedBlock = new_block.into();
+            let wrong_context =
+                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                    tx.hash_as_entrypoint(),
+                    LaneId::new(7),
+                    DataSpaceId::UNIVERSAL,
+                )]);
+            signed.set_execution_context(Some(wrong_context));
+
+            let err = {
+                let view = state.query_view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                    false,
+                )
+                .expect_err("live block with mismatched execution context must be rejected")
+            };
+            assert!(matches!(
+                err,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("routing mismatch")
             ));
         }
 
@@ -10511,6 +11419,7 @@ pub(crate) mod valid {
                     &view,
                     false,
                     &time_source,
+                    false,
                     false,
                 ) {
                     Ok(_) => panic!("height > 2 blocks must carry previous-roster evidence"),
@@ -14168,6 +15077,7 @@ mod event {
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions => Reason::TransactionValidationFailed,
+            BlockValidationError::ExecutionContextInvalid(_) => Reason::TransactionValidationFailed,
             BlockValidationError::PrevBlockHashMismatch { .. } => Reason::PrevBlockHashMismatch,
             BlockValidationError::PrevBlockHeightMismatch { .. } => Reason::PrevBlockHeightMismatch,
             BlockValidationError::MerkleRootMismatch => Reason::MerkleRootMismatch,
@@ -15887,6 +16797,283 @@ mod tests {
             state_block.world.domain(&created_domain_id).is_err(),
             "failed transaction state changes must still be rolled back"
         );
+    }
+
+    #[test]
+    fn signed_block_sponsored_fee_burns_when_sponsor_is_fee_sink() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let chain_id = ChainId::from("sponsored-block-fee-burn-test");
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority_id);
+        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
+        let world = World::with_assets(
+            [domain],
+            [authority, sponsor],
+            [asset_definition],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 5;
+        }
+
+        {
+            let fee_permission: Permission =
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                }
+                .into();
+            let mut world = state.world.block();
+            world.account_permissions.insert(
+                authority_id.clone(),
+                std::collections::BTreeSet::from([fee_permission]),
+            );
+            world.commit();
+        }
+
+        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
+            .chain(0, None)
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let genesis_signed: SignedBlock = genesis_block.clone().into();
+        let mut genesis_state_block = state.block(genesis_block.header);
+        let _valid_genesis = genesis_block
+            .validate_and_record_transactions(&mut genesis_state_block)
+            .unpack(|_| {});
+        genesis_state_block.commit().expect("commit first block");
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            iroha_primitives::json::Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
+            .sign(authority_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&genesis_signed))
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "sponsored transaction should be approved"
+        );
+        state_block.commit().expect("commit sponsored fee block");
+
+        let committed_balance_after = state
+            .view()
+            .world()
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists after block commit")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(committed_balance_after, 9);
+    }
+
+    #[test]
+    fn routed_signed_block_sponsored_fee_burns_global_sponsor_asset() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let chain_id = ChainId::from("routed-sponsored-block-fee-burn-test");
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority_id);
+        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
+        let world = World::with_assets(
+            [domain],
+            [authority, sponsor],
+            [asset_definition],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        let bpng_lane = LaneId::new(3);
+        let bpng_dataspace = DataSpaceId::new(10);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 5;
+            nexus.lane_catalog = LaneCatalog::new(
+                nonzero!(4_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: bpng_lane,
+                        dataspace_id: bpng_dataspace,
+                        alias: "bpng".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: bpng_dataspace,
+                    alias: "bpng".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            nexus.routing_policy.default_lane = bpng_lane;
+            nexus.routing_policy.default_dataspace = bpng_dataspace;
+        }
+
+        {
+            let fee_permission: Permission =
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                }
+                .into();
+            let mut world = state.world.block();
+            world.account_permissions.insert(
+                authority_id.clone(),
+                std::collections::BTreeSet::from([fee_permission]),
+            );
+            world.commit();
+        }
+
+        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
+            .chain(0, None)
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let genesis_signed: SignedBlock = genesis_block.clone().into();
+        let mut genesis_state_block = state.block(genesis_block.header);
+        let _valid_genesis = genesis_block
+            .validate_and_record_transactions(&mut genesis_state_block)
+            .unpack(|_| {});
+        genesis_state_block.commit().expect("commit first block");
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            iroha_primitives::json::Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
+            .sign(authority_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&genesis_signed))
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "routed sponsored transaction should be approved"
+        );
+        state_block
+            .commit()
+            .expect("commit routed sponsored fee block");
+
+        let committed_balance_after = state
+            .view()
+            .world()
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists after block commit")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(committed_balance_after, 9);
     }
 
     #[test]

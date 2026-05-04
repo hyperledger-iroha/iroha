@@ -1414,18 +1414,20 @@ fn instruction_tuple_flags() -> u8 {
 }
 
 type InstructionPayloadFrameWriter =
-    fn(&mut dyn std::io::Write, &[u8]) -> Result<(), norito::core::Error>;
+    fn(&mut dyn std::io::Write, &[u8], u8) -> Result<(), norito::core::Error>;
 
 struct EncodedInstructionPayload {
     name: &'static str,
     bare_payload: Vec<u8>,
     framed_payload_len: usize,
+    payload_header_flags: u8,
     write_framed_payload: InstructionPayloadFrameWriter,
 }
 
 fn write_raw_instruction_payload(
     writer: &mut dyn std::io::Write,
     payload: &[u8],
+    _payload_header_flags: u8,
 ) -> Result<(), norito::core::Error> {
     std::io::Write::write_all(writer, payload)?;
     Ok(())
@@ -1436,6 +1438,7 @@ fn write_instruction_pair_fields<W: std::io::Write>(
     name: &str,
     framed_payload_len: usize,
     bare_payload: &[u8],
+    payload_header_flags: u8,
     write_framed_payload: InstructionPayloadFrameWriter,
 ) -> Result<(), norito::core::Error> {
     let flags = instruction_tuple_flags();
@@ -1467,7 +1470,7 @@ fn write_instruction_pair_fields<W: std::io::Write>(
         &mut writer,
         u64::try_from(framed_payload_len).map_err(|_| norito::core::Error::LengthMismatch)?,
     )?;
-    write_framed_payload(&mut writer, bare_payload)?;
+    write_framed_payload(&mut writer, bare_payload, payload_header_flags)?;
     Ok(())
 }
 
@@ -1478,6 +1481,7 @@ fn encoded_instruction_payload(instr: &InstructionBox) -> Option<EncodedInstruct
             name: opaque.wire_id,
             bare_payload: opaque.framed_payload.clone(),
             framed_payload_len: opaque.framed_payload.len(),
+            payload_header_flags: 0,
             write_framed_payload: write_raw_instruction_payload,
         });
     }
@@ -1487,15 +1491,22 @@ fn encoded_instruction_payload(instr: &InstructionBox) -> Option<EncodedInstruct
         registry.entry_for_type_name(type_name)?
     };
     let mut bare_payload = Vec::new();
-    if let Some(hint) = Instruction::dyn_encode_capacity_hint(inner) {
+    if let Some(hint) = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        Instruction::dyn_encode_capacity_hint(inner)
+    } {
         bare_payload.reserve_exact(hint);
     }
+    let _ = norito::codec::take_last_encode_flags();
     Instruction::dyn_encode_into(inner, &mut bare_payload);
+    let payload_header_flags =
+        norito::codec::take_last_encode_flags().unwrap_or_else(norito::core::default_encode_flags);
     let framed_payload_len = (entry.frame_len)(bare_payload.len())?;
     Some(EncodedInstructionPayload {
         name: entry.wire_id,
         bare_payload,
         framed_payload_len,
+        payload_header_flags,
         write_framed_payload: entry.frame_write,
     })
 }
@@ -1504,7 +1515,12 @@ fn encoded_instruction_payload(instr: &InstructionBox) -> Option<EncodedInstruct
 fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
     let encoded = encoded_instruction_payload(instr)?;
     let mut payload = Vec::with_capacity(encoded.framed_payload_len);
-    (encoded.write_framed_payload)(&mut payload, &encoded.bare_payload).ok()?;
+    (encoded.write_framed_payload)(
+        &mut payload,
+        &encoded.bare_payload,
+        encoded.payload_header_flags,
+    )
+    .ok()?;
     Some((encoded.name, payload))
 }
 
@@ -1518,7 +1534,10 @@ fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
         let registry = instruction_registry();
         registry.entry_for_type_name(type_name)?
     };
-    let payload_len = Instruction::dyn_encoded_len(inner)?;
+    let payload_len = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        Instruction::dyn_encoded_len(inner)?
+    };
     let framed_payload_len = (entry.frame_len)(payload_len)?;
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
@@ -1533,7 +1552,10 @@ fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
         let registry = instruction_registry();
         registry.entry_for_type_name(type_name)?
     };
-    let payload_len = Instruction::dyn_encode_capacity_hint(inner)?;
+    let payload_len = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        Instruction::dyn_encode_capacity_hint(inner)?
+    };
     let framed_payload_len = (entry.frame_len)(payload_len)?;
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
@@ -1583,6 +1605,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
             payload.name,
             payload.framed_payload_len,
             &payload.bare_payload,
+            payload.payload_header_flags,
             payload.write_framed_payload,
         )
     }
@@ -1977,7 +2000,9 @@ pub fn frame_instruction_payload(
         registry.entry_for_key(type_name).copied()
     };
     if let Some(entry) = entry {
-        return (entry.frame)(payload);
+        let header_flags = norito::codec::take_last_encode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        return (entry.frame)(payload, header_flags);
     }
     Err(norito::Error::Message(format!(
         "unknown instruction `{type_name}` (not registered)"
@@ -2018,7 +2043,7 @@ pub struct InstructionRegistry {
 struct RegistryEntry {
     ctor: InstructionConstructor,
     wire_id: &'static str,
-    frame: fn(&[u8]) -> Result<Vec<u8>, norito::core::Error>,
+    frame: fn(&[u8], u8) -> Result<Vec<u8>, norito::core::Error>,
     frame_write: InstructionPayloadFrameWriter,
     frame_len: fn(usize) -> Option<usize>,
 }
@@ -2049,7 +2074,7 @@ impl InstructionRegistry {
         {
             decode_instruction_payload::<T>(input, header_flags)
         }
-        fn frame<T>(payload: &[u8]) -> Result<Vec<u8>, norito::core::Error>
+        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
         where
             T: Instruction
                 + Decode
@@ -2057,14 +2082,12 @@ impl InstructionRegistry {
                 + norito::NoritoSerialize
                 + for<'a> norito::NoritoDeserialize<'a>,
         {
-            norito::core::frame_bare_with_header_flags::<T>(
-                payload,
-                norito::core::default_encode_flags(),
-            )
+            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
         fn frame_write<T>(
             writer: &mut dyn std::io::Write,
             payload: &[u8],
+            header_flags: u8,
         ) -> Result<(), norito::core::Error>
         where
             T: Instruction
@@ -2073,11 +2096,7 @@ impl InstructionRegistry {
                 + norito::NoritoSerialize
                 + for<'a> norito::NoritoDeserialize<'a>,
         {
-            norito::core::write_bare_frame_with_header_flags::<T, _>(
-                writer,
-                payload,
-                norito::core::default_encode_flags(),
-            )
+            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
         }
         fn frame_len<T>(payload_len: usize) -> Option<usize>
         where
@@ -2127,7 +2146,7 @@ impl InstructionRegistry {
         {
             decode_instruction_payload::<T>(input, header_flags)
         }
-        fn frame<T>(payload: &[u8]) -> Result<Vec<u8>, norito::core::Error>
+        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
         where
             T: Instruction
                 + Decode
@@ -2135,14 +2154,12 @@ impl InstructionRegistry {
                 + norito::NoritoSerialize
                 + for<'a> norito::NoritoDeserialize<'a>,
         {
-            norito::core::frame_bare_with_header_flags::<T>(
-                payload,
-                norito::core::default_encode_flags(),
-            )
+            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
         }
         fn frame_write<T>(
             writer: &mut dyn std::io::Write,
             payload: &[u8],
+            header_flags: u8,
         ) -> Result<(), norito::core::Error>
         where
             T: Instruction
@@ -2151,11 +2168,7 @@ impl InstructionRegistry {
                 + norito::NoritoSerialize
                 + for<'a> norito::NoritoDeserialize<'a>,
         {
-            norito::core::write_bare_frame_with_header_flags::<T, _>(
-                writer,
-                payload,
-                norito::core::default_encode_flags(),
-            )
+            norito::core::write_bare_frame_with_header_flags::<T, _>(writer, payload, header_flags)
         }
         fn frame_len<T>(payload_len: usize) -> Option<usize>
         where
@@ -3501,9 +3514,11 @@ mod tests {
         let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
         let _guard = RegistryGuard::set(registry);
         let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
-        let bytes = instruction.encode();
+        let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
         let framed = frame_instruction_payload(std::any::type_name::<RecordSccpMessage>(), &bytes)
             .expect("record sccp message must frame");
+        let view = norito::core::from_bytes_view(&framed).expect("framed instruction payload");
+        assert_eq!(view.flags(), expected_flags);
         let decoded =
             decode_instruction_from_pair(std::any::type_name::<RecordSccpMessage>(), &framed)
                 .expect("record sccp message must decode");
@@ -3512,6 +3527,22 @@ mod tests {
             .downcast_ref::<RecordSccpMessage>()
             .expect("decoded instruction type");
         assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
+        let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
+        let _guard = RegistryGuard::set(registry);
+        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
+        let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
+        let boxed = InstructionBox::from(instruction);
+
+        let (_, framed_payload) =
+            super::encoded_instruction_pair_payload(&boxed).expect("instruction pair payload");
+
+        let view =
+            norito::core::from_bytes_view(&framed_payload).expect("framed instruction payload");
+        assert_eq!(view.flags(), expected_flags);
     }
 
     #[test]

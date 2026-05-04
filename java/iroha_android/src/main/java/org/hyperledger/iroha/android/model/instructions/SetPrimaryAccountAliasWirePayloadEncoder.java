@@ -19,6 +19,9 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
       "iroha_data_model::isi::domain_link::SetPrimaryAccountAlias";
 
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
+  private static final TypeAdapter<AccountAliasDomainPayload> ACCOUNT_ALIAS_DOMAIN_ADAPTER =
+      NoritoAdapters.transparent(
+          STRING_ADAPTER, value -> value.value, AccountAliasDomainPayload::new);
   private static final TypeAdapter<Optional<AccountAliasPayload>> OPTIONAL_ALIAS_ADAPTER =
       NoritoAdapters.option(new AccountAliasPayloadAdapter());
   private static final TypeAdapter<Optional<Long>> OPTIONAL_U64_ADAPTER =
@@ -28,6 +31,14 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
 
   public static InstructionBox encode(
       final String accountId, final String alias, final String aliasDomain) {
+    return encode(accountId, alias, aliasDomain, 0L);
+  }
+
+  public static InstructionBox encode(
+      final String accountId, final String alias, final String aliasDomain, final long dataspace) {
+    if (dataspace < 0L) {
+      throw new IllegalArgumentException("dataspace must be non-negative");
+    }
     final String normalizedAccountId = requireNonBlank(accountId, "accountId");
     final String normalizedAlias = requireUsername(alias, "alias");
     final Optional<AccountAliasDomainPayload> normalizedAliasDomain =
@@ -41,7 +52,7 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
             new SetPrimaryAccountAliasPayload(
                 accountPayload,
                 Optional.of(
-                    new AccountAliasPayload(normalizedAlias, normalizedAliasDomain, 0L)),
+                    new AccountAliasPayload(normalizedAlias, normalizedAliasDomain, dataspace)),
                 Optional.empty()),
             SCHEMA_PATH,
             new SetPrimaryAccountAliasPayloadAdapter());
@@ -96,7 +107,7 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
   private static final class AccountAliasPayloadAdapter
       implements TypeAdapter<AccountAliasPayload> {
     private static final TypeAdapter<Optional<AccountAliasDomainPayload>> OPTIONAL_ALIAS_DOMAIN_ADAPTER =
-        NoritoAdapters.option(new AccountAliasDomainPayloadAdapter());
+        NoritoAdapters.option(ACCOUNT_ALIAS_DOMAIN_ADAPTER);
     private static final TypeAdapter<Long> U64_ADAPTER = NoritoAdapters.uint(64);
 
     @Override
@@ -117,19 +128,6 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
 
     private AccountAliasDomainPayload(final String value) {
       this.value = value;
-    }
-  }
-
-  private static final class AccountAliasDomainPayloadAdapter
-      implements TypeAdapter<AccountAliasDomainPayload> {
-    @Override
-    public void encode(final NoritoEncoder encoder, final AccountAliasDomainPayload value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value.value);
-    }
-
-    @Override
-    public AccountAliasDomainPayload decode(final NoritoDecoder decoder) {
-      throw new UnsupportedOperationException("Decoding AccountAliasDomain is not supported");
     }
   }
 

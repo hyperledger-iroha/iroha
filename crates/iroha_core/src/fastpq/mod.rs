@@ -9,7 +9,8 @@ use std::{
 
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PoseidonSponge,
-    PublicInputs, StateTransition, TransitionBatch, try_hash_bn254_poseidon_word_batches,
+    PublicInputs, StateTransition, TransitionBatch,
+    gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
     try_submit_bn254_poseidon_word_batches,
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
@@ -113,6 +114,12 @@ pub enum TranscriptBatchError {
         /// Underlying Norito error.
         #[from]
         source: norito::core::Error,
+    },
+    /// Transfer SMT witness materialization failed.
+    #[error("failed to attach transfer SMT witnesses")]
+    TransferWitness {
+        /// Underlying FASTPQ prover error.
+        source: fastpq_prover::Error,
     },
     /// Execution witness does not carry precomputed FASTPQ batches.
     #[error("execution witness missing fastpq batches with public inputs")]
@@ -736,8 +743,20 @@ where
     I: IntoIterator<Item = &'a TransferTranscript>,
 {
     let mut transcripts: Vec<TransferTranscript> = transcripts.into_iter().cloned().collect();
+    let transfer_roots = if transcripts.is_empty() {
+        None
+    } else {
+        Some(
+            attach_transfer_smt_witnesses(&mut transcripts)
+                .map_err(|source| TranscriptBatchError::TransferWitness { source })?,
+        )
+    };
     finalize_transfer_transcripts_serial(&mut transcripts);
     let mut batch = TransitionBatch::new(parameter_set, public_inputs_from_dto(&public_inputs));
+    if let Some((old_root, new_root)) = transfer_roots {
+        batch.public_inputs.old_root = old_root;
+        batch.public_inputs.new_root = new_root;
+    }
     for transcript in &transcripts {
         append_transcript(&mut batch, transcript)?;
     }
@@ -1352,11 +1371,47 @@ mod tests {
         let decoded: Vec<TransferTranscript> =
             decode_from_bytes(encoded).expect("decode transcripts");
         let mut expected = transcript;
+        fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(std::slice::from_mut(
+            &mut expected,
+        ))
+        .expect("attach expected witnesses");
         expected.poseidon_preimage_digest = Some(poseidon_preimage_digest(
             &expected.deltas[0],
             &expected.batch_hash,
         ));
         assert_eq!(decoded, vec![expected]);
+    }
+
+    #[test]
+    fn batch_from_transcripts_attaches_transfer_smt_witnesses() {
+        let transcript = sample_transcript();
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .expect("batch");
+        let encoded = batch
+            .metadata
+            .get(TRANSFER_TRANSCRIPTS_METADATA_KEY)
+            .expect("transfer metadata");
+        let decoded: Vec<TransferTranscript> =
+            decode_from_bytes(encoded).expect("decode transcripts");
+        let delta = &decoded[0].deltas[0];
+        assert_eq!(delta.from_smt_witness.path_bits.len(), 4);
+        assert_eq!(delta.from_smt_witness.siblings.len(), 32);
+        assert_eq!(delta.to_smt_witness.path_bits.len(), 4);
+        assert_eq!(delta.to_smt_witness.siblings.len(), 32);
+        assert_ne!(batch.public_inputs.old_root, [0; 32]);
+        assert_ne!(batch.public_inputs.new_root, [0; 32]);
+        fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
+            .expect("transfer transcript rows verify");
+        fastpq_prover::gadgets::transfer::transcripts_to_witnesses(
+            &decoded,
+            &batch.public_inputs.old_root,
+            &batch.public_inputs.new_root,
+        )
+        .expect("transfer SMT witnesses verify");
     }
 
     #[test]

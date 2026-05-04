@@ -555,6 +555,104 @@ final class ToriiClientTests: XCTestCase {
         return ToriiClient(baseURL: baseURL, session: session)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAuthenticationContextAddsWalletHeadersToEveryRequest() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            authentication: try ToriiClientAuthentication.bearerToken(
+                " wallet-token ",
+                accountId: " sora-account-1 ",
+                dataspaceId: " mibank.bpng ",
+                additionalHeaders: ["X-Trace-Id": "trace-123"]
+            )
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/health")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer wallet-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Account-Id"), "sora-account-1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Dataspace-Id"), "mibank.bpng")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Trace-Id"), "trace-123")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/plain")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/plain"])!
+            return (response, Data("ok".utf8))
+        }
+
+        let health = try await client.getHealth()
+        XCTAssertEqual(health, "ok")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAuthenticationContextPreservesJsonRequestHeaders() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            authentication: try ToriiClientAuthentication.authorizationHeader(
+                "Bearer wallet-token",
+                accountId: "sora-account-1",
+                dataspaceId: "mibank.bpng"
+            )
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer wallet-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Account-Id"), "sora-account-1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Dataspace-Id"), "mibank.bpng")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data())
+        }
+
+        let resolved = try await client.resolveAccountAlias("missing")
+        XCTAssertNil(resolved)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAuthenticationContextRejectsInsecureTransport() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "http://example.test")!,
+            session: session,
+            authentication: try ToriiClientAuthentication.bearerToken(
+                "wallet-token",
+                accountId: "sora-account-1",
+                dataspaceId: "mibank.bpng"
+            )
+        )
+
+        await XCTAssertThrowsErrorAsync(try await client.getHealth()) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                XCTFail("Expected invalidPayload, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("refuses insecure transport"))
+        }
+    }
+
+    func testAuthenticationContextRequiresNonEmptyTokenAndAccount() throws {
+        XCTAssertThrowsError(
+            try ToriiClientAuthentication.bearerToken(" ", accountId: "sora-account-1")
+        )
+        XCTAssertThrowsError(
+            try ToriiClientAuthentication.bearerToken("wallet-token", accountId: " ")
+        )
+    }
+
     private func nodeCapabilitiesBody(
         dataModelVersion: Int = ToriiNodeCapabilities.expectedDataModelVersion,
         signedTransactionSchemaHashHex: String? = ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex
@@ -818,7 +916,46 @@ final class ToriiClientTests: XCTestCase {
         let resolved = try await makeClient().resolveAccountAlias("alice")
         XCTAssertEqual(resolved?.alias, "alice")
         XCTAssertEqual(resolved?.accountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+        XCTAssertEqual(resolved?.accountIds, ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"])
         XCTAssertEqual(resolved?.index, 7)
+        XCTAssertEqual(resolved?.source, "world_state")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAccountAliasParsesAccountIdsArray() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["alias"] as? String, "alice")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "alias":"alice",
+              "account_ids":[
+                "  sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB  ",
+                "",
+                "sorauﾛ1Nｼﾒnq9A2ｵﾗﾐｵGﾕﾕｸﾜLﾁﾐAfｻQ5Rcj2DRﾒﾀqTgnUoU72NGB"
+              ],
+              "source":"world_state"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let resolved = try await makeClient().resolveAccountAlias("alice")
+        XCTAssertEqual(resolved?.alias, "alice")
+        XCTAssertEqual(resolved?.accountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+        XCTAssertEqual(
+            resolved?.accountIds,
+            [
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                "sorauﾛ1Nｼﾒnq9A2ｵﾗﾐｵGﾕﾕｸﾜLﾁﾐAfｻQ5Rcj2DRﾒﾀqTgnUoU72NGB",
+            ]
+        )
         XCTAssertEqual(resolved?.source, "world_state")
     }
 

@@ -14274,6 +14274,7 @@ mod tests {
                 sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                execution_context_hash: None,
                 confidential_features: None,
             };
             let mut state_block = app.state.block(block_header);

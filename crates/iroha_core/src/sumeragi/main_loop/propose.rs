@@ -5,6 +5,7 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
 use core::num::{NonZeroU64, NonZeroUsize};
+use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext};
 use iroha_data_model::consensus::{
     CommitStakeSnapshot as ModelCommitStakeSnapshot,
     CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
@@ -197,6 +198,49 @@ fn trim_batch_for_size_cap<T, U>(
         removed_count = removed_count.saturating_add(1);
     }
     removed_count
+}
+
+fn canonicalize_parallel_batch_by_key<T, U, K, F>(
+    tx_batch: &mut Vec<T>,
+    routing_batch: &mut Vec<U>,
+    sizes: &mut Vec<usize>,
+    key: F,
+) where
+    K: Ord,
+    F: Fn(&T) -> K,
+{
+    assert_eq!(
+        tx_batch.len(),
+        routing_batch.len(),
+        "routing decisions must align with transactions"
+    );
+    assert_eq!(
+        tx_batch.len(),
+        sizes.len(),
+        "transaction sizes must align with transactions"
+    );
+    if tx_batch.len() <= 1 {
+        return;
+    }
+
+    let mut entries: Vec<_> = std::mem::take(tx_batch)
+        .into_iter()
+        .zip(std::mem::take(routing_batch))
+        .zip(std::mem::take(sizes))
+        .enumerate()
+        .map(|(idx, ((tx, routing), size))| (key(&tx), idx, tx, routing, size))
+        .collect();
+
+    entries.sort_unstable_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+
+    tx_batch.reserve(entries.len());
+    routing_batch.reserve(entries.len());
+    sizes.reserve(entries.len());
+    for (_, _, tx, routing, size) in entries {
+        tx_batch.push(tx);
+        routing_batch.push(routing);
+        sizes.push(size);
+    }
 }
 
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
@@ -917,9 +961,12 @@ impl Actor {
         pending_queue_len: usize,
     ) -> bool {
         let missing_qc_liveness_active = self.frontier_missing_qc_liveness_active(height, view);
+        let committed_height = self.committed_height_snapshot();
+        let same_height_recovery_view =
+            height == committed_height.saturating_add(1) && owner_view < view && view > 0;
         if !self.config.resilience.enabled
-            || (pending_queue_len == 0 && !missing_qc_liveness_active)
-            || height != self.committed_height_snapshot().saturating_add(1)
+            || (pending_queue_len == 0 && !missing_qc_liveness_active && !same_height_recovery_view)
+            || height != committed_height.saturating_add(1)
             || owner_view >= view
         {
             return false;
@@ -962,6 +1009,17 @@ impl Actor {
                         && inflight.pending.height == height
                         && inflight.pending.view == owner_view
                 });
+        let owner_pending_commit_qc_observed = self
+            .pending
+            .pending_blocks
+            .get(&owner_hash)
+            .is_some_and(|pending| {
+                pending.height == height
+                    && pending.view == owner_view
+                    && !pending.aborted
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.commit_qc_observed()
+            });
         let Some(owner_pending) = self
             .pending
             .pending_blocks
@@ -987,7 +1045,8 @@ impl Actor {
                 let recovery_exhausted = owner_age >= hard_yield_age;
                 if (stale_unprotected_owner || recovery_exhausted)
                     && !owner_commit_qc_cached
-                    && !frontier_commit_qc_observed
+                    && !owner_pending_commit_qc_observed
+                    && (!frontier_commit_qc_observed || recovery_exhausted)
                     && !local_vote_consensus_locked
                     && !commit_inflight_live
                 {
@@ -1000,6 +1059,8 @@ impl Actor {
                         owner_age_ms = owner_age.as_millis(),
                         hard_yield_age_ms = hard_yield_age.as_millis(),
                         queue_len = pending_queue_len,
+                        frontier_commit_qc_observed,
+                        owner_pending_commit_qc_observed,
                         "cleared no-pending stale frontier owner for fresh resilience proposal"
                     );
                     return true;
@@ -1030,6 +1091,7 @@ impl Actor {
                     owner_slot_age_ms = ?owner_slot_evidence.map(|(age, _, _)| age.as_millis()),
                     hard_yield_age_ms = hard_yield_age.as_millis(),
                     owner_commit_qc_cached,
+                    owner_pending_commit_qc_observed,
                     local_vote_consensus_locked,
                     commit_inflight_live,
                     body_repair_requested,
@@ -1065,8 +1127,9 @@ impl Actor {
                     self.frontier_slot_competing_quorum_locked_for_view(slot, view),
                 )
             });
+        let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         if owner_commit_qc_cached
-            || frontier_commit_qc_observed
+            || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
             || ((local_vote_blocks || competing_quorum_locked) && !recovery_exhausted)
         {
@@ -1090,6 +1153,7 @@ impl Actor {
                     recovery_exhausted,
                     owner_commit_qc_cached,
                     frontier_commit_qc_observed,
+                    frontier_commit_qc_blocks_yield,
                     local_vote_consensus_locked,
                     local_vote_blocks,
                     competing_quorum_locked,
@@ -1360,6 +1424,31 @@ impl Actor {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);
+        if let Some(lock) =
+            self.same_height_vote_lock_blocking_candidate(proposal_height, view, None)
+        {
+            let _ = self.seed_frontier_slot_from_same_height_evidence(
+                proposal_height,
+                view,
+                now,
+                "vote_locked_same_height",
+                false,
+            );
+            warn!(
+                height = proposal_height,
+                view,
+                epoch = proposal_epoch,
+                locked_block = %lock.block_hash,
+                locked_view = lock.view,
+                locked_votes = lock.vote_count,
+                conflicting_voters = lock.conflicting_voters,
+                candidate_possible_votes = lock.candidate_possible_votes,
+                required = lock.required,
+                total_validators = lock.total_validators,
+                "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
+            );
+            return Ok(false);
+        }
         if let Some(existing_vote) = self.local_same_height_vote(proposal_height, proposal_epoch) {
             if !self.local_same_height_vote_blocks_fresh_proposal(
                 proposal_height,
@@ -1820,6 +1909,12 @@ impl Actor {
                     tx_sizes.push(tx.encoded_len());
                 }
             }
+            canonicalize_parallel_batch_by_key(
+                &mut tx_batch,
+                &mut routing_batch,
+                &mut tx_sizes,
+                crate::tx::AcceptedTransaction::hash_as_entrypoint,
+            );
             let (
                 signed_block,
                 block_created_msg,
@@ -2099,6 +2194,23 @@ impl Actor {
 
                 let proof_policy_bundle = crate::da::proof_policy_bundle(&lane_config);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
+
+                let execution_context = tx_batch
+                    .iter()
+                    .zip(routing_batch.iter())
+                    .map(|(tx, routing)| {
+                        ExternalExecutionContext::new(
+                            tx.hash_as_entrypoint(),
+                            routing.lane_id,
+                            routing.dataspace_id,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !execution_context.is_empty() {
+                    builder = builder.with_execution_context(Some(
+                        BlockExecutionContextBundle::new(execution_context),
+                    ));
+                }
 
                 let new_block = builder
                     .with_confidential_features(conf_features)
@@ -4627,8 +4739,8 @@ impl Actor {
 mod tests {
     use super::{
         ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
-        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
-        trim_batch_for_size_cap,
+        canonicalize_parallel_batch_by_key, consensus_queue_backpressure, da_payload_budget,
+        next_cached_slot_timeout_streak, trim_batch_for_size_cap,
     };
     use crate::queue::BackpressureState;
     use crate::sumeragi::status;
@@ -4702,6 +4814,19 @@ mod tests {
         assert_eq!(txs.len(), 1);
         assert_eq!(routes.len(), 1);
         assert_eq!(sizes.len(), 1);
+    }
+
+    #[test]
+    fn canonicalize_parallel_batch_by_key_reorders_companions_stably() {
+        let mut txs = vec![30, 10, 20, 10];
+        let mut routes = vec!["c", "a", "b", "a2"];
+        let mut sizes = vec![3, 1, 2, 4];
+
+        canonicalize_parallel_batch_by_key(&mut txs, &mut routes, &mut sizes, |tx| *tx);
+
+        assert_eq!(txs, vec![10, 10, 20, 30]);
+        assert_eq!(routes, vec!["a", "a2", "b", "c"]);
+        assert_eq!(sizes, vec![1, 4, 2, 3]);
     }
 
     #[test]

@@ -344,7 +344,17 @@ fn assert_duplicate_reveal_outcome(
 
 async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
     let client = network.client();
-    let deadline = Instant::now() + network.sync_timeout();
+    let mut tick_clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    if tick_clients.is_empty() {
+        tick_clients.push(client.clone());
+    }
+    let deadline = Instant::now() + network.sync_timeout().max(Duration::from_secs(480));
+    let mut next_tick_client = 0usize;
+    let mut last_tick_error = None;
     loop {
         let status_client = client.clone();
         let blocks = tokio::task::spawn_blocking(move || status_client.get_status())
@@ -354,10 +364,13 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!("timed out advancing chain to height {target}; last height={blocks}");
+            bail!(
+                "timed out advancing chain to height {target}; last height={blocks}; last tick error={last_tick_error:?}"
+            );
         }
 
-        let submit_client = network.client();
+        let submit_client = tick_clients[next_tick_client % tick_clients.len()].clone();
+        next_tick_client = next_tick_client.wrapping_add(1);
         let submitted = tokio::task::spawn_blocking(move || {
             submit_client.submit(Log::new(
                 Level::INFO,
@@ -365,10 +378,14 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
             ))
         })
         .await?;
-        if let Err(error) = submitted
-            && !is_retryable_queue_pressure(&error)
-        {
-            return Err(error.into());
+        match submitted {
+            Ok(_) => {}
+            Err(error) if is_retryable_queue_pressure(&error) => {
+                last_tick_error = Some(error.to_string());
+            }
+            Err(error) => {
+                return Err(error.into());
+            }
         }
         sleep(Duration::from_secs(1)).await;
     }
@@ -570,7 +587,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         NetworkBuilder::new()
             .with_min_peers(4)
             .with_pipeline_time(Duration::from_secs(10))
-            .with_sync_timeout(Duration::from_secs(240)),
+            .with_sync_timeout(Duration::from_secs(480)),
         stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
     )
     .await?

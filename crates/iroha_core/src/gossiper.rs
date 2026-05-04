@@ -1689,7 +1689,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::InBlockchain,
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in blockchain, ignoring..."
                             )
                         }
@@ -1698,7 +1698,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::IsInQueue,
                         }) => {
                             iroha_logger::trace!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
@@ -1707,7 +1707,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
                             );
@@ -1729,7 +1729,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
                         }) => {
                             iroha_logger::warn!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
                             );
@@ -1749,7 +1749,7 @@ impl TransactionGossiper {
                         Err(crate::queue::Failure { tx, err }) => {
                             iroha_logger::error!(
                                 ?err,
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Failed to enqueue transaction."
                             )
                         }
@@ -2041,7 +2041,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::InBlockchain,
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in blockchain, ignoring..."
                             )
                         }
@@ -2050,7 +2050,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::IsInQueue,
                         }) => {
                             iroha_logger::trace!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
@@ -2059,7 +2059,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
                         }) => {
                             iroha_logger::debug!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
                             );
@@ -2081,7 +2081,7 @@ impl TransactionGossiper {
                             err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
                         }) => {
                             iroha_logger::warn!(
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
                             );
@@ -2101,7 +2101,7 @@ impl TransactionGossiper {
                         Err(crate::queue::Failure { tx, err }) => {
                             iroha_logger::error!(
                                 ?err,
-                                tx = %tx.as_ref().hash(),
+                                tx = %tx.hash(),
                                 "Failed to enqueue transaction."
                             )
                         }

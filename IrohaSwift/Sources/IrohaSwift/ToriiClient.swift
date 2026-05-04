@@ -2,6 +2,121 @@ import CryptoKit
 import Foundation
 
 public let ToriiPdpCommitmentHeader = "sora-pdp-commitment"
+public let ToriiAuthorizationHeader = "Authorization"
+public let ToriiAPITokenHeader = "X-API-Token"
+public let ToriiAccountIdHeader = "X-Account-Id"
+public let ToriiDataspaceIdHeader = "X-Dataspace-Id"
+
+public struct ToriiClientAuthentication: Equatable, Sendable {
+    public let headers: [String: String]
+
+    public init(headers: [String: String] = [:]) {
+        self.headers = Self.normalizedHeaders(headers)
+    }
+
+    public static func bearerToken(
+        _ token: String,
+        accountId: String,
+        dataspaceId: String? = nil,
+        apiToken: String? = nil,
+        additionalHeaders: [String: String] = [:]
+    ) throws -> ToriiClientAuthentication {
+        var headers = normalizedHeaders(additionalHeaders)
+        setHeader(
+            &headers,
+            key: ToriiAuthorizationHeader,
+            value: "Bearer \(try requiredHeaderValue(token, field: "token"))"
+        )
+        setHeader(
+            &headers,
+            key: ToriiAccountIdHeader,
+            value: try requiredHeaderValue(accountId, field: "accountId")
+        )
+        if let dataspaceId = try optionalHeaderValue(dataspaceId, field: "dataspaceId") {
+            setHeader(&headers, key: ToriiDataspaceIdHeader, value: dataspaceId)
+        }
+        if let apiToken = try optionalHeaderValue(apiToken, field: "apiToken") {
+            setHeader(&headers, key: ToriiAPITokenHeader, value: apiToken)
+        }
+        return ToriiClientAuthentication(headers: headers)
+    }
+
+    public static func authorizationHeader(
+        _ value: String,
+        accountId: String,
+        dataspaceId: String? = nil,
+        apiToken: String? = nil,
+        additionalHeaders: [String: String] = [:]
+    ) throws -> ToriiClientAuthentication {
+        var headers = normalizedHeaders(additionalHeaders)
+        setHeader(
+            &headers,
+            key: ToriiAuthorizationHeader,
+            value: try requiredHeaderValue(value, field: "authorizationHeader")
+        )
+        setHeader(
+            &headers,
+            key: ToriiAccountIdHeader,
+            value: try requiredHeaderValue(accountId, field: "accountId")
+        )
+        if let dataspaceId = try optionalHeaderValue(dataspaceId, field: "dataspaceId") {
+            setHeader(&headers, key: ToriiDataspaceIdHeader, value: dataspaceId)
+        }
+        if let apiToken = try optionalHeaderValue(apiToken, field: "apiToken") {
+            setHeader(&headers, key: ToriiAPITokenHeader, value: apiToken)
+        }
+        return ToriiClientAuthentication(headers: headers)
+    }
+
+    fileprivate static func normalizedHeaders(_ headers: [String: String]) -> [String: String] {
+        var normalized: [String: String] = [:]
+        for (key, value) in headers {
+            setHeader(&normalized, key: key, value: value)
+        }
+        return normalized
+    }
+
+    fileprivate static func setHeader(_ headers: inout [String: String], key: String, value: String?) {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+        let canonical = canonicalHeaderKey(trimmedKey)
+        let lower = canonical.lowercased()
+        headers = headers.filter { $0.key.lowercased() != lower }
+        if let value {
+            headers[canonical] = value
+        }
+    }
+
+    fileprivate static func canonicalHeaderKey(_ key: String) -> String {
+        switch key.lowercased() {
+        case "authorization": return ToriiAuthorizationHeader
+        case "x-api-token": return ToriiAPITokenHeader
+        case "x-account-id": return ToriiAccountIdHeader
+        case "x-dataspace-id": return ToriiDataspaceIdHeader
+        case "content-type": return "Content-Type"
+        case "accept": return "Accept"
+        default: return key
+        }
+    }
+
+    private static func requiredHeaderValue(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        guard !trimmed.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+            throw ToriiClientError.invalidPayload("\(field) must not contain newline characters.")
+        }
+        return trimmed
+    }
+
+    private static func optionalHeaderValue(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return try requiredHeaderValue(trimmed, field: field)
+    }
+}
 
 public func decodePdpCommitmentHeader(_ headers: [String: String]) throws -> Data? {
     guard !headers.isEmpty else { return nil }
@@ -291,6 +406,27 @@ fileprivate func decodeOptionalStringValue(
     return nil
 }
 
+fileprivate func decodeOptionalStringArrayValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String]
+) throws -> [String] {
+    for key in keys {
+        let codingKey = ToriiAnyCodingKey(key)
+        guard container.contains(codingKey) else {
+            continue
+        }
+        let values = try container.decodeIfPresent([String].self, forKey: codingKey) ?? []
+        let normalized = values.compactMap { value -> String? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if !normalized.isEmpty {
+            return normalized
+        }
+    }
+    return []
+}
+
 fileprivate func decodeRequiredStringValue(
     from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
     keys: [String],
@@ -391,6 +527,7 @@ public struct ToriiAssetDefinitionAliasBinding: Decodable, Sendable {
 public struct ToriiAccountAliasResolution: Decodable, Sendable {
     public let alias: String
     public let accountId: String
+    public let accountIds: [String]
     public let index: UInt64?
     public let source: String?
 
@@ -405,12 +542,30 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
         alias = try container.decode(String.self, forKey: .alias)
-        accountId = try decodeRequiredStringValue(
+        let scalarAccountId = try decodeOptionalStringValue(
             from: anyContainer,
-            keys: ["account_id", "accountId"],
-            decoder: decoder,
-            debugDescription: "account alias resolution must include account_id."
+            keys: ["account_id", "accountId"]
         )
+        let arrayAccountIds = try decodeOptionalStringArrayValue(
+            from: anyContainer,
+            keys: ["account_ids", "accountIds"]
+        )
+        let resolvedAccountIds = ([scalarAccountId].compactMap { $0 } + arrayAccountIds)
+            .reduce(into: [String]()) { values, value in
+                guard !values.contains(value) else { return }
+                values.append(value)
+            }
+        guard let primaryAccountId = resolvedAccountIds.first else {
+            throw DecodingError.keyNotFound(
+                ToriiAnyCodingKey("account_id"),
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "account alias resolution must include account_id or account_ids."
+                )
+            )
+        }
+        accountId = primaryAccountId
+        accountIds = resolvedAccountIds
         index = try container.decodeIfPresent(UInt64.self, forKey: .index)
         source = try container.decodeIfPresent(String.self, forKey: .source)
     }
@@ -10842,6 +10997,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
     /// correct relative URL resolution per RFC 3986.
     public let baseURL: URL
+    /// Default HTTP headers applied to every Torii request.
+    public let defaultHeaders: [String: String]
     private let session: URLSession
     private let serverClockCacheKey: String
     private var statusState = ToriiStatusState()
@@ -10851,13 +11008,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private var observedServerClock: ObservedServerClock?
     private static let defaultListPageSize = 100
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(baseURL: URL, session: URLSession = .shared, defaultHeaders: [String: String] = [:]) {
         // Normalize to directory URL for correct relative URL resolution.
         // Without trailing slash, URL(string:relativeTo:) replaces the last path component
         // instead of appending (per RFC 3986).
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
         self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
+        self.defaultHeaders = ToriiClientAuthentication.normalizedHeaders(defaultHeaders)
+    }
+
+    public convenience init(
+        baseURL: URL,
+        session: URLSession = .shared,
+        authentication: ToriiClientAuthentication
+    ) {
+        self.init(baseURL: baseURL, session: session, defaultHeaders: authentication.headers)
     }
 
     /// Invalidates the underlying URLSession and cancels all outstanding tasks.
@@ -14773,7 +14939,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         var request = URLRequest(url: finalURL)
         request.httpMethod = method.rawValue
         request.httpBody = body
+        var finalHeaders = defaultHeaders
         headers.forEach { key, value in
+            ToriiClientAuthentication.setHeader(&finalHeaders, key: key, value: value)
+        }
+        finalHeaders.forEach { key, value in
             request.setValue(value, forHTTPHeaderField: key)
         }
         return request

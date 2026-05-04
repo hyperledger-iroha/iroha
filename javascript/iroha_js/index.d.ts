@@ -8009,6 +8009,7 @@ export function buildCanonicalJsonRequest(params: {
   accountId: string;
   method?: string;
   path: string;
+  baseUrl?: string;
   query?: string | URLSearchParams;
   body?: unknown;
   headers?: Headers | ReadonlyArray<readonly [string, string]> | Record<string, string>;

@@ -300,10 +300,11 @@ const MULTISIG_DIRECT_SIGN_REJECTION: &str =
 /// Prefix used in transaction-limit rejection reasons when the signature cap is exceeded.
 pub const SIGNATURE_LIMIT_REASON_PREFIX: &str = "Too many signatures in payload";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 enum SignatureCheck {
     Verify,
     PrecheckedSingleEd25519,
+    Override(Result<(), SignatureVerificationFail>),
 }
 #[cfg(feature = "telemetry")]
 #[allow(clippy::module_name_repetitions)]
@@ -387,6 +388,8 @@ pub(crate) struct PreparedTransactionMetadata {
     pub(crate) signed_bytes: Option<Arc<Vec<u8>>>,
     /// Parsed Ed25519 key when the transaction has a single Ed25519 authority.
     pub(crate) single_ed25519_key: Option<iroha_crypto::Ed25519ParsedPublicKey>,
+    /// Parsed transaction metadata nesting depths, in canonical metadata iteration order.
+    metadata_depths: Result<Vec<(String, usize)>, TransactionLimitError>,
 }
 
 /// Signed transaction decoded from a versioned Torii payload with reusable admission metadata.
@@ -412,7 +415,7 @@ impl<'tx> CheckedTransaction<'tx> {
         tx: AcceptedTransaction<'tx>,
         state: &impl StateReadOnlyWithTransactions,
     ) -> Result<Self, (AcceptedTransaction<'tx>, TransactionAlreadyCommitted)> {
-        if state.has_transaction(tx.as_ref().hash()) {
+        if state.has_transaction(tx.hash()) {
             return Err((tx, TransactionAlreadyCommitted));
         }
         Ok(Self(tx))
@@ -482,12 +485,7 @@ fn ensure_metadata_depth(
     metadata: &Metadata,
     max_depth: usize,
 ) -> Result<(), TransactionLimitError> {
-    for (key, value) in metadata.iter() {
-        let parsed =
-            norito::json::parse_value(value.get()).map_err(|err| TransactionLimitError {
-                reason: format!("Metadata `{key}` is not valid JSON: {err}"),
-            })?;
-        let depth = json_value_depth(&parsed);
+    for (key, depth) in prepare_metadata_depths(metadata)? {
         if depth > max_depth {
             return Err(TransactionLimitError {
                 reason: format!("Metadata `{key}` nesting depth {depth} exceeds limit {max_depth}"),
@@ -495,6 +493,43 @@ fn ensure_metadata_depth(
         }
     }
     Ok(())
+}
+
+fn prepare_metadata_depths(
+    metadata: &Metadata,
+) -> Result<Vec<(String, usize)>, TransactionLimitError> {
+    let entries = metadata.iter();
+    let mut depths = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let parsed =
+            norito::json::parse_value(value.get()).map_err(|err| TransactionLimitError {
+                reason: format!("Metadata `{key}` is not valid JSON: {err}"),
+            })?;
+        depths.push((key.to_string(), json_value_depth(&parsed)));
+    }
+    Ok(depths)
+}
+
+fn ensure_metadata_depth_with_prepared(
+    metadata: &Metadata,
+    max_depth: usize,
+    prepared: Option<&PreparedTransactionMetadata>,
+) -> Result<(), TransactionLimitError> {
+    if let Some(prepared) = prepared {
+        let depths = prepared.metadata_depths.as_ref().map_err(Clone::clone)?;
+        for (key, depth) in depths {
+            if *depth > max_depth {
+                return Err(TransactionLimitError {
+                    reason: format!(
+                        "Metadata `{key}` nesting depth {depth} exceeds limit {max_depth}"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    } else {
+        ensure_metadata_depth(metadata, max_depth)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1309,6 +1344,11 @@ impl<'tx> AcceptedTransaction<'tx> {
         HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
     }
 
+    fn canonical_signed_payload(tx: &SignedTransaction) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::codec::Encode::encode(tx)
+    }
+
     fn external_entrypoint_hash_from_signed_payload(
         signed_payload: &[u8],
     ) -> HashOf<TransactionEntrypoint> {
@@ -1324,7 +1364,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
-        let signed_payload = norito::codec::Encode::encode(tx);
+        let signed_payload = Self::canonical_signed_payload(tx);
         Self::external_entrypoint_hash_from_signed_payload(&signed_payload)
     }
 
@@ -1421,9 +1461,9 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Build reusable stateless metadata for a signed transaction.
     #[must_use]
     pub(crate) fn prepare_signed_metadata(tx: &SignedTransaction) -> PreparedTransactionMetadata {
-        let signed_payload = norito::codec::Encode::encode(tx);
-        let encoded_len =
-            Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload.len());
+        let signed_payload = Self::canonical_signed_payload(tx);
+        let signed_payload_len = signed_payload.len();
+        let encoded_len = Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload_len);
         let entrypoint_hash = Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
         Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
             tx,
@@ -1445,6 +1485,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             encoded_len,
             signed_bytes: None,
             single_ed25519_key: Self::parsed_single_ed25519_key(tx),
+            metadata_depths: prepare_metadata_depths(tx.metadata()),
         }
     }
 
@@ -1555,10 +1596,14 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: &SignedTransaction,
         signature_check: SignatureCheck,
     ) -> Result<(), AcceptTransactionFail> {
-        if signature_check == SignatureCheck::PrecheckedSingleEd25519
-            && Self::has_single_ed25519_signature(tx)
-        {
-            return Ok(());
+        match signature_check {
+            SignatureCheck::Override(result) => {
+                return result.map_err(AcceptTransactionFail::SignatureVerification);
+            }
+            SignatureCheck::PrecheckedSingleEd25519 if Self::has_single_ed25519_signature(tx) => {
+                return Ok(());
+            }
+            SignatureCheck::Verify | SignatureCheck::PrecheckedSingleEd25519 => {}
         }
 
         tx.verify_signature().map_err(|err| {
@@ -1655,7 +1700,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn signature_verification_result(
         tx: &SignedTransaction,
     ) -> Result<(), SignatureVerificationFail> {
@@ -2105,6 +2149,36 @@ impl<'tx> AcceptedTransaction<'tx> {
         )
     }
 
+    /// Validate a transaction with metadata prepared once by the caller and a precomputed signature result.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_with_now_with_signature_result_and_prepared_metadata(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        signature_override: Option<Result<(), SignatureVerificationFail>>,
+        prepared: &PreparedTransactionMetadata,
+    ) -> Result<(), AcceptTransactionFail> {
+        let signature_check =
+            signature_override.map_or(SignatureCheck::Verify, SignatureCheck::Override);
+        Self::validate_with_now_and_signature_check(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            signature_check,
+            Some(prepared),
+        )
+    }
+
     /// Validate a transaction after a successful single-Ed25519 precheck with prepared metadata.
     ///
     /// # Errors
@@ -2251,7 +2325,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
-        ensure_metadata_depth(tx.metadata(), max_metadata_depth)
+        ensure_metadata_depth_with_prepared(tx.metadata(), max_metadata_depth, prepared)
             .map_err(AcceptTransactionFail::TransactionLimit)?;
 
         // Attachment payloads currently carry flat structures; no additional nesting cap required.
@@ -2517,6 +2591,36 @@ impl<'tx> AcceptedTransaction<'tx> {
         )
     }
 
+    /// Validate a heartbeat transaction with prepared metadata and a precomputed signature result.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        signature_override: Option<Result<(), SignatureVerificationFail>>,
+        prepared: &PreparedTransactionMetadata,
+    ) -> Result<(), AcceptTransactionFail> {
+        let signature_check =
+            signature_override.map_or(SignatureCheck::Verify, SignatureCheck::Override);
+        Self::validate_heartbeat_with_now_and_signature_check(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            signature_check,
+            Some(prepared),
+        )
+    }
+
     #[allow(clippy::too_many_lines)]
     fn validate_heartbeat_with_now_and_signature_check(
         tx: &SignedTransaction,
@@ -2637,7 +2741,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
-        ensure_metadata_depth(tx.metadata(), max_metadata_depth)
+        ensure_metadata_depth_with_prepared(tx.metadata(), max_metadata_depth, prepared)
             .map_err(AcceptTransactionFail::TransactionLimit)?;
 
         match &tx.instructions() {
@@ -2813,6 +2917,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             encoded_len: self.encoded_len(),
             signed_bytes: self.signed_bytes(),
             single_ed25519_key,
+            metadata_depths: prepare_metadata_depths(self.metadata()?),
         })
     }
 
@@ -3542,7 +3647,7 @@ impl StateBlock<'_> {
             _ => {}
         }
 
-        debug!(tx=%tx.as_ref().hash(), "Validating transaction");
+        debug!(tx=%tx.hash(), "Validating transaction");
         let trigger_sequence = if is_heartbeat {
             DataTriggerSequence::default()
         } else {
@@ -5577,7 +5682,10 @@ pub mod tests {
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
-        isi::{InstructionBox, Log},
+        isi::{
+            InstructionBox, Log,
+            governance::{ProposeRuntimeUpgradeProposal, VotingMode},
+        },
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -5590,6 +5698,7 @@ pub mod tests {
         permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         role::{Role, RoleId},
+        runtime::RuntimeUpgradeManifest,
         transaction::{
             TransactionBuilder,
             signed::{MultisigSignature, MultisigSignatures},
@@ -6731,6 +6840,38 @@ pub mod tests {
     }
 
     #[test]
+    fn accepted_private_entrypoint_into_checked_uses_entrypoint_hash() {
+        let chain: ChainId = "checked-private-entrypoint-chain".parse().unwrap();
+        let private = sample_private_kaigi_transaction(chain);
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::PrivateKaigi(private),
+        ));
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let view = state.view();
+        let checked = accepted
+            .clone()
+            .into_checked(&view)
+            .expect("private entrypoint should not require signed transaction access");
+        assert_eq!(checked.hash(), accepted.hash());
+        drop(view);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        state_block
+            .transactions
+            .insert_block_with_single_tx(accepted.hash(), nonzero!(1_usize));
+        state_block.commit().expect("block commit");
+
+        let view = state.view();
+        let result = accepted.into_checked(&view);
+        assert!(matches!(result, Err((_, TransactionAlreadyCommitted))));
+    }
+
+    #[test]
     fn accepted_transaction_caches_hashes_and_encoded_length() {
         let chain: ChainId = "accepted-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6791,6 +6932,36 @@ pub mod tests {
             AcceptedTransaction::external_entrypoint_hash_from_signed_payload(&versioned[1..]),
             signed.hash_as_entrypoint()
         );
+    }
+
+    #[test]
+    fn prepared_governance_transaction_hash_matches_canonical_entrypoint_hash() {
+        let chain: ChainId = "accepted-governance-entrypoint-hash-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let manifest = RuntimeUpgradeManifest {
+            name: "runtime.upgrade.hash.test".into(),
+            description: "runtime upgrade hash fixture".into(),
+            abi_version: 1,
+            abi_hash: [7; 32],
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
+            start_height: 42,
+            end_height: 84,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([ProposeRuntimeUpgradeProposal {
+                manifest,
+                window: None,
+                mode: Some(VotingMode::Plain),
+            }])
+            .sign(keypair.private_key());
+        let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
+
+        assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
+        assert_eq!(prepared.signed_hash, signed.hash());
     }
 
     #[test]
@@ -7062,6 +7233,31 @@ pub mod tests {
 
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.encoded_len, expected_len);
+    }
+
+    #[test]
+    fn prepared_metadata_depth_matches_direct_depth_check() {
+        let chain: ChainId = "prepared-depth-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("depth").expect("name"),
+            Json::from_str_norito("[[[1]]]").expect("valid nested json"),
+        );
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "prepared-depth".into())])
+            .with_metadata(metadata)
+            .sign(keypair.private_key());
+        let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
+
+        ensure_metadata_depth_with_prepared(signed.metadata(), 4, Some(&prepared))
+            .expect("prepared metadata depth should accept equal max depth");
+        assert_eq!(
+            ensure_metadata_depth_with_prepared(signed.metadata(), 3, Some(&prepared))
+                .expect_err("prepared metadata depth should reject too deep metadata"),
+            ensure_metadata_depth(signed.metadata(), 3)
+                .expect_err("direct metadata depth should reject too deep metadata")
+        );
     }
 
     #[test]

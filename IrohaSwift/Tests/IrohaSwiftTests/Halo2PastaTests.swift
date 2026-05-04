@@ -1406,6 +1406,16 @@ final class Halo2PastaTests: XCTestCase {
         }
         let iterations = env["IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS"].flatMap(Int.init) ?? 20
         XCTAssertGreaterThan(iterations, 0)
+        let medianBudgetSeconds = benchmarkBudgetSeconds(
+            env: env,
+            key: "IROHA_SWIFT_OFFLINE_V2_BENCH_MEDIAN_BUDGET_MS",
+            defaultMilliseconds: 850
+        )
+        let p95BudgetSeconds = benchmarkBudgetSeconds(
+            env: env,
+            key: "IROHA_SWIFT_OFFLINE_V2_BENCH_P95_BUDGET_MS",
+            defaultMilliseconds: 1_200
+        )
 
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
@@ -1420,7 +1430,29 @@ final class Halo2PastaTests: XCTestCase {
         let redeemSeconds = try benchmarkSeconds(iterations: iterations) {
             _ = try Halo2OfflineNoteV2Prover.proveRedeem(redeem)
         }
-        print("offline_note_v2_swift_bench audit=\(summary(auditSeconds)) redeem=\(summary(redeemSeconds))")
+        let auditMetrics = benchmarkMetrics(auditSeconds)
+        let redeemMetrics = benchmarkMetrics(redeemSeconds)
+        print("offline_note_v2_swift_bench audit=\(auditMetrics.summary) redeem=\(redeemMetrics.summary)")
+        XCTAssertLessThanOrEqual(
+            auditMetrics.median,
+            medianBudgetSeconds,
+            "audit median exceeded \(medianBudgetSeconds)s budget: \(auditMetrics.summary)"
+        )
+        XCTAssertLessThanOrEqual(
+            auditMetrics.p95,
+            p95BudgetSeconds,
+            "audit p95 exceeded \(p95BudgetSeconds)s budget: \(auditMetrics.summary)"
+        )
+        XCTAssertLessThanOrEqual(
+            redeemMetrics.median,
+            medianBudgetSeconds,
+            "redeem median exceeded \(medianBudgetSeconds)s budget: \(redeemMetrics.summary)"
+        )
+        XCTAssertLessThanOrEqual(
+            redeemMetrics.p95,
+            p95BudgetSeconds,
+            "redeem p95 exceeded \(p95BudgetSeconds)s budget: \(redeemMetrics.summary)"
+        )
     }
 
     func testOfflineNoteV2ProofPayloadRejectsMalformedInputs() throws {
@@ -1634,10 +1666,18 @@ final class Halo2PastaTests: XCTestCase {
         return durations
     }
 
-    private func summary(_ values: [Double]) -> String {
+    private func benchmarkBudgetSeconds(
+        env: [String: String],
+        key: String,
+        defaultMilliseconds: Double
+    ) -> Double {
+        (env[key].flatMap(Double.init) ?? defaultMilliseconds) / 1_000
+    }
+
+    private func benchmarkMetrics(_ values: [Double]) -> BenchmarkMetrics {
         let sorted = values.sorted()
         guard let maxValue = sorted.last else {
-            return "empty"
+            return BenchmarkMetrics(median: 0, p95: 0, max: 0, count: 0)
         }
         let median: Double
         if sorted.count % 2 == 0 {
@@ -1646,13 +1686,32 @@ final class Halo2PastaTests: XCTestCase {
             median = sorted[sorted.count / 2]
         }
         let p95Index = min(sorted.count - 1, max(0, Int(ceil(Double(sorted.count) * 0.95)) - 1))
-        return String(
-            format: "median=%.3fs p95=%.3fs max=%.3fs n=%d",
-            median,
-            sorted[p95Index],
-            maxValue,
-            sorted.count
+        return BenchmarkMetrics(
+            median: median,
+            p95: sorted[p95Index],
+            max: maxValue,
+            count: sorted.count
         )
+    }
+
+    private struct BenchmarkMetrics {
+        let median: Double
+        let p95: Double
+        let max: Double
+        let count: Int
+
+        var summary: String {
+            guard count > 0 else {
+                return "empty"
+            }
+            return String(
+                format: "median=%.3fs p95=%.3fs max=%.3fs n=%d",
+                median,
+                p95,
+                max,
+                count
+            )
+        }
     }
 
     private static func scalarBytes(_ value: UInt64) -> Data {

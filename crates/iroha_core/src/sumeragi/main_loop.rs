@@ -204,10 +204,28 @@ const REBROADCAST_COOLDOWN_CEILING: Duration = Duration::from_millis(200);
 const REBROADCAST_COOLDOWN_DIVISOR: u32 = 8;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Delivered RBC sessions can be retained near the tip for repair, but full DELIVER
+/// broadcasts are heavy enough to self-amplify during frontier recovery.
+const RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
+/// Keep full DELIVER rebroadcasts much slower than READY/chunk repair traffic.
+const RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 8;
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
 /// Minimum interval between RBC DELIVER deferral log emissions per session.
 const RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Debug)]
+struct SameHeightVoteLock {
+    block_hash: HashOf<BlockHeader>,
+    view: u64,
+    vote_count: usize,
+    commit_vote_observed: bool,
+    total_validators: usize,
+    required: usize,
+    candidate_possible_votes: usize,
+    conflicting_voters: usize,
+}
+
 /// EMA smoothing factor for pacemaker phase latencies.
 pub(super) const PACEMAKER_PHASE_EMA_ALPHA: f64 = 0.2;
 /// Log when the gap between tick invocations exceeds this threshold.
@@ -2805,6 +2823,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         BlockValidationError::HasCommittedTransactions
         | BlockValidationError::EmptyBlock
         | BlockValidationError::DuplicateTransactions
+        | BlockValidationError::ExecutionContextInvalid(_)
         | BlockValidationError::TransactionAccept(_)
         | BlockValidationError::MerkleRootMismatch
         | BlockValidationError::SignatureVerification(_)
@@ -5216,6 +5235,84 @@ impl Actor {
         })
     }
 
+    fn same_height_vote_lock_blocking_candidate(
+        &self,
+        height: u64,
+        candidate_view: u64,
+        candidate_hash: Option<HashOf<BlockHeader>>,
+    ) -> Option<SameHeightVoteLock> {
+        let expected_epoch = self.epoch_for_height(height);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut commit_roster = candidate_hash.map_or_else(
+            || self.roster_for_live_vote_with_mode(height, consensus_mode),
+            |block_hash| {
+                self.roster_for_vote_with_mode(block_hash, height, candidate_view, consensus_mode)
+            },
+        );
+        if commit_roster.is_empty() {
+            commit_roster = self.effective_commit_topology();
+        }
+        if commit_roster.is_empty() {
+            return None;
+        }
+
+        let topology = super::network_topology::Topology::new(commit_roster.clone());
+        let required = topology.min_votes_for_commit().max(1);
+        let total_validators = topology.as_ref().len();
+        let roster_set: BTreeSet<_> = commit_roster.into_iter().collect();
+        let mut conflicting_voters = BTreeSet::new();
+        let mut branch_voters: BTreeMap<HashOf<BlockHeader>, (u64, bool, BTreeSet<PeerId>)> =
+            BTreeMap::new();
+
+        for vote in self.stored_votes().filter(|vote| {
+            matches!(
+                vote.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote.height == height
+                && vote.epoch == expected_epoch
+        }) {
+            let Some(peer) = self.vote_signer_peer(vote) else {
+                continue;
+            };
+            if !roster_set.contains(&peer) {
+                continue;
+            }
+            if candidate_hash.is_some_and(|hash| vote.block_hash == hash) {
+                continue;
+            }
+
+            conflicting_voters.insert(peer.clone());
+            let entry = branch_voters
+                .entry(vote.block_hash)
+                .or_insert_with(|| (vote.view, false, BTreeSet::new()));
+            entry.0 = entry.0.max(vote.view);
+            entry.1 |= matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit);
+            entry.2.insert(peer);
+        }
+
+        let candidate_possible_votes = total_validators.saturating_sub(conflicting_voters.len());
+        if candidate_possible_votes >= required {
+            return None;
+        }
+
+        branch_voters
+            .into_iter()
+            .map(
+                |(block_hash, (view, commit_vote_observed, voters))| SameHeightVoteLock {
+                    block_hash,
+                    view,
+                    vote_count: voters.len(),
+                    commit_vote_observed,
+                    total_validators,
+                    required,
+                    candidate_possible_votes,
+                    conflicting_voters: conflicting_voters.len(),
+                },
+            )
+            .max_by_key(|lock| (lock.vote_count, lock.commit_vote_observed, lock.view))
+    }
+
     fn slot_has_locally_known_vote_backed_consensus_evidence(
         &self,
         height: u64,
@@ -7254,7 +7351,51 @@ impl Actor {
             return false;
         }
 
-        if let Some(slot) = self.frontier_slot.as_mut()
+        let height_has_cached_qc = {
+            let expected_epoch = self.epoch_for_height(frontier_height);
+            self.qc_cache.values().any(|qc| {
+                qc.height == frontier_height
+                    && qc.epoch == expected_epoch
+                    && matches!(
+                        qc.phase,
+                        crate::sumeragi::consensus::Phase::Prepare
+                            | crate::sumeragi::consensus::Phase::Commit
+                    )
+            })
+        };
+        let vote_locked_seed = (!height_has_cached_qc)
+            .then(|| {
+                self.same_height_vote_lock_blocking_candidate(frontier_height, requested_view, None)
+            })
+            .flatten();
+
+        let retarget_vote_locked_seed = self.frontier_slot.as_ref().and_then(|slot| {
+            let lock = vote_locked_seed.as_ref()?;
+            (slot.height == frontier_height
+                && !matches!(
+                    slot.mode,
+                    FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                )
+                && (slot.block_hash != lock.block_hash || slot.view != lock.view)
+                && !slot.quorum_progress.commit_qc_observed)
+                .then_some((slot.block_hash, slot.view, lock.clone()))
+        });
+        if let Some((previous_block, previous_view, lock)) = retarget_vote_locked_seed {
+            info!(
+                height = frontier_height,
+                requested_view,
+                previous_block = %previous_block,
+                previous_view,
+                locked_block = %lock.block_hash,
+                locked_view = lock.view,
+                locked_votes = lock.vote_count,
+                conflicting_voters = lock.conflicting_voters,
+                candidate_possible_votes = lock.candidate_possible_votes,
+                required = lock.required,
+                "retargeting same-height frontier recovery to vote-locked branch"
+            );
+            self.frontier_slot = None;
+        } else if let Some(slot) = self.frontier_slot.as_mut()
             && slot.height == frontier_height
             && !matches!(
                 slot.mode,
@@ -7308,7 +7449,16 @@ impl Actor {
         } else {
             None
         };
-        if let Some((view, block_hash)) = self
+        if let Some(lock) = vote_locked_seed {
+            let _ = self.handle_frontier_slot_event(
+                now,
+                FrontierSlotEvent::OnVoteObserved {
+                    block_hash: lock.block_hash,
+                    view: lock.view,
+                    voter: None,
+                },
+            );
+        } else if let Some((view, block_hash)) = self
             .slot_tracker
             .authoritative_block_slots
             .iter()
@@ -18456,6 +18606,7 @@ impl Actor {
         }
         let payload_cooldown = self.payload_rebroadcast_cooldown();
         let ready_cooldown = self.rebroadcast_cooldown();
+        let deliver_cooldown = self.rbc_deliver_rebroadcast_cooldown();
 
         for (key, session) in &rbc.sessions {
             if session.is_invalid() {
@@ -18468,7 +18619,7 @@ impl Actor {
                 let deadline = rbc
                     .deliver_rebroadcast_last_sent
                     .get(key)
-                    .and_then(|last| last.checked_add(ready_cooldown))
+                    .and_then(|last| last.checked_add(deliver_cooldown))
                     .unwrap_or(now)
                     .max(now);
                 next_due = Self::merge_deadline(next_due, Some(deadline));
@@ -22620,6 +22771,7 @@ impl Actor {
             );
         }
         let ready_cooldown = self.rebroadcast_cooldown();
+        let deliver_cooldown = self.rbc_deliver_rebroadcast_cooldown();
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
@@ -22813,7 +22965,7 @@ impl Actor {
                     progress = true;
                 }
                 if hot_repair_allowed
-                    && self.rbc_deliver_rebroadcast_due(&key, now, ready_cooldown)
+                    && self.rbc_deliver_rebroadcast_due(&key, now, deliver_cooldown)
                     && let Some(deliver) = self.build_rbc_deliver(key, &session)
                 {
                     let ready_senders: Vec<_> = session
@@ -23522,6 +23674,14 @@ impl Actor {
         let world = self.state.world_view();
         let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         payload_rebroadcast_cooldown_from_block_time(block_time)
+    }
+
+    fn rbc_deliver_rebroadcast_cooldown(&self) -> Duration {
+        saturating_mul_duration(
+            self.control_plane_rebroadcast_cooldown(),
+            RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER,
+        )
+        .max(RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR)
     }
 
     fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
@@ -33073,11 +33233,6 @@ impl Actor {
         if self.subsystems.commit.inflight.is_some() {
             return false;
         }
-        if self.queue.active_len() == 0 {
-            // Skip idle view-change churn when no work is queued.
-            self.queue_ready_since = None;
-            return false;
-        }
         let da_enabled = self.runtime_da_enabled();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let queue_depths = super::status::worker_queue_depth_snapshot();
@@ -33147,6 +33302,33 @@ impl Actor {
             near_quorum_queue_backlog,
             near_quorum_rbc_backlog,
         } = backlog_signals;
+        let empty_tx_queue_recovery_work_active = residual_round_backlog
+            || self.frontier_recovery_exists_at_height(height)
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
+            })
+            || self
+                .subsystems
+                .propose
+                .proposal_liveness
+                .is_some_and(|slot| slot.height == height)
+            || self
+                .subsystems
+                .propose
+                .new_view_tracker
+                .entries
+                .keys()
+                .any(|(entry_height, _)| *entry_height == height)
+            || self.height_has_vote_backed_consensus_evidence(height);
+        if self.queue.active_len() == 0 && !empty_tx_queue_recovery_work_active {
+            // Skip idle view-change churn when neither transactions nor recovery work are queued.
+            self.queue_ready_since = None;
+            return false;
+        }
         let near_quorum_fast_timeout_gate_open =
             backlog_signals.near_quorum_fast_timeout_gate_open();
 

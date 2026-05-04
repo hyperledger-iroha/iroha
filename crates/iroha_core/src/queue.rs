@@ -2606,7 +2606,7 @@ impl Queue {
         routing_decision: RoutingDecision,
         state: &State,
     ) -> Result<(), Failure> {
-        let hash = tx.as_ref().hash();
+        let hash = tx.hash();
         if state.has_committed_transaction(hash) {
             return Err(Failure {
                 tx: Box::new(tx),
@@ -3806,7 +3806,7 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         telemetry: Option<&StateTelemetry>,
     ) {
-        let hash = tx.as_ref().hash();
+        let hash = tx.hash();
         let _guard = self.push_remove_lock.lock();
         if self.txs.remove(&hash).is_some() {
             self.untrack_active_transaction();

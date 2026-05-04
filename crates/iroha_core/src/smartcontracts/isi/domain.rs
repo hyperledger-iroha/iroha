@@ -134,6 +134,9 @@ pub mod isi {
         definition: &AssetDefinition,
         alias: Option<&AssetDefinitionAlias>,
     ) -> Result<(), InstructionExecutionError> {
+        if state_transaction.replay_compatibility {
+            return Ok(());
+        }
         if definition.balance_scope_policy() != AssetBalancePolicy::Global {
             return Ok(());
         }
@@ -160,6 +163,9 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
+        if state_transaction.replay_compatibility {
+            return Ok(());
+        }
         ensure_global_asset_definition_home_is_public_or_universal(
             state_transaction,
             definition,
@@ -332,6 +338,9 @@ pub mod isi {
         authority: &AccountId,
         label: &AccountAlias,
     ) -> Result<(), InstructionExecutionError> {
+        if state_transaction.replay_compatibility {
+            return Ok(());
+        }
         if account_alias_is_open_retail_namespace(label, &state_transaction.nexus.dataspace_catalog)
         {
             return Ok(());
@@ -4318,6 +4327,37 @@ mod tests {
     }
 
     #[test]
+    fn replay_allows_legacy_account_alias_binding_without_active_sns_lease() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.replay_compatibility = true;
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+
+        SetAccountAliasBinding {
+            account: account_id.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("replay must preserve legacy alias binding");
+
+        assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+    }
+
+    #[test]
     fn bind_account_alias_with_open_retail_namespace_does_not_require_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
@@ -7656,6 +7696,42 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn replay_allows_legacy_global_asset_definition_in_restricted_dataspace() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let bpng = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("digital-kina", "bpng").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id =
+            AssetDefinitionId::new(domain_id, "kina".parse().expect("asset definition name"));
+        let new_definition = NewAssetDefinition {
+            id: definition_id,
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        tx.current_dataspace_id = Some(bpng);
+        tx.world.current_dataspace_id = Some(bpng);
+        tx.replay_compatibility = true;
+
+        Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect("replay must preserve legacy committed registration");
     }
 
     #[test]

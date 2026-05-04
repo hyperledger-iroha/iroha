@@ -6656,15 +6656,30 @@ mod tests {
             .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
             .expect("execution");
 
+        let sponsor_asset_id = AssetId::of(asset_def_id, sponsor_id);
         let sponsor_balance_after = stx
             .world
             .assets()
-            .get(&AssetId::of(asset_def_id, sponsor_id))
+            .get(&sponsor_asset_id)
             .expect("sponsor asset exists")
             .0
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
+
+        stx.apply();
+        block.commit().expect("commit state block");
+
+        let committed_balance_after = state
+            .view()
+            .world()
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists after commit")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(committed_balance_after, 9_999);
     }
 
     #[test]

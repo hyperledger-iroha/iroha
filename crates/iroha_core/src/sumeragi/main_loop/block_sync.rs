@@ -4600,6 +4600,7 @@ impl Actor {
             height: response.height,
             view: response.view,
             block_hash: response.block_hash,
+            evidence_hash: super::block_body_response_evidence_hash(&response),
         };
         if !self.frontier_slot_is_exact_height(response.height) {
             self.release_block_payload_dedup(&dedup_key);

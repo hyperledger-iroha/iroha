@@ -6115,12 +6115,20 @@ impl StatelessValidationCache {
         }
     }
 
+    pub(crate) fn get_ok(
+        &self,
+        key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        _now_ms: u128,
+    ) -> bool {
+        self.entries.contains_key(key)
+    }
+
     #[cfg(test)]
     pub(crate) fn contains_key(
         &self,
         key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
     ) -> bool {
-        self.entries.contains_key(key)
+        self.get_ok(key, 0)
     }
 
     pub(crate) fn insert_ok(
@@ -6181,11 +6189,11 @@ mod stateless_validation_cache_tests {
         let other_key = dummy_hash(8);
 
         cache.insert_ok(key, Some(200), 50);
-        assert!(cache.contains_key(&key));
+        assert!(cache.get_ok(&key, 100));
 
         cache.insert_ok(other_key, None, 0);
-        assert!(!cache.contains_key(&key));
-        assert!(cache.contains_key(&other_key));
+        assert!(!cache.get_ok(&key, 100));
+        assert!(cache.get_ok(&other_key, 100));
     }
 }
 
@@ -6691,6 +6699,8 @@ pub struct StateBlock<'state> {
         Option<std::sync::Arc<std::collections::BTreeMap<[u8; 32], bool>>>,
     /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.
     committed_fragments: usize,
+    /// True while rebuilding state from already committed Kura blocks.
+    pub(crate) replay_compatibility: bool,
 }
 
 impl<'state> StateBlock<'state> {
@@ -7047,6 +7057,8 @@ pub struct StateTransaction<'block, 'state> {
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
+    /// True while rebuilding state from already committed Kura blocks.
+    pub(crate) replay_compatibility: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -18884,6 +18896,7 @@ impl State {
             // No preverified batch at block start; may be set later by pipeline
             preverified_batch: None,
             committed_fragments: 0,
+            replay_compatibility: false,
         };
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
@@ -19363,6 +19376,7 @@ impl State {
             // No preverified batch at block start; may be set later by pipeline
             preverified_batch: None,
             committed_fragments: 0,
+            replay_compatibility: false,
         }
     }
 
@@ -23140,6 +23154,7 @@ impl<'state> StateBlock<'state> {
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
+            replay_compatibility: self.replay_compatibility,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
@@ -25485,6 +25500,7 @@ pub fn replay_blocks_from_kura_range(
                     state,
                     &mut voting_block,
                     false,
+                    replay_skip_block_signatures,
                     replay_skip_block_signatures,
                 )
                 .unpack(|_| {})

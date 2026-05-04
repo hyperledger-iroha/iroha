@@ -69,22 +69,30 @@ Usage:
 ```swift
 import IrohaSwift
 
-let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
-let sdk = IrohaSDK(baseURL: torii.baseURL)
-let pqSDK = IrohaSDK(baseURL: torii.baseURL, defaultSigningAlgorithm: .mlDsa)
-let gostSDK = IrohaSDK(baseURL: torii.baseURL, defaultSigningAlgorithm: .gost2012_256A)
+let toriiURL = URL(string: "https://torii.example")!
+let sdk = IrohaSDK(baseURL: toriiURL)
+let pqSDK = IrohaSDK(baseURL: toriiURL, defaultSigningAlgorithm: .mlDsa)
+let gostSDK = IrohaSDK(baseURL: toriiURL, defaultSigningAlgorithm: .gost2012_256A)
 
 // Generate a signing key using the SDK default (Ed25519 unless overridden)
 let signingKey = try sdk.generateSigningKey()
 let accountId = AccountId.make(publicKey: try signingKey.publicKey())
 let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
+let walletToken = "<wallet-session-token>"
+let toriiAuth = try ToriiClientAuthentication.bearerToken(
+    walletToken,
+    accountId: accountId,
+    dataspaceId: "mibank.bpng"
+)
+let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
+
 // Or opt into any native-bridge signing algorithm explicitly.
 let pqSigningKey = try pqSDK.generateSigningKey()
 let gostSigningKey = try gostSDK.signingKey(fromSeed: Data("seed".utf8))
 
-// Fetch balances
-sdk.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
+// Fetch balances through the credentialed Torii client
+torii.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
     print(result)
 }
 
@@ -118,6 +126,13 @@ sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
 ```
+
+Wallet-scoped Torii deployments commonly require the `Authorization`,
+`X-Account-Id`, and `X-Dataspace-Id` headers on every request. Use
+`ToriiClientAuthentication` or `defaultHeaders` on `ToriiClient` so the SDK
+attaches those headers centrally instead of repeating them at each call site.
+Credential-bearing headers are rejected over plain HTTP or host-mismatched
+requests by the shared transport-security check.
 
 `TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
