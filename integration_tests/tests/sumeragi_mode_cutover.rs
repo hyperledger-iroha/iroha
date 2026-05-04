@@ -363,13 +363,10 @@ async fn permissioned_to_npos_cutover_switches_mode_at_activation_height() -> Re
     // attempt to commit the first post-cutover block.
     wait_for_collectors_mode_all(&clients, "npos").await?;
 
-    advance_to_height(
-        &network,
-        &client,
-        ACTIVATION_HEIGHT.saturating_add(1),
-        "cutover seed",
-    )
-    .await?;
+    // After every peer has reported the mode flip, this test only needs one
+    // post-cutover block to verify the active NPoS status shape. A slow follower
+    // can lag one block behind without invalidating the mode-transition check.
+    advance_primary_to_height(&client, ACTIVATION_HEIGHT.saturating_add(1), "cutover seed").await?;
 
     let mut attempts = 0;
     let post_status = loop {

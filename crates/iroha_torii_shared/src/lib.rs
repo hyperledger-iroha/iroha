@@ -95,6 +95,8 @@ pub mod uri {
     pub const GOV_ENACT: &str = "/v1/gov/enact";
     /// Governance: query the current sortition council
     pub const GOV_COUNCIL_CURRENT: &str = "/v1/gov/council/current";
+    /// Governance: query exact citizenship registry count
+    pub const GOV_CITIZENS_COUNT: &str = "/v1/gov/citizens";
     /// Governance: query citizenship status for an account
     pub const GOV_CITIZEN_STATUS: &str = "/v1/gov/citizens/{account_id}";
     /// Governance: persist a VRF-derived council for an epoch (app API)

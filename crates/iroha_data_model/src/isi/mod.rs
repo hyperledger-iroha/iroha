@@ -100,7 +100,7 @@ impl PartialEq for InstructionBox {
 impl Eq for InstructionBox {}
 
 /// Client-side wrapper preserving an instruction wire-id plus already encoded
-/// bare payload bytes.
+/// payload bytes.
 ///
 /// This is intended for compatibility flows where a remote node returns a draft
 /// instruction in framed wire form and the local client needs to resubmit that
@@ -109,6 +109,7 @@ impl Eq for InstructionBox {}
 pub struct OpaqueInstruction {
     wire_id: &'static str,
     bare_payload: Vec<u8>,
+    framed_payload: Vec<u8>,
 }
 
 impl OpaqueInstruction {
@@ -124,6 +125,7 @@ impl OpaqueInstruction {
         Ok(Self {
             wire_id: Box::leak(wire_id.into().into_boxed_str()),
             bare_payload: view.as_bytes().to_vec(),
+            framed_payload: framed_payload.to_vec(),
         })
     }
 
@@ -131,6 +133,12 @@ impl OpaqueInstruction {
     #[must_use]
     pub const fn wire_id(&self) -> &'static str {
         self.wire_id
+    }
+
+    /// Return the exact framed payload carried by this opaque instruction.
+    #[must_use]
+    pub fn framed_payload(&self) -> &[u8] {
+        &self.framed_payload
     }
 }
 
@@ -1415,6 +1423,14 @@ struct EncodedInstructionPayload {
     write_framed_payload: InstructionPayloadFrameWriter,
 }
 
+fn write_raw_instruction_payload(
+    writer: &mut dyn std::io::Write,
+    payload: &[u8],
+) -> Result<(), norito::core::Error> {
+    std::io::Write::write_all(writer, payload)?;
+    Ok(())
+}
+
 fn write_instruction_pair_fields<W: std::io::Write>(
     mut writer: W,
     name: &str,
@@ -1457,6 +1473,14 @@ fn write_instruction_pair_fields<W: std::io::Write>(
 
 fn encoded_instruction_payload(instr: &InstructionBox) -> Option<EncodedInstructionPayload> {
     let inner = peel_instruction_box(&**instr);
+    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+        return Some(EncodedInstructionPayload {
+            name: opaque.wire_id,
+            bare_payload: opaque.framed_payload.clone(),
+            framed_payload_len: opaque.framed_payload.len(),
+            write_framed_payload: write_raw_instruction_payload,
+        });
+    }
     let type_name = Instruction::id(inner);
     let entry = {
         let registry = instruction_registry();
@@ -1486,6 +1510,9 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
     let inner = peel_instruction_box(&**instr);
+    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+    }
     let type_name = Instruction::id(inner);
     let entry = {
         let registry = instruction_registry();
@@ -1498,6 +1525,9 @@ fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
 
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
     let inner = peel_instruction_box(&**instr);
+    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
+    }
     let type_name = Instruction::id(inner);
     let entry = {
         let registry = instruction_registry();
@@ -3528,6 +3558,7 @@ mod tests {
         let opaque = OpaqueInstruction {
             wire_id: "opaque/test",
             bare_payload: vec![0xAA, 0xBB, 0xCC],
+            framed_payload: vec![0xF0, 0xF1, 0xF2],
         };
         let mut actual = vec![0x11];
 
@@ -3537,6 +3568,35 @@ mod tests {
         assert_eq!(
             Instruction::dyn_encode_capacity_hint(&opaque),
             Some(opaque.bare_payload.len())
+        );
+    }
+
+    #[test]
+    fn opaque_instruction_serializes_preserved_framed_payload() {
+        let log = Log::new(Level::INFO, "opaque preserve".to_owned());
+        let wire_id = "opaque/test";
+        let bare_payload = Instruction::dyn_encode(&log);
+        let framed_payload = norito::core::frame_bare_with_header_flags::<Log>(
+            &bare_payload,
+            norito::core::default_encode_flags(),
+        )
+        .expect("frame payload");
+        let opaque = InstructionBox::from(
+            OpaqueInstruction::from_framed(wire_id, &framed_payload).expect("opaque payload"),
+        );
+
+        assert_eq!(Instruction::dyn_encode(&*opaque), bare_payload);
+        assert_eq!(
+            opaque
+                .as_any()
+                .downcast_ref::<OpaqueInstruction>()
+                .expect("opaque")
+                .framed_payload(),
+            framed_payload.as_slice()
+        );
+        assert_eq!(
+            norito::to_bytes(&opaque).expect("encode opaque"),
+            norito::to_bytes(&(wire_id.to_owned(), framed_payload)).expect("encode pair"),
         );
     }
 

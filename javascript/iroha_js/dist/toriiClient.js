@@ -99,6 +99,12 @@ const GET_TX_STATUS_OPTION_KEYS = new Set([
   "scope",
   "endpoints",
 ]);
+const ALIAS_CANONICAL_AUTH_OPTION_KEYS = new Set(["canonicalAuth"]);
+const ALIAS_BY_ACCOUNT_OPTION_KEYS = new Set([
+  "dataspace",
+  "domain",
+  "canonicalAuth",
+]);
 
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
@@ -2088,13 +2094,21 @@ export class ToriiClient {
    * Resolve an ISO bridge alias (`POST /v1/aliases/resolve`).
    * Returns null when the alias is missing (404). Throws when the runtime is disabled (503).
   * @param {string} alias
+  * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
   * @returns {Promise<Record<string, unknown> | null>}
   */
-  async resolveAlias(alias) {
+  async resolveAlias(alias, options = {}) {
     const aliasInput = requireNonEmptyString(alias, "alias");
     const normalizedAlias = looksLikeIban(aliasInput)
       ? normalizeIban(aliasInput, "alias")
       : aliasInput;
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "resolveAlias");
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "resolveAlias options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const payload = { alias: normalizedAlias };
     const response = await this._request("POST", "/v1/aliases/resolve", {
       headers: {
@@ -2102,6 +2116,8 @@ export class ToriiClient {
         Accept: "application/json",
       },
       body: JSON.stringify(payload),
+      signal,
+      canonicalAuth,
     });
     if (response.status === 404) {
       return null;
@@ -2121,18 +2137,31 @@ export class ToriiClient {
    * Resolve an ISO bridge alias by deterministic index (`POST /v1/aliases/resolve_index`).
    * Returns null when the index is unknown (404). Throws when the runtime is disabled (503).
    * @param {number | string | bigint} index
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
    * @returns {Promise<Record<string, unknown> | null>}
    */
-  async resolveAliasByIndex(index) {
+  async resolveAliasByIndex(index, options = {}) {
     const payload = {
       index: ToriiClient._normalizeUnsignedInteger(index, "index", { allowZero: true }),
     };
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "resolveAliasByIndex",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "resolveAliasByIndex options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const response = await this._request("POST", "/v1/aliases/resolve_index", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
       body: JSON.stringify(payload),
+      signal,
+      canonicalAuth,
     });
     if (response.status === 404) {
       return null;
@@ -2152,7 +2181,7 @@ export class ToriiClient {
    * List aliases bound to a canonical account id (`POST /v1/aliases/by_account`).
    * Returns null when the account is unknown (404).
    * @param {string} accountId
-   * @param {{dataspace?: string, domain?: string, signal?: AbortSignal}} [options]
+   * @param {{dataspace?: string, domain?: string, signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
    * @returns {Promise<{account_id: string, total: number, items: Array<{alias: string, dataspace: string, domain: string | null, is_primary: boolean}>} | null>}
    */
   async lookupAliasesByAccount(accountId, options = {}) {
@@ -2163,9 +2192,10 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(
       rest,
-      new Set(["dataspace", "domain"]),
+      ALIAS_BY_ACCOUNT_OPTION_KEYS,
       "lookupAliasesByAccount options",
     );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const dataspace =
       rest.dataspace === undefined
         ? undefined
@@ -2185,6 +2215,7 @@ export class ToriiClient {
         ...(domain ? { domain } : {}),
       }),
       signal,
+      canonicalAuth,
     });
     if (response.status === 404) {
       return null;

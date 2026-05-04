@@ -329,6 +329,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_protected_namespaces_update_tool());
     tools.push(iroha_gov_unlocks_stats_tool());
     tools.push(iroha_gov_council_current_tool());
+    tools.push(iroha_gov_citizens_count_tool());
     tools.push(iroha_gov_council_persist_tool());
     tools.push(iroha_gov_council_replace_tool());
     tools.push(iroha_gov_council_audit_tool());
@@ -1443,6 +1444,12 @@ async fn handle_tools_call(
         }
         "iroha.gov.council.current" => {
             match dispatch_iroha_gov_council_current(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.citizens.count" => {
+            match dispatch_iroha_gov_citizens_count(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4961,6 +4968,27 @@ async fn dispatch_iroha_gov_council_current(
         inbound_headers,
         Method::GET,
         "/v1/gov/council/current",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_gov_citizens_count(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/gov/citizens",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -11456,6 +11484,28 @@ fn iroha_gov_council_current_tool() -> ToolSpec {
     }
 }
 
+fn iroha_gov_citizens_count_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.citizens.count".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.citizens.count"),
+        description: "Fetch exact governance citizenship registry count (`/v1/gov/citizens`)."
+            .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/citizens".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_gov_council_persist_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.persist",
@@ -15068,6 +15118,11 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.council.current")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.citizens.count")
         );
         assert!(
             tools

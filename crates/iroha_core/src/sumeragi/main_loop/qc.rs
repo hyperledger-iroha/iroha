@@ -251,8 +251,35 @@ impl Actor {
         if qc.phase != crate::sumeragi::consensus::Phase::NewView && qc.highest_qc.is_some() {
             return None;
         }
+        if !self.embedded_qc_roster_matches_authoritative_topology(qc, consensus_mode) {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                roster_len = qc.validator_set.len(),
+                "rejecting embedded QC roster that is not anchored to active topology"
+            );
+            return None;
+        }
 
         let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+        if topology.as_ref().iter().any(|peer| {
+            !self
+                .roster_validation_cache
+                .pops
+                .contains_key(peer.public_key())
+        }) {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                roster_len = topology.as_ref().len(),
+                "rejecting embedded QC roster with missing validator proof of possession"
+            );
+            return None;
+        }
         let roster_len = topology.as_ref().len();
         let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
         let stake_snapshot = match consensus_mode {
@@ -291,6 +318,42 @@ impl Actor {
         }
 
         Some((topology, stake_snapshot))
+    }
+
+    fn embedded_qc_roster_matches_authoritative_topology(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+        consensus_mode: ConsensusMode,
+    ) -> bool {
+        let embedded =
+            super::roster::canonicalize_roster_for_mode(qc.validator_set.clone(), consensus_mode);
+        if embedded.is_empty() {
+            return false;
+        }
+        let mut candidates: Vec<Vec<PeerId>> = Vec::new();
+        let mut add_candidate = |roster: Vec<PeerId>| {
+            let canonical = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+            if !canonical.is_empty() && !candidates.iter().any(|known| known == &canonical) {
+                candidates.push(canonical);
+            }
+        };
+
+        let committed_height = self.committed_height_snapshot();
+        {
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            add_candidate(self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                committed_height,
+                consensus_mode,
+            ));
+        }
+        if qc.height <= committed_height.saturating_add(1) {
+            add_candidate(self.roster_for_live_vote_with_mode(qc.height, consensus_mode));
+        }
+        add_candidate(self.canonical_round_roster_with_mode(qc.height, qc.view, consensus_mode));
+        candidates.iter().any(|candidate| candidate == &embedded)
     }
 
     fn try_bootstrap_qc_validation_from_embedded_roster(

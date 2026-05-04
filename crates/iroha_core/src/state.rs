@@ -29893,6 +29893,7 @@ pub(crate) mod deserialize {
         world.rebuild_nft_owner_index();
         world.rebuild_rwa_owner_index();
         world.rebuild_escrow_indexes();
+        world.rebuild_proof_status_index();
         world
             .rebuild_opaque_uaid_index()
             .map_err(|message| json::Error::InvalidField {
@@ -31779,6 +31780,65 @@ mod tests {
             submitted_ids.is_empty(),
             "replacement should remove stale status-index entries",
         );
+    }
+
+    #[test]
+    fn proof_status_index_roundtrips_through_state_json() {
+        let backend = "halo2/ipa";
+        let verified_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x11; 32],
+        };
+        let rejected_id = ProofId {
+            backend: backend.into(),
+            proof_hash: [0x22; 32],
+        };
+
+        let record = |id: &ProofId, status: ProofStatus| ProofRecord {
+            id: id.clone(),
+            vk_ref: None,
+            vk_commitment: None,
+            status,
+            verified_at_height: Some(1),
+            bridge: None,
+        };
+
+        let mut world = World::default();
+        world.proofs.insert(
+            verified_id.clone(),
+            record(&verified_id, ProofStatus::Verified),
+        );
+        world.proofs.insert(
+            rejected_id.clone(),
+            record(&rejected_id, ProofStatus::Rejected),
+        );
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.view();
+
+        let verified_ids = FindProofRecordsByStatus {
+            status: ProofStatus::Verified,
+        }
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query verified proof records")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+
+        assert_eq!(verified_ids, vec![verified_id]);
     }
 
     #[test]

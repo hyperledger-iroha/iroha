@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
-import { AccountAddress, ToriiClient } from "../src/index.js";
+import {
+  AccountAddress,
+  ToriiClient,
+  canonicalRequestSignatureMessage,
+  generateKeyPair,
+  verifyEd25519,
+} from "../src/index.js";
 
 function ed25519PublicKeyBytes() {
   const { publicKey } = generateKeyPairSync("ed25519");
@@ -95,6 +101,43 @@ test("resolveAlias normalises IBAN input and parses alias responses", async () =
   const url = new URL(lastRequest.input);
   assert.equal(url.pathname, "/v1/aliases/resolve");
   assert.equal(lastRequest.init.headers["Content-Type"], "application/json");
+});
+
+test("resolveAlias attaches canonical auth when provided", async () => {
+  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 12) });
+  const signerAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  let lastRequest = null;
+  const fetchImpl = async (input, init) => {
+    lastRequest = { input, init };
+    return jsonResponse(200, {
+      alias: "tidal-river-4160@mibank.bpng",
+      account_id: VALID_ACCOUNT_ID,
+      source: "runtime",
+    });
+  };
+  fetchImpl.__irohaSupportsRawUtf8Headers = true;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl,
+  });
+
+  const result = await client.resolveAlias("tidal-river-4160@mibank.bpng", {
+    canonicalAuth: { accountId: signerAccountId, privateKey },
+  });
+
+  assert.equal(result.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+  assert.equal(lastRequest.init.headers["X-Iroha-Account"], signerAccountId);
+  const url = new URL(lastRequest.input);
+  const timestampMs = Number(lastRequest.init.headers["X-Iroha-Timestamp-Ms"]);
+  const nonce = lastRequest.init.headers["X-Iroha-Nonce"];
+  const message = canonicalRequestSignatureMessage({
+    method: lastRequest.init.method,
+    path: url.pathname,
+    body: lastRequest.init.body,
+    timestampMs,
+    nonce,
+  });
+  const signature = Buffer.from(lastRequest.init.headers["X-Iroha-Signature"], "base64");
+  assert.equal(verifyEd25519(message, signature, publicKey), true);
 });
 
 test("resolveAlias returns null for missing aliases and rejects when runtime is disabled", async () => {

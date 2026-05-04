@@ -15538,6 +15538,179 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block.clone());
+    let now = Instant::now();
+
+    assert!(actor.update_frontier_slot(
+        block_hash,
+        height,
+        view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ true,
+        None,
+        None,
+        now,
+    ));
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(25),
+            view_change_window: Some(Duration::from_millis(200)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash,
+                height,
+                view,
+                body: super::message::BlockBodyData::BlockCreated(
+                    super::message::BlockCreated::from(&block),
+                ),
+            },
+            Some(sender.clone()),
+        )
+        .expect("plain block body response handled");
+
+    assert!(
+        !actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned")
+            .contains(&dedup_key),
+        "plain exact BlockBodyResponse should not suppress the following QC-bearing recovery response"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "plain BlockBodyResponse cannot retire a missing commit-QC request by itself"
+    );
+
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        actor.effective_commit_topology(),
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash,
+                height,
+                view,
+                body: super::message::BlockBodyData::BlockSyncUpdate(update),
+            },
+            Some(sender),
+        )
+        .expect("QC-bearing block body response handled");
+    drain_known_block_qc_work(actor);
+
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "QC-bearing BlockSyncUpdate companion should retire the missing commit-QC request"
+    );
+    assert!(
+        actor
+            .state
+            .view()
+            .world()
+            .commit_qcs()
+            .get(&block_hash)
+            .is_some(),
+        "QC-bearing BlockSyncUpdate companion should record the recovered certificate"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_body_response_releases_dedup_when_slot_mismatch_ignores_it() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -26279,7 +26452,9 @@ async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
         .rbc
         .ready_rebroadcast_last_sent
         .insert(key, cooldown_marker);
-    harness.actor.tick();
+    let _ = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
     let cooldown_sent_at = *harness
         .actor
         .subsystems
@@ -41617,6 +41792,49 @@ async fn record_rbc_session_roster_repeated_derived_snapshot_with_same_roster_is
     assert!(
         actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "same-roster authoritative snapshots should not clear pending stash state"
+    );
+    let ready_cooldown = Instant::now()
+        .checked_add(Duration::from_secs(60))
+        .expect("cooldown marker should fit in Instant range");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, ready_cooldown);
+    let deliver_cooldown = Instant::now()
+        .checked_add(Duration::from_secs(60))
+        .expect("cooldown marker should fit in Instant range");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .deliver_rebroadcast_last_sent
+        .insert(key, deliver_cooldown);
+
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .get(&key)
+            .copied(),
+        Some(ready_cooldown),
+        "same-roster authoritative snapshots should preserve READY rebroadcast cooldowns"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_rebroadcast_last_sent
+            .get(&key)
+            .copied(),
+        Some(deliver_cooldown),
+        "same-roster authoritative snapshots should preserve DELIVER rebroadcast cooldowns"
     );
     let stored = actor
         .subsystems
@@ -58299,7 +58517,7 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
         .collect();
-    let state = state_with_peers(roster.clone());
+    let state = state_with_peers_and_keys(&roster, &keypairs);
 
     {
         let mut block = state.world.block();
@@ -58387,7 +58605,7 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
     let selection = super::selection_from_roster_artifacts(
         Some(&commit_qc),
         Some(&checkpoint),
-        Some(&stake_snapshot),
+        None,
         block_hash,
         height,
         Some(view),
@@ -58403,6 +58621,11 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
     assert!(
         selection.checkpoint.is_some(),
         "checkpoint should validate using commit certificate epoch"
+    );
+    assert_eq!(
+        selection.stake_snapshot.as_ref(),
+        Some(&stake_snapshot),
+        "NPoS selection should carry the locally resolved stake snapshot when no hint was supplied"
     );
 }
 
@@ -114236,6 +114459,170 @@ async fn commit_qc_bootstraps_from_embedded_roster_when_cached_roster_is_stale()
             .missing_block_requests
             .contains_key(&block_hash),
         "validated QC should still drive missing-block recovery for the unknown payload"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_rejects_shrunk_embedded_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let consensus_mode = ConsensusMode::Permissioned;
+    assert_eq!(
+        actor.consensus_context_for_height(height).0,
+        consensus_mode,
+        "test assumes permissioned consensus"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD8; Hash::LENGTH]));
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() > 2,
+        "test requires at least three validators"
+    );
+    actor.cache_vote_roster(block_hash, height, view, active_roster.clone());
+
+    let signer_peer = active_roster
+        .first()
+        .expect("active roster should be non-empty")
+        .clone();
+    let signer_key = harness
+        .key_pairs
+        .iter()
+        .find(|key_pair| key_pair.public_key() == signer_peer.public_key())
+        .expect("signer key should exist in harness")
+        .clone();
+    let shrunken_topology = super::network_topology::Topology::new(vec![signer_peer]);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![0x01],
+        Phase::Commit,
+        &shrunken_topology,
+        &[signer_key],
+    );
+    let qc_key = Actor::qc_tally_key(&qc);
+
+    actor
+        .handle_qc(qc)
+        .expect("handle maliciously shrunken commit QC");
+
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "unanchored embedded roster must not drive payload recovery"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "unanchored embedded roster must not request the block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_rejects_embedded_roster_with_missing_pop() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let consensus_mode = ConsensusMode::Permissioned;
+    assert_eq!(
+        actor.consensus_context_for_height(height).0,
+        consensus_mode,
+        "test assumes permissioned consensus"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD9; Hash::LENGTH]));
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() > 2,
+        "test requires at least three validators"
+    );
+    let fake_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let fake_peer = PeerId::new(fake_kp.public_key().clone());
+    let mut stale_roster = active_roster.clone();
+    stale_roster[0] = fake_peer;
+    let stale_roster = super::roster::canonicalize_roster_for_mode(stale_roster, consensus_mode);
+    let canonical_active =
+        super::roster::canonicalize_roster_for_mode(active_roster.clone(), consensus_mode);
+    assert_ne!(
+        stale_roster, canonical_active,
+        "test setup requires a cached roster that differs from the certified roster"
+    );
+    actor.cache_vote_roster(block_hash, height, view, stale_roster.clone());
+
+    let topology = super::network_topology::Topology::new(active_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let qc_key = Actor::qc_tally_key(&qc);
+    let missing_pop_peer = active_roster
+        .last()
+        .expect("active roster should be non-empty")
+        .clone();
+    actor
+        .roster_validation_cache
+        .pops
+        .remove(missing_pop_peer.public_key());
+    assert!(
+        !actor
+            .roster_validation_cache
+            .pops
+            .contains_key(missing_pop_peer.public_key()),
+        "test setup requires a missing PoP for an embedded validator"
+    );
+
+    actor
+        .handle_qc(qc)
+        .expect("handle commit QC with missing embedded-roster PoP");
+
+    let cached = actor
+        .vote_roster_cache
+        .get(&block_hash)
+        .expect("stale cached roster should remain");
+    assert_eq!(
+        cached.roster, stale_roster,
+        "embedded roster without full PoP coverage must not replace the stale cache entry"
+    );
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "embedded roster without full PoP coverage must not drive payload recovery"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "embedded roster without full PoP coverage must not request the block"
     );
 
     harness.shutdown.send();

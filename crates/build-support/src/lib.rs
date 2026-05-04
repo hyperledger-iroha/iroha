@@ -9,6 +9,7 @@ use std::{
 const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
 const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
+const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV];
 
 /// Emit git and cargo-related metadata expected by workspace crates.
 pub fn emit_git_info() {
@@ -43,11 +44,29 @@ fn emit_git_sha() {
 }
 
 fn git_commit_hash() -> Option<String> {
+    if let Some(sha) = env_git_commit_hash() {
+        return Some(sha);
+    }
+
     let git_dir = resolve_git_dir()?;
     read_head_commit_hash(&git_dir)
 }
 
+fn env_git_commit_hash() -> Option<String> {
+    let sha = env::var(VERGEN_GIT_SHA_ENV).ok()?;
+    let trimmed = sha.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 fn emit_git_rerun_hints() {
+    for env_var in GIT_RERUN_ENV_VARS {
+        println!("cargo:rerun-if-env-changed={env_var}");
+    }
+
     let Some(git_dir) = resolve_git_dir() else {
         return;
     };
@@ -198,6 +217,11 @@ mod tests {
     #[test]
     fn emit_git_info_runs() {
         emit_git_info();
+    }
+
+    #[test]
+    fn git_rerun_env_vars_tracks_git_sha_override() {
+        assert_eq!(GIT_RERUN_ENV_VARS, &[VERGEN_GIT_SHA_ENV]);
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod isi {
         InstructionType,
         error::{InvalidParameterError, MintabilityError, RepetitionError},
     };
+    use iroha_executor_data_model::isi::multisig::MultisigSpec;
 
     use super::*;
     use crate::{role::RoleIdWithOwner, state::StateTransaction};
@@ -32,6 +33,69 @@ pub mod isi {
 
     fn invalid_account_recovery(message: impl Into<std::string::String>) -> Error {
         Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+    }
+
+    fn multisig_spec_key() -> Name {
+        "multisig/spec"
+            .parse()
+            .expect("multisig spec key must be a valid name")
+    }
+
+    fn validate_multisig_spec_ttl_update(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        account_id: &AccountId,
+        key: &Name,
+        value: &Json,
+    ) -> Result<bool, Error> {
+        if key != &multisig_spec_key() {
+            return Ok(false);
+        }
+        if authority != account_id {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "account metadata key `{key}` may only be updated by the native multisig account itself"
+                )
+                .into(),
+            ));
+        }
+
+        let account = state_transaction
+            .world
+            .account(account_id)
+            .map_err(Error::from)?;
+        let current_value = account.metadata().get(key).ok_or_else(|| {
+            Error::InvariantViolation(
+                format!("account metadata key `{key}` is missing native multisig state").into(),
+            )
+        })?;
+        let current_spec = MultisigSpec::try_from(current_value).map_err(|err| {
+            Error::InvariantViolation(
+                format!(
+                    "account metadata key `{key}` contains invalid native multisig state: {err}"
+                )
+                .into(),
+            )
+        })?;
+        let next_spec = MultisigSpec::try_from(value).map_err(|err| {
+            Error::InvariantViolation(
+                format!("account metadata key `{key}` update contains invalid native multisig state: {err}")
+                    .into(),
+            )
+        })?;
+
+        if current_spec.signatories != next_spec.signatories
+            || current_spec.quorum != next_spec.quorum
+        {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "account metadata key `{key}` update may only change native multisig transaction_ttl_ms"
+                )
+                .into(),
+            ));
+        }
+
+        Ok(true)
     }
 
     fn stable_recovery_alias(
@@ -178,7 +242,7 @@ pub mod isi {
         #[metrics(+"set_account_key_value")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             // Destructure to move key/value once; avoid duplicate clones.
@@ -188,10 +252,21 @@ pub mod isi {
                 value,
             } = self;
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(&key) {
-                return Err(Error::InvariantViolation(
-                    format!("account metadata key `{key}` is reserved for native multisig state")
+                let ttl_only_update = validate_multisig_spec_ttl_update(
+                    state_transaction,
+                    authority,
+                    &account_id,
+                    &key,
+                    &value,
+                )?;
+                if !ttl_only_update {
+                    return Err(Error::InvariantViolation(
+                        format!(
+                            "account metadata key `{key}` is reserved for native multisig state"
+                        )
                         .into(),
-                ));
+                    ));
+                }
             }
             // Enforce metadata value size limit (custom parameter or default)
             crate::smartcontracts::limits::enforce_json_size(
@@ -1310,35 +1385,41 @@ pub mod query {
                 .all(|field| account_field_is_id(field))
     }
 
-    /// Evaluate JSON predicate fields that can be resolved directly from account id/details
-    /// without building a full `Account` object.
+    enum AccountPredicateMatch {
+        Matched,
+        Mismatched,
+        NeedsJsonFallback(PredicateJson),
+    }
+
+    /// Evaluate account-id, UAID, and domain-alias predicate fields directly.
     ///
-    /// Returns:
-    /// - `Some(true|false)` when all predicate fields were alias-resolved.
-    /// - `None` when at least one field requires full JSON evaluation fallback.
+    /// Fields consumed here are stripped from the JSON fallback so synthetic account-domain
+    /// aliases are not re-evaluated against the plain `Account` JSON shape.
     fn predicate_matches_account_aliases(
         world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         account_id: &AccountId,
         account_value: &AccountValue,
-    ) -> Option<bool> {
+    ) -> AccountPredicateMatch {
+        let mut remaining = PredicateJson::default();
+
         for cond in &predicate.equals {
             match account_alias_value(account_id, account_value, &cond.field) {
                 Some(Some(alias)) => {
                     if !predicate_value_equals_str(&cond.value, &alias) {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     }
                 }
-                Some(None) => return Some(false),
+                Some(None) => return AccountPredicateMatch::Mismatched,
                 None if account_field_is_domain(&cond.field) => {
                     let Some(domain) = parse_account_domain_value(&cond.value) else {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     };
                     if !world.account_has_alias_domain(account_id, &domain) {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     }
                 }
-                None => return None,
+                None => remaining.equals.push(cond.clone()),
             }
         }
 
@@ -1346,10 +1427,10 @@ pub mod query {
             match account_alias_value(account_id, account_value, &cond.field) {
                 Some(Some(alias)) => {
                     if !predicate_values_contain_str(&cond.values, &alias) {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     }
                 }
-                Some(None) => return Some(false),
+                Some(None) => return AccountPredicateMatch::Mismatched,
                 None if account_field_is_domain(&cond.field) => {
                     if !cond
                         .values
@@ -1357,30 +1438,34 @@ pub mod query {
                         .filter_map(parse_account_domain_value)
                         .any(|domain| world.account_has_alias_domain(account_id, &domain))
                     {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     }
                 }
-                None => return None,
+                None => remaining.r#in.push(cond.clone()),
             }
         }
 
         for field in &predicate.exists {
             match account_alias_value(account_id, account_value, field) {
                 Some(Some(_)) => {}
-                Some(None) => return Some(false),
+                Some(None) => return AccountPredicateMatch::Mismatched,
                 None if account_field_is_domain(field) => {
                     let Ok(domains) = world.account_domains(account_id) else {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     };
                     if domains.is_empty() {
-                        return Some(false);
+                        return AccountPredicateMatch::Mismatched;
                     }
                 }
-                None => return None,
+                None => remaining.exists.push(field.clone()),
             }
         }
 
-        Some(true)
+        if remaining.is_empty() {
+            AccountPredicateMatch::Matched
+        } else {
+            AccountPredicateMatch::NeedsJsonFallback(remaining)
+        }
     }
 
     fn account_matches_filter(
@@ -1390,14 +1475,23 @@ pub mod query {
         account_id: &AccountId,
         account_value: &AccountValue,
     ) -> Option<Account> {
-        if let Some(predicate) = predicate_json
-            && let Some(matches) =
-                predicate_matches_account_aliases(world, predicate, account_id, account_value)
-        {
-            if !matches {
-                return None;
+        if let Some(predicate) = predicate_json {
+            match predicate_matches_account_aliases(world, predicate, account_id, account_value) {
+                AccountPredicateMatch::Matched => {
+                    return Some(account_from_entry(world, account_id, account_value));
+                }
+                AccountPredicateMatch::Mismatched => return None,
+                AccountPredicateMatch::NeedsJsonFallback(remaining) => {
+                    let account = account_from_entry(world, account_id, account_value);
+                    return remaining
+                        .into_compound::<Account>()
+                        .map_or_else(
+                            |_| filter.applies(&account),
+                            |filter| filter.applies(&account),
+                        )
+                        .then_some(account);
+                }
             }
-            return Some(account_from_entry(world, account_id, account_value));
         }
 
         let account = account_from_entry(world, account_id, account_value);
@@ -2585,6 +2679,75 @@ pub mod query {
             let view = state.view();
             let predicate = CompoundPredicate::<Account>::build(|p| {
                 p.equals("domain", wonderland_id.to_string())
+            });
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_applies_mixed_domain_and_metadata_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").unwrap();
+            Register::domain(Domain::new(wonderland_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(oasis_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            let (acc3, _kp3) = gen_account_in("oasis");
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc1,
+                &alias_in_domain("hatter", &wonderland_id),
+            );
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc2,
+                &alias_in_domain("merchant", &wonderland_id),
+            );
+            register_labeled_account(
+                &mut stx,
+                &ALICE_ID,
+                &acc3,
+                &alias_in_domain("caravan", &oasis_id),
+            );
+
+            let tier_key: Name = "tier".parse().unwrap();
+            SetKeyValue::account(acc1.clone(), tier_key.clone(), Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc2.clone(), tier_key.clone(), Json::from("silver"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc3, tier_key, Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.equals("id.domain", wonderland_id.to_string())
+                    .equals("metadata.tier", "gold")
             });
             let results: Vec<_> = FindAccounts
                 .execute(predicate, &view)

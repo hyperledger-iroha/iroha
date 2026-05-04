@@ -42,6 +42,7 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 TAIRA_P2P_PORT=1447
                 TAIRA_TORII_PORT=19080
                 TAIRA_RUST_LOG=debug
+                TAIRA_EXPOSE_KVM=false
                 TAIRA_DOCKER_NETWORK=taira-localnet
                 TAIRA_GENESIS_PATH={self.genesis_path}
                 TAIRA_SIGNED_GENESIS_PATH={self.signed_genesis_path}
@@ -105,6 +106,7 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertIn("--name test-validator", result.stdout)
         self.assertIn("-p 1447:1337", result.stdout)
         self.assertIn("-p 19080:8080", result.stdout)
+        self.assertIn("IROHA_INROU_PORTABLE_ACCEL=auto", result.stdout)
         self.assertIn("--network taira-localnet", result.stdout)
         self.assertIn("IROHA_TAIRA_GENESIS=/config/genesis.json", result.stdout)
         self.assertIn("IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt", result.stdout)
@@ -122,7 +124,8 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 "container inspect test-validator",
                 (
                     "run -d --name test-validator --restart unless-stopped --init "
-                    "-e RUST_LOG=debug -p 1447:1337 -p 19080:8080 "
+                    "-e RUST_LOG=debug -e IROHA_INROU_PORTABLE_ACCEL=auto "
+                    "-p 1447:1337 -p 19080:8080 "
                     f"-v {self.config_path}:/config/config.toml:ro "
                     f"-v {self.storage_path}:/storage "
                     "--network taira-localnet "

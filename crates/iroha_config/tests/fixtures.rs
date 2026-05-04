@@ -1490,6 +1490,7 @@ fn minimal_config_snapshot() {
                         mantissa: 0,
                         scale: 0,
                     },
+                    burn_from_unix_timestamp_ms: 18446744073709551615,
                     successful_claim_fee_exempt_authorities: [],
                 },
                 hf_shared_leases: NexusHfSharedLeases {

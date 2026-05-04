@@ -1041,6 +1041,29 @@ export interface AliasResolutionDto {
   source?: string;
 }
 
+export interface CanonicalRequestOptions {
+  signal?: AbortSignal;
+  canonicalAuth?: CanonicalRequestAuth;
+}
+
+export interface AliasLookupByAccountItem {
+  alias: string;
+  dataspace: string;
+  domain: string | null;
+  is_primary: boolean;
+}
+
+export interface AliasLookupByAccountResponse {
+  account_id: string;
+  total: number;
+  items: ReadonlyArray<AliasLookupByAccountItem>;
+}
+
+export interface AliasLookupByAccountOptions extends CanonicalRequestOptions {
+  dataspace?: string;
+  domain?: string;
+}
+
 export interface AliasVoprfEvaluateResponse {
   evaluated_element_hex: string;
   backend: string;
@@ -7075,8 +7098,15 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<void>;
   evaluateAliasVoprf(blindedElementHex: string): Promise<AliasVoprfEvaluateResponse>;
-  resolveAlias(alias: string): Promise<AliasResolutionDto | null>;
-  resolveAliasByIndex(index: number | string | bigint): Promise<AliasResolutionDto | null>;
+  resolveAlias(alias: string, options?: CanonicalRequestOptions): Promise<AliasResolutionDto | null>;
+  resolveAliasByIndex(
+    index: number | string | bigint,
+    options?: CanonicalRequestOptions,
+  ): Promise<AliasResolutionDto | null>;
+  lookupAliasesByAccount(
+    accountId: string,
+    options?: AliasLookupByAccountOptions,
+  ): Promise<AliasLookupByAccountResponse | null>;
   listRamLfeProgramPolicies(
     options?: { signal?: AbortSignal },
   ): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
@@ -7956,6 +7986,43 @@ export function buildCanonicalRequestHeaders(params: {
   "X-Iroha-Timestamp-Ms": string;
   "X-Iroha-Nonce": string;
 };
+
+export interface CanonicalJsonRequestSignerInput {
+  message: Buffer;
+  messageBase64: string;
+  method: string;
+  path: string;
+  query?: string | URLSearchParams;
+  body: string;
+  timestampMs: number;
+  nonce: string;
+}
+
+export type CanonicalJsonRequestSignature =
+  | Buffer
+  | Uint8Array
+  | ArrayBuffer
+  | ArrayBufferView
+  | string;
+
+export function buildCanonicalJsonRequest(params: {
+  accountId: string;
+  method?: string;
+  path: string;
+  query?: string | URLSearchParams;
+  body?: unknown;
+  headers?: Headers | ReadonlyArray<readonly [string, string]> | Record<string, string>;
+  privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
+  sign?: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
+}): Promise<{
+  method: string;
+  headers: Record<string, string>;
+  body: string;
+}>;
 
 export function deriveConfidentialKeyset(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,

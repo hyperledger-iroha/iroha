@@ -2325,6 +2325,11 @@ pub mod nexus {
         pub fn sponsor_max_fee() -> Numeric {
             Numeric::from(0_u64)
         }
+        /// Unix timestamp in milliseconds from which Nexus fees are burned.
+        ///
+        /// The default keeps legacy transfer/self-fee behavior until an
+        /// operator explicitly activates burning at a block timestamp.
+        pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = u64::MAX;
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {

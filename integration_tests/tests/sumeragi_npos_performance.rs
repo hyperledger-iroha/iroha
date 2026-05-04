@@ -32,17 +32,18 @@ const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
 const SAMPLE_BLOCKS: u64 = 12;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const BASELINE_BLOCK_SPACING_MAX_MS: f64 = 6_000.0;
 // Six-peer NPoS baseline runs under full telemetry can absorb multiple bounded
 // quorum-timeout recoveries while still producing useful samples. Keep the
 // scenario strict on latency EMAs, but give the sampling window enough slack to
 // drain the queued transactions on slower grouped CI hosts.
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(150);
 // Grouped integration runs add startup serialization and telemetry sampling jitter on slower
-// hosts, so commit/precommit EMA budgets need slack beyond the nominal 1 s target.
+// hosts, so phase EMA budgets need slack beyond the nominal 1 s target.
 const COMMIT_EMA_MAX_MS: f64 = 4_000.0;
 const PREVOTE_EMA_MAX_MS: f64 = 1_200.0;
 const PRECOMMIT_EMA_MAX_MS: f64 = 4_000.0;
-const PROPOSE_EMA_MAX_MS: f64 = 1_500.0;
+const PROPOSE_EMA_MAX_MS: f64 = 1_600.0;
 const QUEUE_STRESS_SCENARIO_NAME: &str = "npos_queue_backpressure_stress";
 const QUEUE_CAPACITY: i64 = 24;
 const QUEUE_CAPACITY_PER_USER: i64 = 24;
@@ -417,8 +418,8 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .wrap_err("fetch initial status snapshot")?;
     let start_non_empty = status_before.blocks_non_empty;
     let target_non_empty = start_non_empty.saturating_add(SAMPLE_BLOCKS);
-    // Keep only one baseline transaction outstanding so the latency budgets reflect
-    // steady-state 1 s block production rather than an artificial startup queue burst.
+    // Keep only one baseline transaction outstanding so phase latency budgets are
+    // not hidden by an artificial startup queue burst.
     let mut next_seed = start_non_empty.saturating_add(1);
     if next_seed <= target_non_empty {
         let submit_client = submit_client_for_network(&network, &client);
@@ -551,6 +552,12 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
     let blocks_sampled_f64 = blocks_sampled as f64;
     let throughput_blocks_per_sec = blocks_sampled_f64 / elapsed.as_secs_f64();
     let observed_block_time_ms = (elapsed.as_secs_f64() * 1_000.0) / blocks_sampled_f64;
+    ensure!(
+        observed_block_time_ms <= BASELINE_BLOCK_SPACING_MAX_MS,
+        "observed block spacing {:.2} ms exceeded bounded-progress budget {:.2} ms",
+        observed_block_time_ms,
+        BASELINE_BLOCK_SPACING_MAX_MS
+    );
 
     let phase_stats: BTreeMap<&'static str, Stats> = phase_samples
         .into_iter()
@@ -645,6 +652,10 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
     summary_root.insert("timing".into(), {
         let mut obj = Map::new();
         obj.insert("block_time_target_ms".into(), json_value(&BLOCK_TIME_MS));
+        obj.insert(
+            "block_spacing_budget_ms".into(),
+            json_value(&BASELINE_BLOCK_SPACING_MAX_MS),
+        );
         obj.insert("blocks_sampled".into(), json_value(&blocks_sampled));
         obj.insert(
             "elapsed_ms".into(),

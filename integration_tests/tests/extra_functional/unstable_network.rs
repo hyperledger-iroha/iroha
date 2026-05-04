@@ -1141,55 +1141,51 @@ impl UnstableNetwork {
         }
         let rotated = topology_for_permissioned_round(peer_ids, chain_id, height, 0);
         let commit_quorum = commit_quorum_from_len(rotated.len());
-        let candidates: Vec<PeerId> = if n_faulty_peers <= 1 {
-            rotated.get(commit_quorum..).unwrap_or(&[]).to_vec()
-        } else {
-            let mut collector_ids = HashSet::new();
-            if rotated.len() > 1 && collectors_k > 0 {
-                let seed = permissioned_prf_seed(chain_id);
-                let topology = Topology::new(rotated.clone());
-                for idx in
-                    topology.collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
-                {
-                    if let Some(peer) = topology.as_ref().get(idx) {
-                        collector_ids.insert(peer.clone());
-                    }
+        let leader_id = rotated.first();
+        let mut collector_ids = HashSet::new();
+        if rotated.len() > 1 && collectors_k > 0 {
+            let seed = permissioned_prf_seed(chain_id);
+            let topology = Topology::new(rotated.clone());
+            for idx in topology.collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
+            {
+                if let Some(peer) = topology.as_ref().get(idx) {
+                    collector_ids.insert(peer.clone());
                 }
             }
-            let mut selected = Vec::new();
-            let mut seen = HashSet::new();
-            if let Some(tail) = rotated.get(commit_quorum..) {
-                for peer in tail {
-                    if collector_ids.contains(peer) {
-                        continue;
-                    }
-                    if seen.insert(peer.clone()) {
-                        selected.push(peer.clone());
-                    }
-                }
-            }
-            if selected.len() < n_faulty_peers {
-                let head = rotated.iter().skip(1).take(commit_quorum.saturating_sub(1));
-                for peer in head {
-                    if collector_ids.contains(peer) {
-                        continue;
-                    }
-                    if seen.insert(peer.clone()) {
-                        selected.push(peer.clone());
-                    }
-                }
-            }
-            if selected.len() < n_faulty_peers {
-                rotated.get(commit_quorum..).unwrap_or(&[]).to_vec()
-            } else {
-                selected
-            }
+        }
+
+        let is_safe_fault = |peer: &PeerId| {
+            leader_id.is_none_or(|leader| leader != peer) && !collector_ids.contains(peer)
         };
+        let mut candidates = Vec::new();
+        let mut candidate_seen = HashSet::new();
+        if let Some(tail) = rotated.get(commit_quorum..) {
+            for peer in tail.iter().filter(|peer| is_safe_fault(peer)) {
+                if candidate_seen.insert(peer.clone()) {
+                    candidates.push(peer.clone());
+                }
+            }
+        }
+        let head = rotated.iter().skip(1).take(commit_quorum.saturating_sub(1));
+        for peer in head.filter(|peer| is_safe_fault(peer)) {
+            if candidate_seen.insert(peer.clone()) {
+                candidates.push(peer.clone());
+            }
+        }
+        if candidates.len() < n_faulty_peers {
+            for peer in rotated.iter().skip(1) {
+                if candidate_seen.insert(peer.clone()) {
+                    candidates.push(peer.clone());
+                }
+            }
+        }
+
         let mut selected = Vec::new();
         let mut seen = HashSet::new();
         for peer in rotated
             .iter()
             .filter(|peer| preferred_faulty_ids.contains(*peer))
+            .filter(|peer| is_safe_fault(peer))
         {
             if selected.len() == n_faulty_peers {
                 break;
@@ -1878,9 +1874,15 @@ mod tests {
         let chain_id: ChainId = "unstable-network-selection".parse().expect("chain id");
         let height = 7_u64;
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
-        let commit_quorum = commit_quorum_from_len(rotated.len());
-        let expected_tail: BTreeSet<_> = rotated[commit_quorum..].iter().cloned().collect();
         let collectors_k = collectors_k_for_peers(peer_ids.len());
+        let topology = Topology::new(rotated.clone());
+        let seed = permissioned_prf_seed(&chain_id);
+        let collector_ids: BTreeSet<_> = topology
+            .collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
+            .into_iter()
+            .filter_map(|idx| topology.as_ref().get(idx).cloned())
+            .collect();
+
         let selected_single = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
             1,
@@ -1891,15 +1893,9 @@ mod tests {
             &HashSet::new(),
         );
         assert_eq!(selected_single.len(), 1);
-        assert!(expected_tail.contains(&selected_single[0]));
+        assert_ne!(Some(&selected_single[0]), rotated.first());
+        assert!(!collector_ids.contains(&selected_single[0]));
 
-        let topology = Topology::new(rotated.clone());
-        let seed = permissioned_prf_seed(&chain_id);
-        let collector_ids: BTreeSet<_> = topology
-            .collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
-            .into_iter()
-            .filter_map(|idx| topology.as_ref().get(idx).cloned())
-            .collect();
         let selected_multi: BTreeSet<_> = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
             3,
@@ -1924,7 +1920,25 @@ mod tests {
             .parse()
             .expect("chain id");
         let height = 3_u64;
-        let preferred_faulty_ids = HashSet::from([peer_ids[0].clone()]);
+        let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
+        let topology = Topology::new(rotated.clone());
+        let collector_ids: HashSet<_> = topology
+            .collector_indices_k_prf(
+                usize::from(collectors_k_for_peers(peer_ids.len())),
+                permissioned_prf_seed(&chain_id),
+                height,
+                0,
+            )
+            .into_iter()
+            .filter_map(|idx| topology.as_ref().get(idx).cloned())
+            .collect();
+        let preferred = rotated
+            .iter()
+            .skip(1)
+            .find(|peer| !collector_ids.contains(*peer))
+            .expect("test roster should have a safe preferred peer")
+            .clone();
+        let preferred_faulty_ids = HashSet::from([preferred.clone()]);
 
         let selected = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
@@ -1936,7 +1950,51 @@ mod tests {
             &preferred_faulty_ids,
         );
 
-        assert_eq!(selected, vec![peer_ids[0].clone()]);
+        assert_eq!(selected, vec![preferred]);
+    }
+
+    #[test]
+    fn unsafe_preferred_faulty_peers_do_not_override_collector_selection() {
+        let peer_ids: Vec<_> = (0..8)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let chain_id: ChainId = "unstable-network-unsafe-preferred"
+            .parse()
+            .expect("chain id");
+        let height = 5_u64;
+        let collectors_k = collectors_k_for_peers(peer_ids.len());
+        let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
+        let topology = Topology::new(rotated);
+        let collector_ids: HashSet<_> = topology
+            .collector_indices_k_prf(
+                usize::from(collectors_k),
+                permissioned_prf_seed(&chain_id),
+                height,
+                0,
+            )
+            .into_iter()
+            .filter_map(|idx| topology.as_ref().get(idx).cloned())
+            .collect();
+        let preferred_collector = collector_ids
+            .iter()
+            .next()
+            .expect("test roster should have a collector")
+            .clone();
+        let preferred_faulty_ids = HashSet::from([preferred_collector.clone()]);
+
+        let selected = UnstableNetwork::select_faulty_peer_ids(
+            &peer_ids,
+            1,
+            0,
+            &chain_id,
+            height,
+            collectors_k,
+            &preferred_faulty_ids,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_ne!(selected[0], preferred_collector);
+        assert!(!collector_ids.contains(&selected[0]));
     }
 
     #[test]

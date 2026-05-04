@@ -740,11 +740,14 @@ pub fn generate_default(
     }
     let (offline_note_v2_vk_id, offline_note_v2_vk_record) =
         offline_note_v2_verifier_registration()?;
-    builder = builder.append_instruction(grant_permission_to_manage_verifying_keys);
-    builder = builder.append_instruction(verifying_keys::RegisterVerifyingKey {
-        id: offline_note_v2_vk_id,
-        record: offline_note_v2_vk_record,
-    });
+    builder = builder
+        .next_transaction()
+        .append_instruction(grant_permission_to_manage_verifying_keys)
+        .next_transaction()
+        .append_instruction(verifying_keys::RegisterVerifyingKey {
+            id: offline_note_v2_vk_id,
+            record: offline_note_v2_vk_record,
+        });
 
     // Use transaction-oriented API: separate initial registrations from
     // subsequent state updates.
@@ -910,6 +913,62 @@ mod da_tests {
         assert_eq!(
             declared_vk_set_hash,
             format!("0x{}", hex::encode(expected_vk_set_hash))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn default_genesis_grants_verifying_key_permission_before_registration()
+    -> color_eyre::Result<()> {
+        let builder = GenesisBuilder::new_without_executor(
+            ChainId::from("offline-note-v2-permission-order"),
+            PathBuf::from("."),
+        );
+        let manifest = generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+            None,
+            None,
+            BuildLine::Iroha3,
+        )?;
+        let genesis_account_id =
+            AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let batches = manifest.parse()?;
+        let grant_batch = batches
+            .iter()
+            .position(|batch| {
+                batch.iter().any(|instruction| {
+                    let Some(GrantBox::Permission(grant)) =
+                        instruction.as_any().downcast_ref::<GrantBox>()
+                    else {
+                        return false;
+                    };
+                    let permission_name: &str = grant.object().name().as_ref();
+                    grant.destination() == &genesis_account_id
+                        && permission_name == "CanManageVerifyingKeys"
+                })
+            })
+            .expect("default genesis must grant verifying-key management");
+        let registration_batch = batches
+            .iter()
+            .position(|batch| {
+                batch.iter().any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+                        .is_some()
+                })
+            })
+            .expect("default genesis must register an offline-note verifier");
+
+        assert!(
+            grant_batch < registration_batch,
+            "verifying-key management grant must commit before verifier registration"
         );
 
         Ok(())

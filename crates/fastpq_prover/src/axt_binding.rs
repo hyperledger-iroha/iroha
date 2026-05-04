@@ -590,6 +590,14 @@ pub fn batch_manifest_sha256(binding: &AxtFastpqBinding) -> Result<String> {
 mod tests {
     use super::*;
     use crate::proof::Prover;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::id::AssetDefinitionId,
+        domain::DomainId,
+        fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
+    };
+    use iroha_primitives::numeric::Numeric;
 
     fn sample_binding() -> AxtFastpqBinding {
         AxtFastpqBinding {
@@ -663,6 +671,107 @@ mod tests {
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
         bind_axt_batch(&mut batch, binding).expect("bind AXT batch");
         batch
+    }
+
+    fn real_transfer_claim_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
+        const TRANSFER_AMOUNT: u64 = 35;
+        const SENDER_START: u64 = 900;
+        const RECEIVER_START: u64 = 120;
+
+        let domain = DomainId::try_new("axt", "universal").expect("domain id");
+        let asset_definition = AssetDefinitionId::new(domain.clone(), "rose".parse().unwrap());
+        let from_account = deterministic_account("transfer_sender", &domain);
+        let to_account = deterministic_account("transfer_receiver", &domain);
+
+        let mut batch = TransitionBatch::new(
+            DEFAULT_PARAMETER,
+            PublicInputs {
+                dsid: dsid_bytes(binding.source_dsid),
+                slot: 124,
+                old_root: [0; 32],
+                new_root: [0; 32],
+                perm_root: [0x31; 32],
+                tx_set_hash: [0x41; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            transfer_balance_key(&asset_definition, &from_account),
+            SENDER_START.to_le_bytes().to_vec(),
+            (SENDER_START - TRANSFER_AMOUNT).to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            transfer_balance_key(&asset_definition, &to_account),
+            RECEIVER_START.to_le_bytes().to_vec(),
+            (RECEIVER_START + TRANSFER_AMOUNT).to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+
+        let mut transcripts = vec![transfer_transcript(
+            &asset_definition,
+            &from_account,
+            &to_account,
+            TRANSFER_AMOUNT,
+            SENDER_START,
+            RECEIVER_START,
+        )];
+        let (old_root, new_root) =
+            crate::gadgets::transfer::attach_transfer_smt_witnesses(&mut transcripts)
+                .expect("attach transfer SMT witnesses");
+        batch.public_inputs.old_root = old_root;
+        batch.public_inputs.new_root = new_root;
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&transcripts).expect("encode transfer transcripts"),
+        );
+        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
+            .expect("entry hash");
+        batch
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
+        batch.sort();
+        bind_axt_batch(&mut batch, binding).expect("bind transfer AXT batch");
+        batch
+    }
+
+    fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
+        let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
+        let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::default());
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
+        format!("asset/{asset}/{account}").into_bytes()
+    }
+
+    fn transfer_transcript(
+        asset_definition: &AssetDefinitionId,
+        from_account: &AccountId,
+        to_account: &AccountId,
+        amount: u64,
+        from_balance_before: u64,
+        to_balance_before: u64,
+    ) -> TransferTranscript {
+        let delta = TransferDeltaTranscript {
+            from_account: from_account.clone(),
+            to_account: to_account.clone(),
+            asset_definition: asset_definition.clone(),
+            amount: Numeric::from(amount),
+            from_balance_before: Numeric::from(from_balance_before),
+            from_balance_after: Numeric::from(from_balance_before - amount),
+            to_balance_before: Numeric::from(to_balance_before),
+            to_balance_after: Numeric::from(to_balance_before + amount),
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
+        };
+        let batch_hash = Hash::new(b"axt-transfer-claim-batch");
+        let digest = crate::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
+        TransferTranscript {
+            batch_hash,
+            deltas: vec![delta],
+            authority_digest: Hash::new(b"axt-transfer-authority"),
+            poseidon_preimage_digest: Some(digest),
+        }
     }
 
     #[test]
@@ -1197,6 +1306,39 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("transfer transitions"))
         );
+    }
+
+    #[test]
+    fn verify_axt_envelope_accepts_transfer_claims_with_real_transcripts() {
+        for claim_type in ["tx_predicate", "value_conservation"] {
+            let mut binding = sample_binding();
+            binding.claim_type = claim_type.to_owned();
+            let batch = real_transfer_claim_batch(&binding);
+            assert!(
+                batch
+                    .metadata
+                    .contains_key(TRANSFER_TRANSCRIPTS_METADATA_KEY),
+                "transfer claim fixture must carry transcript metadata"
+            );
+            assert!(
+                batch
+                    .transitions
+                    .iter()
+                    .any(|transition| matches!(transition.operation, OperationKind::Transfer)),
+                "transfer claim fixture must carry transfer rows"
+            );
+            let proof = Prover::canonical(DEFAULT_PARAMETER)
+                .expect("prover")
+                .prove(&batch)
+                .expect("proof");
+            let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+            let envelope = envelope_with_payload(binding, payload);
+
+            let verified = verify_axt_proof_envelope(&envelope)
+                .unwrap_or_else(|err| panic!("{claim_type} transfer claim should verify: {err}"));
+            assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
+            assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
+        }
     }
 
     #[test]

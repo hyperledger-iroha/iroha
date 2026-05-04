@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -27,6 +27,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
     QC validation with commit-phase enforcement, commit-certificate roster
     validation, checkpoint roster validation, validation telemetry reason
     labels, and the permissioned/NPoS aggregate-fallback quorum checks.
+    Embedded commit-QC roster anchoring is green as of 2026-05-04 in the same
+    target for both the malicious shrink-roster rejection and the valid
+    stale-cache bootstrap path; the embedded-roster missing-PoP rejection is
+    green in that same filter. NPoS block-sync roster selection now also has
+    focused coverage for carrying a locally resolved stake snapshot when the
+    incoming QC/checkpoint hint omits one.
   - The ZK-confidential localnet submit helper has been hardened for startup
     transport jitter and wrapped policy rejections. The classifier/retry-budget
     tests plus disabled shield/unshield localnet regressions are green as of
@@ -46,6 +52,13 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Focused `events_and_triggers` reruns for the two by-call trigger cases and
     `subscriptions::subscription_scenarios` are green with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target`.
+    The full `events_and_triggers` target, full `queries_and_proofs` target,
+    `network_functional::extra_functional::unstable_network`, full
+    `nexus_and_streaming` target, and reduced-sample ignored
+    `torii_load_profile` are also green as of 2026-05-04 in the same target
+    dir. The stale IVM/Kotodama, Space Directory, lane commitment, Norito
+    instruction, and streaming RANS fixtures uncovered by those targets have
+    been regenerated.
   - Broader `cargo test --workspace` remains for an uncontended validation
     window.
 - Carry the RAM-LFE API/proof hardening through the remaining signing and clean
@@ -359,13 +372,44 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The onboarding auto-renew path now grants the subscriber `CanModifyNftMetadata` for the subscription NFT before trigger registration; rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
   - Add or rerun focused coverage for user-signed enable/disable mutation flows and the SNS subscription auto-renew billing path in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, not just the onboarding enqueue path.
   - Once the alias lease slice is stable under those focused reruns, fold it into the next broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor.
-- Broaden validation after the 2026-04-22 targeted `sumeragi::main_loop` regression sweep and follow-up unit coverage additions.
-  - Rerun a wider `cargo test -p iroha_core --lib` window now that the reported 10-case failure cluster is green under focused verification.
-  - Keep the new collector-disabled fallback, seeded-collector precommit fallback, near-quorum full-fanout retransmit helper test, signer-mapping failure full-fanout fallback test, local-vote replay suppression, direct `known_block_commit_qc_recovery_targets(...)` fallbacks, direct `frontier_body_next_due(...)` deadline/fallback coverage, the direct deterministic roster-election guard tests, the direct NPoS empty-commit-topology candidate-source tests, the direct "no new progress" replay-suppression test, the direct replay-cooldown suppression test, the direct local-only explicit-target replay test, the direct deduplicated explicit-target vote replay test, the direct local-only explicit-target commit-QC replay test, the local-proposal authoritative-frontier fallback test, the local-proposal first-signature fallback test, the generic proposal-wire authoritative-frontier fallback and mismatch-guard tests, the plain `frontier_block_created_for_wire(...)` no-metadata fallback test, and the expanded cached-target / unarmed / local-only `frontier_body_next_due(...)` tests in the rerun window so the next pass exercises both the regression fixtures and the new narrow branch tests together.
-  - If that broader rerun exposes follow-up regressions outside the patched collector / frontier / roster slice, capture the first failing test names and keep the next fix narrowly scoped.
+- Keep the Sumeragi main-loop broad corridor attached to future consensus
+  changes.
+  - The 2026-05-03 `cargo test -p iroha_core --lib` rerun is green
+    (`5129` passed, `22` ignored) after fixing execution-witness recorder
+    isolation and hardening the RBC sidecar cooldown fixture.
+  - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by a
+    focused unit regression and the confidential downtime plus timeout localnet
+    scenario. Rerun the full `cargo test -p iroha_core --lib` corridor after
+    the next main-loop edit or before opening the next full workspace sweep.
+  - For the next consensus change, rerun the same broad window so the collector
+    fallback, exact-frontier repair, cached-target, vote replay, roster
+    recovery, future-new-view, and model-backed reschedule fixtures continue to
+    execute together rather than only as isolated filters.
+- Broaden Sumeragi verification when new fatal hang classes are identified
+  outside the current two-slot frontier abstraction.
+  - The 2026-05-03 frontier formal process hardening is green and covers active
+    pending progress touch, local-vote and commit-QC progress, stale recovery
+    subject-view scope, vote-queue drain, payload recovery, quorum retransmit,
+    retransmit follow-through, and future-slot promotion.
+  - For any additional fatal hang shape, first add a focused Rust regression,
+    then add the corresponding finite formal dimension or mutation so the
+    expected-failure suite proves the model would have caught it.
+  - If another restarted-peer catch-up issue appears in message admission or
+    deduplication, add a small finite admission-order bridge or mutation before
+    broadening the frontier model itself; the current model intentionally
+    abstracts network-message dedup away.
+  - Keep this scoped to the observed hang surface; do not generalize the model
+    into an arbitrary pipeline unless a new bug requires more than the active
+    plus one-future-slot abstraction.
 - Reopen the wider validation corridor after the recent focused `iroha_core`, `iroha_torii`, and `iroha_data_model` test additions.
-  - Rerun `cargo test -p iroha_core --lib`, including `quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_without_roster_proof` in a fresh cargo process.
-  - Rerun `cargo test -p iroha_torii` and `cargo test -p integration_tests -- --nocapture` once the current tree is stable enough for network suites.
+  - `cargo test -p iroha_core --lib` is green as of 2026-05-03; rerun it only
+    after the next core/consensus change or before opening the full workspace
+    corridor.
+  - `cargo test -p iroha_torii` is green as of 2026-05-03 after fixing the
+    macOS attachment-sanitizer subprocess wrapper path; rerun it after the next
+    Torii/API change or before opening the full workspace corridor.
+  - Rerun `cargo test -p integration_tests -- --nocapture` once the current
+    tree is stable enough for network suites.
   - When validation budget allows, rerun `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`, then capture failures or green status in `status.md`.
 ## Consensus and Izanami
 
@@ -447,9 +491,19 @@ Completed history lives in `status.md`. This file should only track unfinished w
     without staging concatenation buffers, and hashes external transaction
     entrypoints through a borrowed encoder instead of cloning the signed
     transaction into an enum wrapper. The release Izanami/iroha3d binaries now
-    rebuild with the allocation slice; rerun the 30s sampled 20k profile and
-    120s gate in an uncontended host window before making fine-grained
-    percentage claims from sampled stack counts.
+    rebuild with the allocation slice, and the clean return gate at
+    `dist/izanami-prebuilt-20k-fastpq-gpu-return-120s-20260504-012106`
+    restored ingress (`2,400,000` accepted and succeeded, `0` failures) but
+    still reached only `12,413` strict-approved transactions at height `5`.
+    The matching sampled profile at
+    `dist/izanami-profile-20k-fastpq-gpu-return-sampled-30s-20260504-012521`
+    was intrusive, but its peer stacks confirm the next work remains
+    Ed25519/Curve25519 parse and verification, Norito transaction/transfer
+    encode/decode, metadata hashing, allocation/copy traffic, and SHA-256/CRC64
+    helpers. A first queue-lock slice now releases `push_remove_lock` before
+    post-enqueue backpressure/gossip/event/wake side effects; rerun the release
+    20k gate/profile after the host is no longer contended before treating it
+    as a throughput win.
   - Avoid repeating the rejected process-wide Ed25519 public-key parse cache
     approach without new evidence: the 2026-05-03 sharded shared-cache
     experiment regressed short-gate commit progress and was backed out. Keep
@@ -667,12 +721,13 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Assert transaction-authority shape and final instruction execution, not only account materialization.
 - Extend and burn down the translation metadata audit backlog.
   - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
-    English-only frontier formal update so `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
+    English-only frontier formal and 2026-05-03 process-hardening updates so
+    `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
     can be restored for formal docs.
-  - The Sumeragi frontier model, mutation suite, TLC cross-check, and longer
-    nightly bound are wired, and CI now publishes a JSON metadata report for
-    the stale translated formal READMEs; the remaining formal-doc task is
-    translation refresh only.
+  - The Sumeragi frontier model, process invariants, mutation suite, TLC
+    cross-check, and longer nightly bound are wired, and CI now publishes a JSON
+    metadata report for the stale translated formal READMEs; the remaining
+    formal-doc task is translation refresh only.
   - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Add a recorded capture gate for the default `sora-temple` petal styles.

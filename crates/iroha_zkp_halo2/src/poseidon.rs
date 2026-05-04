@@ -492,9 +492,44 @@ pub fn hash_u64_words_bytes(words: &[u64]) -> [u8; 32] {
 /// Hash an arbitrary byte slice using the Poseidon2 sponge.
 #[must_use]
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = PoseidonByteHasher::new();
-    hasher.update(bytes);
-    hasher.finalize()
+    let mut state = [Fr::ZERO; 3];
+    let mut bytes = bytes;
+
+    while bytes.len() >= 16 {
+        state[0] += fr_from_le_bytes(&bytes[..8]);
+        state[1] += fr_from_le_bytes(&bytes[8..16]);
+        poseidon3_permute(&mut state);
+        bytes = &bytes[16..];
+    }
+
+    let mut rate_len = if bytes.len() >= 8 {
+        state[0] += fr_from_le_bytes(&bytes[..8]);
+        bytes = &bytes[8..];
+        1
+    } else {
+        0
+    };
+
+    if !bytes.is_empty() {
+        debug_assert!(bytes.len() < 8);
+        let mut pending = [0u8; 8];
+        pending[..bytes.len()].copy_from_slice(bytes);
+        state[rate_len] += Fr::from(u64::from_le_bytes(pending));
+        rate_len += 1;
+        if rate_len == 2 {
+            poseidon3_permute(&mut state);
+            rate_len = 0;
+        }
+    }
+
+    match rate_len {
+        0 => state[0] += Fr::ONE,
+        1 => state[1] += Fr::ONE,
+        _ => unreachable!("Poseidon byte hash rate length cannot exceed the rate"),
+    }
+
+    poseidon3_permute(&mut state);
+    field_to_bytes(state[0])
 }
 
 fn field_to_bytes(f: Fr) -> [u8; 32] {

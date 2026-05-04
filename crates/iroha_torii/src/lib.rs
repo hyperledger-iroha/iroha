@@ -3745,6 +3745,16 @@ async fn handler_gov_council_current(
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 
+async fn handler_gov_citizen_count(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<JsonBody<crate::gov::CitizenCountResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
+    crate::gov::handle_gov_citizen_count(app.state.clone()).await
+}
+
 async fn handler_gov_citizen_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -10271,6 +10281,44 @@ fn soracloud_runtime_status_sections(
             json_object(vec![json_entry("available", false)]),
         );
     };
+
+    if !runtime.materialization_available() {
+        let snapshot = runtime.snapshot();
+        let state_dir = runtime.state_dir().display().to_string();
+        return (
+            json_object(vec![
+                json_entry("mode", "embedded_runtime_manager"),
+                json_entry("status", "unavailable"),
+                json_entry(
+                    "message",
+                    "irohad is compiled without the `embedded-soracloud-runtime` feature; hosted Inrou materialization is disabled",
+                ),
+                json_entry("observed_height", snapshot.observed_height),
+                json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
+                json_entry("state_dir", state_dir.clone()),
+                json_entry("service_revisions", 0_u64),
+                json_entry("healthy_service_revisions", 0_u64),
+                json_entry("hydrating_service_revisions", 0_u64),
+                json_entry("degraded_service_revisions", 0_u64),
+                json_entry("unavailable_service_revisions", 0_u64),
+                json_entry("apartments", 0_u64),
+                json_entry("running_apartments", 0_u64),
+                json_entry("expired_apartments", 0_u64),
+            ]),
+            json_object(vec![
+                json_entry("enabled", false),
+                json_entry("state_dir", state_dir.clone()),
+                json_entry("observed_height", snapshot.observed_height),
+                json_entry("service_revisions", 0_u64),
+                json_entry("apartments", 0_u64),
+            ]),
+            json_object(vec![
+                json_entry("available", false),
+                json_entry("state_dir", state_dir),
+                json_entry("snapshot", snapshot),
+            ]),
+        );
+    }
 
     let snapshot = runtime.snapshot();
     let state_dir = runtime.state_dir().display().to_string();
@@ -19607,7 +19655,15 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
     path_args: Vec<String>,
     query_string: Option<String>,
     body: Vec<u8>,
-) -> Result<(Vec<RoutingDecision>, Vec<Value>, ToriiFanoutDiagnostics), Response> {
+) -> Result<
+    (
+        Vec<RoutingDecision>,
+        Vec<Value>,
+        ToriiFanoutDiagnostics,
+        &'static str,
+    ),
+    Response,
+> {
     if routes.is_empty() {
         return Err(with_torii_fanout_headers(
             torii_proxy_error_response(
@@ -19618,6 +19674,7 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
             ToriiFanoutDiagnostics::default(),
         ));
     }
+    let routed_by = routed_by_for_routes(app, &routes);
 
     let collected = collect_torii_routed_list_json_payloads(&routes, |route| {
         execute_torii_read_for_route(
@@ -19641,7 +19698,7 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
     let routes = payloads.iter().map(|(route, _)| *route).collect();
     let payloads = payloads.into_iter().map(|(_, payload)| payload).collect();
 
-    Ok((routes, payloads, collected.diagnostics))
+    Ok((routes, payloads, collected.diagnostics, routed_by))
 }
 
 #[cfg(feature = "app_api")]
@@ -19880,9 +19937,9 @@ async fn execute_torii_read_fanout_for_resolved_routes(
             )
             .await
             {
-                Ok((routes, payloads, diagnostics)) => {
+                Ok((_routes, payloads, diagnostics, routed_by)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
-                        merged_list_response(payloads, routed_by_for_routes(app, &routes))
+                        merged_list_response(payloads, routed_by)
                     })
                 }
                 Err(response) => response,
@@ -19958,9 +20015,9 @@ async fn execute_torii_read_fanout_for_resolved_routes(
             )
             .await
             {
-                Ok((routes, payloads, diagnostics)) => {
+                Ok((_routes, payloads, diagnostics, routed_by)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
-                        merged_portfolio_response(payloads, routed_by_for_routes(app, &routes))
+                        merged_portfolio_response(payloads, routed_by)
                     })
                 }
                 Err(response) => response,
@@ -19977,12 +20034,9 @@ async fn execute_torii_read_fanout_for_resolved_routes(
             )
             .await
             {
-                Ok((routes, payloads, diagnostics)) => {
+                Ok((_routes, payloads, diagnostics, routed_by)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
-                        merged_dataspace_summary_response(
-                            payloads,
-                            routed_by_for_routes(app, &routes),
-                        )
+                        merged_dataspace_summary_response(payloads, routed_by)
                     })
                 }
                 Err(response) => response,
@@ -19999,12 +20053,9 @@ async fn execute_torii_read_fanout_for_resolved_routes(
             )
             .await
             {
-                Ok((routes, payloads, diagnostics)) => {
+                Ok((_routes, payloads, diagnostics, routed_by)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
-                        merged_space_directory_bindings_response(
-                            payloads,
-                            routed_by_for_routes(app, &routes),
-                        )
+                        merged_space_directory_bindings_response(payloads, routed_by)
                     })
                 }
                 Err(response) => response,
@@ -20024,13 +20075,13 @@ async fn execute_torii_read_fanout_for_resolved_routes(
             )
             .await
             {
-                Ok((routes, payloads, diagnostics)) => {
+                Ok((_routes, payloads, diagnostics, routed_by)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
                         merged_space_directory_manifests_response(
                             payloads,
                             page_offset,
                             page_limit,
-                            routed_by_for_routes(app, &routes),
+                            routed_by,
                         )
                     })
                 }
@@ -34459,6 +34510,10 @@ impl Torii {
                     get(handler_gov_council_current),
                 )
                 .route(
+                    iroha_torii_shared::uri::GOV_CITIZENS_COUNT,
+                    get(handler_gov_citizen_count),
+                )
+                .route(
                     iroha_torii_shared::uri::GOV_CITIZEN_STATUS,
                     get(handler_gov_citizen_status),
                 );
@@ -41118,6 +41173,21 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             super::torii_account_permissions_route_scope(&authority, Some(&authority), true),
             ToriiFanoutRouteScopeV1::AllDataspaces
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn fanout_routed_by_uses_attempted_routes_even_when_only_local_payloads_survive() {
+        let mut app = mk_app_state_for_tests();
+        let (local_route, foreign_route) =
+            configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+
+        assert_eq!(super::routed_by_for_routes(&app, &[local_route]), "local");
+        assert_eq!(
+            super::routed_by_for_routes(&app, &[local_route, foreign_route]),
+            "proxy",
+            "fanout responses must report proxy routing when any attempted route is non-local"
         );
     }
 

@@ -1,6 +1,64 @@
 # Status
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
+
+## 2026-05-04 UAID workspace-test corridor follow-up
+
+- The events/time-trigger failures exposed by the broad workspace sweep are now
+  covered by the full `events_and_triggers` target (`36` passed). Time-trigger
+  execution seeds the real trigger call hash for queued instructions, same-id
+  reschedules preserve the new repeat budget, and blocking client confirmation
+  stream close is bounded so subscription tests can shut down cleanly.
+- Stale IVM/Kotodama and Norito fixtures were refreshed for the current ABI and
+  schema layouts: `mint_rose_trigger.to`,
+  `query_assets_and_save_cursor.to`, `smart_contract_can_filter_queries.to`,
+  lane commitments, Space Directory capability manifests, Norito instruction
+  JSON, and streaming RANS snapshots. `queries_and_proofs` is green (`23`
+  passed), and `nexus_and_streaming` is green (`255` passed, `2` ignored).
+- Wrong-ingress account-permissions fanout now reports
+  `x-iroha-routed-by=proxy` from the attempted route set, even when only local
+  payloads survive merge filtering. This keeps route diagnostics honest for
+  signed all-dataspace fanout reads and fixes the cross-dataspace localnet
+  assertion.
+- The unstable-network fault selector now avoids isolating DA/RBC collector
+  peers for single-fault runs when safe alternatives exist. Focused selector
+  tests, the `unstable_network_8_peers_1_fault` regression, and the full
+  `extra_functional::unstable_network` slice are green (`29` passed).
+- Additional validation passed with focused Torii fanout clippy/tests, the
+  reduced-sample ignored `torii_load_profile`, `cargo fmt --all -- --check`,
+  `git diff --check`, `scripts/check_no_scale.sh`, and focused strict clippy
+  for `iroha`, `iroha_core`, `iroha_torii`, `network_functional`, and
+  `nexus_and_streaming`. A fresh end-to-end `cargo test --workspace` remains
+  queued for an uncontended multi-hour validation window.
+
+## 2026-05-04 Sumeragi embedded QC and NPoS block-sync hardening
+
+- Embedded QC roster fallback now requires the QC's advertised validator set to
+  match an authoritative topology candidate for the QC height/view and
+  consensus mode before aggregate validation or payload recovery can proceed.
+  This closes the permissioned shrink-roster path where a QC signed by one
+  known validator could satisfy quorum against its own embedded one-validator
+  set after local cached-roster validation failed, and keeps NPoS fallback tied
+  to the elected stake topology instead of the QC author's advertised roster.
+- Embedded roster fallback also fails closed when any advertised validator is
+  missing a cached BLS proof of possession, matching the commit-certificate and
+  checkpoint roster validation posture.
+- NPoS block-sync roster selection now carries the locally resolved stake
+  snapshot forward after commit-certificate/checkpoint validation. A valid
+  NPoS artifact no longer validates using a recomputed snapshot only to lose
+  that snapshot before the later block-signature quorum and QC validation
+  checks.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib embedded_roster -- --nocapture`
+  (`3` passed),
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib commit_qc_rejects_shrunk_embedded_roster -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib commit_qc_rejects_embedded_roster_with_missing_pop -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib commit_qc_bootstraps_from_embedded_roster_when_cached_roster_is_stale -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint -- --nocapture`,
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib find_repo_agreements_uses_id_predicate_lookup -- --nocapture`.
+  Formatting validation passed with `rustfmt --edition 2024 --check` over the
+  touched Rust files.
 
 ## 2026-05-03 IVM ABI v1 gas/error hardening
 
@@ -523,10 +581,38 @@ Last updated: 2026-05-03
   `cargo check -p irohad --features fastpq-gpu` passed in `1m52s` with only the
   known `fastpq_prover` Metal dead-code warnings. The release rebuild
   `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`
-  passed in `8m03s` with the same warning set. A clean post-change Izanami
-  profile/gate is still pending because the separate `cargo test --workspace`
-  process remains active on the host; at the latest check its `core_api` child
-  had been running for over `50m`.
+  passed in `8m03s` with the same warning set.
+- The clean post-allocation 4-peer no-fault prebuilt `20k TPS` / `120s`
+  `fastpq-gpu` return gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-return-120s-20260504-012106` exited
+  `0`, offered, accepted, and succeeded all `2,400,000` submissions, reported
+  `0` failures, used all `2,400,000` prebuilt transactions with no fallback,
+  and recorded submit latency `p50=9ms`, `p95=34ms`, `p99=118ms`,
+  `max=495ms`. The run restored clean ingress but not strict approval progress:
+  final quorum/strict height was `5/5`, final quorum/strict approved was
+  `12,413/12,413`, queue depth was `884,071`, and Sumeragi recorded `7` view
+  changes (`5` missing-QC, `1` missing-payload), with no validation rejects,
+  DA/RBC pressure, ingress failover, or unhealthy endpoint events.
+- The matching sampled `30s` profile at
+  `dist/izanami-profile-20k-fastpq-gpu-return-sampled-30s-20260504-012521`
+  also exited `0` with `sample_status=0`, offered, accepted, and succeeded all
+  `600,000` submissions, and reported `0` failures. It is stack-attribution
+  evidence rather than throughput evidence because `sample(1)` heavily
+  perturbed the run (`strict approved = 41`, `p95 = 2649ms`). The peer samples
+  show no scalar FASTPQ/Poseidon fallback; the remaining visible costs are
+  Ed25519/Curve25519 public-key parse and batch verification, Norito signed
+  transaction and transfer encode/decode, queue push lock contention,
+  transaction metadata hashing, allocation/copy traffic, and SHA-256/CRC64
+  helpers.
+- A follow-up queue-lock slice narrows `push_remove_lock` in the successful
+  gossip-admission and consensus-requeue push paths. The lock still covers the
+  transaction/routing/age/expiry/gossip-payload maps that removal can clean up,
+  but post-enqueue backpressure publication, gossip side-channel enqueue,
+  queued-event emission, logging, and Sumeragi wakeup now run after releasing
+  it. Focused validation passed with
+  `cargo test -p iroha_core push_with_gossip_payload_with_state_and_routing_skips_router_lookup --lib -- --nocapture`
+  and
+  `cargo test -p iroha_core push_requeued_with_routing_accepts_pending_transaction --lib -- --nocapture`.
 
 ## 2026-05-03 IVM WSV mock mutation gas hardening
 
@@ -683,6 +769,168 @@ Last updated: 2026-05-03
   under heavy concurrent Cargo activity. The Sumeragi/DA failures from that run
   now have green focused reruns, and the disabled confidential localnet cluster
   has green focused reruns. The follow-up serial rerun is green.
+
+## 2026-05-03 Sumeragi restarted-peer commit-QC recovery
+
+- The widened consensus validation did not find a quorum-halting consensus
+  failure, but it did expose a peer-local catch-up bug in the confidential
+  downtime plus timeout localnet scenario. A restarted peer could keep a known
+  frontier payload locally while repeatedly requesting the missing commit QC,
+  even though the other validators had already finalized later heights.
+- Root cause: exact block-body repair sends a plain `BlockBodyResponse` before
+  the richer `BlockSyncUpdate` companion. Both messages used the same
+  height/view/hash dedup key, so if the plain body arrived first it could leave
+  the key occupied and suppress the QC-bearing companion that would retire the
+  missing commit-QC request.
+- `handle_block_body_response(...)` now releases the shared dedup key when a
+  plain exact-body response materializes the active slot while a same-round
+  missing commit-QC request is still pending. This keeps normal duplicate
+  suppression for ordinary exact-body responses, but lets the certificate
+  companion through during known-block commit-QC repair.
+- Added a focused regression that reproduces the message order: plain exact
+  body first, then QC-bearing `BlockSyncUpdate`. The test proves the plain body
+  does not clear the missing-QC request by itself, releases dedup, and the
+  companion records the recovered commit certificate.
+- The NPoS 1s/K=3 performance harness now separates host jitter from consensus
+  liveness by raising the propose EMA ceiling slightly and adding an explicit
+  bounded-progress check on observed block spacing.
+- Validation:
+  - `cargo test -p iroha_core plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair -- --nocapture`
+  - `cargo test -p iroha_core --lib block_body_response -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --nocapture --test-threads=1`
+  - `bash ci/check_sumeragi_formal.sh`
+
+## 2026-05-03 Taira Inrou rollout fail-closed hardening
+
+- Taira's shipped systemd unit now starts the bundled `/opt/iroha/bin/irohad`
+  from the rollout bundle instead of an ambient `/usr/local/bin/irohad`, so the
+  release cannot accidentally keep running a binary built without
+  `embedded-soracloud-runtime`.
+- The checked-in Taira validator config now enables Soracloud production mode
+  with bounded fail-closed egress and non-proxy Inrou hosting, causing startup
+  to reject stub/non-production runtime posture instead of silently exposing an
+  empty runtime snapshot.
+- The Taira container path now installs PortableVm QEMU tooling, passes the
+  portable acceleration setting through, and exposes `/dev/kvm` when present.
+- Soracloud status now reports the runtime manager as unavailable when `irohad`
+  is compiled without `embedded-soracloud-runtime`, rather than presenting the
+  stub as an idle materializer.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh configs/soranexus/taira/build_taira_rollout_bundle.sh scripts/build_release_image.sh`
+  - `cargo test -p iroha_config soracloud_runtime_production_mode_accepts_bounded_posture --lib -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures taira_config_enables_untrusted_cid_hosting -- --nocapture`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_runtime_status_sections_report_unavailable_without_runtime -- --nocapture`
+  - `cargo test -p irohad --features embedded-soracloud-runtime --bin irohad manager_config_ -- --nocapture`
+  - `python3 scripts/tests/taira_validator_container_test.py`
+  - `configs/soranexus/taira/build_taira_rollout_bundle.sh --profile debug --allow-dirty`
+
+## 2026-05-03 Sumeragi frontier formal process hardening
+
+- Hardened the bounded Taira frontier-recovery model again after the latest
+  consensus hang fixes. The model now tracks active pending progress age and
+  event kind, validation/local-vote/commit-QC progress, subject-view-scoped
+  stale recovery unlocks, and direct process obligations for stale owner clear,
+  vote queue drain, payload recovery, quorum retransmit, retransmit
+  follow-through, and future reanchor.
+- Added expected-failure mutation coverage for disabled pending-progress touch
+  and height-only stale recovery unlocks, and extended the formal expected
+  failure suite so these run with the existing stale-owner, vote-queue,
+  payload-recovery, retransmit-follow-through, future-promotion,
+  reanchor-clear, future-evidence-drop, promotion-reset, and future-stale-owner
+  mutations.
+- The strengthened model closes a verification-process gap: during hardening,
+  the retransmit-follow-through mutation initially escaped until the model got
+  a direct `RetransmitHasFollowthroughProgress` invariant. The final suite now
+  rejects that mutation as expected. No Sumeragi protocol state-machine
+  behavior changed in this slice.
+- Broader runtime validation exposed an internal execution-witness recorder
+  isolation issue: a prior capture could leave the global witness recorder
+  active after an early return or panic, poisoning later parallel tests and
+  polluting transaction-set hash assertions. The recorder now only accepts
+  events inside an active capture window, recovers from poisoned lock state for
+  cleanup, and clears unfinished captures when the guard drops.
+- The next Torii validation pass exposed a non-consensus macOS process-wrapper
+  issue: `sandbox-exec` can abort the Rust attachment sanitizer child during
+  runtime initialization before it can return a structured rejection. Torii now
+  uses the direct sanitizer subprocess path on macOS, while Linux keeps the
+  `bwrap` sandbox path when available. The subprocess timeout fixture now
+  accepts both child-process and stdout-reader timeout classifications.
+- Full formal validation with local Apalache `0.52.2` is green:
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-deep`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-wide`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-nightly`
+  - `bash ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash ci/check_sumeragi_formal.sh`
+  - `git diff --check`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal` (passed with
+    expected stale `source_hash` warnings for translated formal READMEs)
+- The full CI formal gate also ran the small TLC cross-check for the frontier
+  model. TLC completed the bounded state graph with `1,165,588` distinct
+  states, graph depth `11`, and no invariant or temporal-property errors.
+- Focused Rust bridge validation for the formal assumptions is green:
+  - `cargo test -p iroha_core --lib local_commit_vote_counts_as_pending_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_qc_observation_counts_as_pending_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib local_same_height_vote_blocks_when_exhausted_recovery_has_not_rotated_vote_view -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_reanchors_frontier_when_future_new_view_quorum_exists -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_reanchors_future_new_view_quorum_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_reanchors_future_new_view_quorum_over_stale_frontier_owner -- --nocapture`
+- Broader Sumeragi regression windows were also green after the formal pass:
+  - `cargo test -p iroha_core --lib reschedule_ -- --nocapture` (`61` passed)
+  - `cargo test -p iroha_core --lib same_height -- --nocapture` (`51`
+    passed, `3` ignored as obsolete)
+  - `cargo test -p iroha_core --lib pending_progress -- --nocapture` (`6`
+    passed)
+  - `cargo test -p iroha_core --lib pacemaker_reanchors -- --nocapture` (`3`
+    passed)
+- Continued widening found no runtime consensus failures:
+  - `cargo test -p iroha_core --lib` (`5129` passed, `22` ignored, `0`
+    failed; finished in `726.67s`)
+  - `cargo test -p iroha_core --lib sumeragi::witness::tests -- --nocapture`
+    (`5` passed)
+  - `cargo test -p iroha_core --lib state::fastpq_tx_set_hash_tests -- --test-threads=1 --nocapture`
+    (`4` passed)
+  - `cargo test -p iroha_core --lib frontier -- --nocapture` (`326` passed,
+    `1` ignored)
+  - `cargo test -p iroha_core --lib vote_queue -- --nocapture` (`6` passed)
+  - `cargo test -p iroha_core --lib commit_qc -- --nocapture` (`143` passed)
+  - `cargo test -p iroha_core --lib future_new_view -- --nocapture` (`5`
+    passed)
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests` (`2023`
+    passed, `20` ignored)
+  - `cargo test -p iroha_core --lib sumeragi::tests` (`137` passed)
+  - `cargo test -p iroha_core --lib sumeragi::status` (`65` passed)
+- The Torii crate corridor is green after fixing the macOS sanitizer wrapper
+  issue:
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture --test-threads=1`
+    (`16` passed)
+  - `cargo test -p iroha_torii` (passed, including `1680` library tests, `1`
+    ignored, all integration binaries, and doctests)
+
+## 2026-05-03 Nexus fee burn activation gate
+
+- Normal Nexus transaction fees are now burned from the fee payer or authorized
+  fee sponsor once `nexus.fees.burn_from_unix_timestamp_ms` is reached. Before
+  that timestamp, the executor preserves legacy fee transfer/self-fee behavior
+  so existing live Minamoto blocks replay without changing holder balances or
+  total supply.
+- Sponsored fees still require `CanUseFeeSponsor`, and admission checks now
+  require the payer/sponsor fee asset balance even when the payer equals the
+  configured fee sink, matching the burn-on-execution behavior after activation.
+- Added regression coverage for sponsor-as-sink legacy no-op before activation,
+  legacy transfer before activation, and burn behavior after activation.
+- The default activation timestamp is `u64::MAX`; operators must explicitly set
+  a future timestamp after deploying the compatible binary to every peer.
+- Focused validation:
+  - `cargo fmt --all`
+  - `env -u LOG_FORMAT cargo test -p iroha_config`
+  - `env -u LOG_FORMAT cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
 
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 
@@ -5880,6 +6128,14 @@ Last updated: 2026-05-03
   `poseidon_preimage_digest` at about `328.5 us`, and
   `batch_from_transcripts/missing_digests/64` at about `21.6 ms`, all reported
   as statistically significant improvements against the preceding filtered run.
+- `hash_bytes` now uses a one-shot local sponge path instead of constructing a
+  streaming `PoseidonByteHasher`, while preserving the same padding behavior for
+  partial trailing words. Filtered Criterion kept the direct path after
+  `hash_bytes/128` improved to about `177.6 us`, `hash_bytes/512` improved to
+  about `648.9 us`, and `hash_bytes/32` stayed within the noise threshold.
+  A round-constant destructuring experiment and a shared mask-table experiment
+  were rejected after filtered runs showed no stable gain and a regression in at
+  least one hot filter.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
   to stream Norito encodings into the Poseidon byte hasher and to pack GPU
   digest batches into a shared word buffer with preallocated slice/word

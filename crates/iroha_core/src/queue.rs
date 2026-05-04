@@ -2312,101 +2312,104 @@ impl Queue {
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let hash = checked.as_ref().hash();
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        let _guard = self.push_remove_lock.lock();
-        let txs_len = self.active_len();
-        let entry = match self.txs.entry(hash) {
-            Entry::Occupied(_) => {
+        {
+            let _guard = self.push_remove_lock.lock();
+            let txs_len = self.active_len();
+            let entry = match self.txs.entry(hash) {
+                Entry::Occupied(_) => {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::IsInQueue,
+                    });
+                }
+                Entry::Vacant(entry) => entry,
+            };
+
+            if txs_len >= self.capacity.get() {
+                warn!(
+                    lane_id = %lane_id,
+                    dataspace_id = %dataspace_id,
+                    max = self.capacity,
+                    "Achieved maximum amount of transactions"
+                );
+                self.publish_backpressure_state(txs_len, backpressure_telemetry);
                 return Err(Failure {
                     tx: checked.as_accepted().clone().into(),
-                    err: Error::IsInQueue,
+                    err: Error::Full,
                 });
             }
-            Entry::Vacant(entry) => entry,
-        };
 
-        if txs_len >= self.capacity.get() {
-            warn!(
-                lane_id = %lane_id,
-                dataspace_id = %dataspace_id,
-                max = self.capacity,
-                "Achieved maximum amount of transactions"
-            );
-            self.publish_backpressure_state(txs_len, backpressure_telemetry);
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err: Error::Full,
-            });
-        }
+            if let Some(authority) = checked.as_ref().authority_opt() {
+                if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err,
+                    });
+                }
+            }
 
-        if let Some(authority) = checked.as_ref().authority_opt() {
-            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
-                return Err(Failure {
-                    tx: checked.as_accepted().clone().into(),
-                    err,
-                });
-            }
-        }
-
-        // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
-        let tx_arc = Arc::new(checked);
-        entry.insert(Arc::clone(&tx_arc));
-        self.track_active_transaction();
-        self.routing_decisions.insert(hash, routing_decision);
-        routing_ledger::record(hash, routing_decision);
-        self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-        self.record_queued_age(hash, enqueue_at_ms);
-        // Drop the local holder before attempting to unwrap on push failure.
-        drop(tx_arc);
-        let mut pushed = self.tx_hashes.push(hash).is_ok();
-        let mut restore_queued_age_after_compaction = false;
-        if !pushed {
-            let compacted = self.compact_hash_queue_locked();
-            if compacted > 0 {
-                restore_queued_age_after_compaction = true;
-                pushed = self.tx_hashes.push(hash).is_ok();
-            }
-        }
-        if !pushed {
-            warn!("Queue is full");
-            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
-            self.untrack_active_transaction();
-            if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                routing_ledger::discard_if_matches(&hash, decision);
-            }
-            self.tx_enqueued_at_ms.remove(&hash);
-            self.remove_queued_age(&hash);
-            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
-                self.decrease_per_user_tx_count(authority);
-            }
-            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-            return Err(Failure {
-                tx: Box::new(
-                    Arc::try_unwrap(err_tx)
-                        .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
-                        .into_accepted(),
-                ),
-                err: Error::Full,
-            });
-        }
-        if restore_queued_age_after_compaction {
+            // Insert before publishing the hash so consumers always find a
+            // matching `(hash, tx)` record in `txs`.
+            let tx_arc = Arc::new(checked);
+            entry.insert(Arc::clone(&tx_arc));
+            self.track_active_transaction();
+            self.routing_decisions.insert(hash, routing_decision);
+            routing_ledger::record(hash, routing_decision);
+            self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
             self.record_queued_age(hash, enqueue_at_ms);
+            // Drop the local holder before attempting to unwrap on push failure.
+            drop(tx_arc);
+            let mut pushed = self.tx_hashes.push(hash).is_ok();
+            let mut restore_queued_age_after_compaction = false;
+            if !pushed {
+                let compacted = self.compact_hash_queue_locked();
+                if compacted > 0 {
+                    restore_queued_age_after_compaction = true;
+                    pushed = self.tx_hashes.push(hash).is_ok();
+                }
+            }
+            if !pushed {
+                warn!("Queue is full");
+                let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                self.untrack_active_transaction();
+                if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    routing_ledger::discard_if_matches(&hash, decision);
+                }
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
+                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+                return Err(Failure {
+                    tx: Box::new(
+                        Arc::try_unwrap(err_tx)
+                            .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
+                            .into_accepted(),
+                    ),
+                    err: Error::Full,
+                });
+            }
+            if restore_queued_age_after_compaction {
+                self.record_queued_age(hash, enqueue_at_ms);
+            }
+            self.tx_encoded_len.insert(hash, encoded_len);
+            if let Some(payload) = gossip_payload {
+                self.tx_gossip_payloads.insert(hash, payload);
+            }
+            self.tx_gas_cost.insert(hash, proposal_gas_cost);
+            self.track_expiry_hash(hash);
+            #[cfg(feature = "telemetry")]
+            self.record_teu_enqueue(
+                hash,
+                TxTeuInfo {
+                    lane_id,
+                    dataspace_id,
+                    teu: pending_teu,
+                },
+                telemetry_handle,
+            );
         }
-        self.tx_encoded_len.insert(hash, encoded_len);
-        if let Some(payload) = gossip_payload {
-            self.tx_gossip_payloads.insert(hash, payload);
-        }
-        self.tx_gas_cost.insert(hash, proposal_gas_cost);
-        self.track_expiry_hash(hash);
-        #[cfg(feature = "telemetry")]
-        self.record_teu_enqueue(
-            hash,
-            TxTeuInfo {
-                lane_id,
-                dataspace_id,
-                teu: pending_teu,
-            },
-            telemetry_handle,
-        );
         iroha_logger::debug!(
             tx = %hash,
             lane_id = %lane_id,
@@ -2645,98 +2648,101 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        let _guard = self.push_remove_lock.lock();
-        let txs_len = self.active_len();
-        let entry = match self.txs.entry(hash) {
-            Entry::Occupied(_) => {
+        {
+            let _guard = self.push_remove_lock.lock();
+            let txs_len = self.active_len();
+            let entry = match self.txs.entry(hash) {
+                Entry::Occupied(_) => {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::IsInQueue,
+                    });
+                }
+                Entry::Vacant(entry) => entry,
+            };
+
+            if txs_len >= self.capacity.get() {
+                warn!(
+                    lane_id = %lane_id,
+                    dataspace_id = %dataspace_id,
+                    max = self.capacity,
+                    "Achieved maximum amount of transactions"
+                );
+                self.publish_backpressure_state(txs_len, backpressure_telemetry);
                 return Err(Failure {
                     tx: checked.as_accepted().clone().into(),
-                    err: Error::IsInQueue,
+                    err: Error::Full,
                 });
             }
-            Entry::Vacant(entry) => entry,
-        };
 
-        if txs_len >= self.capacity.get() {
-            warn!(
-                lane_id = %lane_id,
-                dataspace_id = %dataspace_id,
-                max = self.capacity,
-                "Achieved maximum amount of transactions"
-            );
-            self.publish_backpressure_state(txs_len, backpressure_telemetry);
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err: Error::Full,
-            });
-        }
+            if let Some(authority) = checked.as_ref().authority_opt() {
+                if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                    return Err(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err,
+                    });
+                }
+            }
 
-        if let Some(authority) = checked.as_ref().authority_opt() {
-            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
-                return Err(Failure {
-                    tx: checked.as_accepted().clone().into(),
-                    err,
-                });
-            }
-        }
-
-        // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
-        let tx_arc = Arc::new(checked);
-        entry.insert(Arc::clone(&tx_arc));
-        self.track_active_transaction();
-        self.routing_decisions.insert(hash, routing_decision);
-        routing_ledger::record(hash, routing_decision);
-        self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-        self.record_queued_age(hash, enqueue_at_ms);
-        // Drop the local holder before attempting to unwrap on push failure.
-        drop(tx_arc);
-        let mut pushed = self.tx_hashes.push(hash).is_ok();
-        let mut restore_queued_age_after_compaction = false;
-        if !pushed {
-            let compacted = self.compact_hash_queue_locked();
-            if compacted > 0 {
-                restore_queued_age_after_compaction = true;
-                pushed = self.tx_hashes.push(hash).is_ok();
-            }
-        }
-        if !pushed {
-            warn!("Queue is full");
-            let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
-            self.untrack_active_transaction();
-            if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                routing_ledger::discard_if_matches(&hash, decision);
-            }
-            self.tx_enqueued_at_ms.remove(&hash);
-            self.remove_queued_age(&hash);
-            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
-                self.decrease_per_user_tx_count(authority);
-            }
-            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-            return Err(Failure {
-                tx: Box::new(
-                    Arc::try_unwrap(err_tx)
-                        .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
-                        .into_accepted(),
-                ),
-                err: Error::Full,
-            });
-        }
-        if restore_queued_age_after_compaction {
+            // Insert before publishing the hash so consumers always find a
+            // matching `(hash, tx)` record in `txs`.
+            let tx_arc = Arc::new(checked);
+            entry.insert(Arc::clone(&tx_arc));
+            self.track_active_transaction();
+            self.routing_decisions.insert(hash, routing_decision);
+            routing_ledger::record(hash, routing_decision);
+            self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
             self.record_queued_age(hash, enqueue_at_ms);
+            // Drop the local holder before attempting to unwrap on push failure.
+            drop(tx_arc);
+            let mut pushed = self.tx_hashes.push(hash).is_ok();
+            let mut restore_queued_age_after_compaction = false;
+            if !pushed {
+                let compacted = self.compact_hash_queue_locked();
+                if compacted > 0 {
+                    restore_queued_age_after_compaction = true;
+                    pushed = self.tx_hashes.push(hash).is_ok();
+                }
+            }
+            if !pushed {
+                warn!("Queue is full");
+                let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                self.untrack_active_transaction();
+                if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    routing_ledger::discard_if_matches(&hash, decision);
+                }
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
+                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+                return Err(Failure {
+                    tx: Box::new(
+                        Arc::try_unwrap(err_tx)
+                            .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
+                            .into_accepted(),
+                    ),
+                    err: Error::Full,
+                });
+            }
+            if restore_queued_age_after_compaction {
+                self.record_queued_age(hash, enqueue_at_ms);
+            }
+            self.tx_encoded_len.insert(hash, encoded_len);
+            self.tx_gas_cost.insert(hash, proposal_gas_cost);
+            self.track_expiry_hash(hash);
+            #[cfg(feature = "telemetry")]
+            self.record_teu_enqueue(
+                hash,
+                TxTeuInfo {
+                    lane_id,
+                    dataspace_id,
+                    teu: pending_teu,
+                },
+                telemetry_handle,
+            );
         }
-        self.tx_encoded_len.insert(hash, encoded_len);
-        self.tx_gas_cost.insert(hash, proposal_gas_cost);
-        self.track_expiry_hash(hash);
-        #[cfg(feature = "telemetry")]
-        self.record_teu_enqueue(
-            hash,
-            TxTeuInfo {
-                lane_id,
-                dataspace_id,
-                teu: pending_teu,
-            },
-            telemetry_handle,
-        );
         iroha_logger::debug!(
             tx = %hash,
             lane_id = %lane_id,
@@ -7654,7 +7660,7 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(vec![1_u8, 2, 3, 4]);
+        let payload = tx.entrypoint_bytes();
         queue
             .push_with_gossip_payload_with_state_and_routing(
                 tx,
@@ -7675,6 +7681,11 @@ pub mod tests {
             .get(&hash)
             .expect("cached gossip payload should exist");
         assert_eq!(stored_payload.as_slice(), payload.as_slice());
+        assert_eq!(
+            queue.tx_gossip.pop(),
+            Some(hash),
+            "successful gossip admission should still enqueue the gossip side channel"
+        );
     }
 
     fn config_factory() -> Config {
@@ -9147,6 +9158,11 @@ pub mod tests {
                 .get(&hash)
                 .map(|entry| *entry.value()),
             Some(routing)
+        );
+        assert_eq!(
+            queue.tx_gossip.pop(),
+            Some(hash),
+            "successful requeue should still enqueue the gossip side channel"
         );
 
         let mut expired = Vec::new();

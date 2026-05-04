@@ -10209,6 +10209,22 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// GET `/v1/gov/citizens`
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
+    pub fn get_gov_citizens_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/gov/citizens");
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get citizens: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
     /// GET `/v1/gov/council/audit` (optional `epoch` query)
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.

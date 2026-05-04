@@ -25,6 +25,11 @@ active pending contiguous frontier block plus one concrete future frontier slot:
 - late arrival of future frontier evidence after GST,
 - promotion freshness, so a promoted second slot cannot inherit stale active
   payload recovery, retransmit, quorum-window, or view-rotation progress,
+- active pending progress age/event tracking, so validation, local commit-vote,
+  commit-QC, payload recovery, retransmit, reanchor, promotion, and rotation
+  progress must explicitly touch the pending block progress marker,
+- same-height stale recovery unlocks scoped to the subject view that was
+  rotated, not just to the block height,
 - deterministic post-GST commit, retransmit, bounded view-rotation, and
   zero-evidence drop outcomes.
 
@@ -49,6 +54,8 @@ verification, and full networking details.
 - `SumeragiFrontierRecovery_bug_future_evidence_drop.cfg`: expected-failure future-evidence drop mutation.
 - `SumeragiFrontierRecovery_bug_promotion_reset.cfg`: expected-failure promotion-reset mutation.
 - `SumeragiFrontierRecovery_bug_future_stale_owner.cfg`: expected-failure future stale-owner mutation.
+- `SumeragiFrontierRecovery_bug_progress_touch.cfg`: expected-failure pending progress-touch mutation.
+- `SumeragiFrontierRecovery_bug_height_only_recovery.cfg`: expected-failure height-only stale recovery mutation.
 - `SumeragiFrontierRecovery_tlc_small.cfg`: small TLC cross-check config.
 - `.github/workflows/nightly_sumeragi_formal.yml`: scheduled/manual longer-bound
   frontier check using `frontier-nightly`.
@@ -79,11 +86,33 @@ Frontier recovery invariants:
 - `FuturePromotionReadyHasProgress`, which rules out a terminal post-GST
   state where the current pending wrapper has cleared for future evidence but
   the future slot cannot be promoted.
+- `StaleRecoveryOwnerHasClearProgress`, which requires stale current frontier
+  ownership to expose a clear transition once the relevant subject view has
+  rotated.
+- `VoteQueueBacklogHasDrainProgress`, which requires a queued-vote backlog on
+  a fresh active frontier to expose a real drain transition instead of being
+  masked by unrelated progress bookkeeping.
+- `MissingPayloadHasRecoveryProgress`, which requires a vote-backed active
+  frontier with a drained vote queue and missing payload to expose a payload
+  recovery transition.
+- `QuorumWindowHasRetransmitProgress`, which requires an expired
+  quorum-reschedule window to expose a quorum retransmit transition before
+  bounded rotation/drop can follow.
+- `RetransmitHasFollowthroughProgress`, which requires a vote-backed frontier
+  that already retransmitted quorum evidence to expose the deterministic
+  rotation or view-bound clear follow-through.
+- `FutureEvidenceHasReanchorProgress`, which requires concrete future frontier
+  evidence to expose the current-wrapper clear step before promotion.
 - `FutureEvidencePreservedUntilPromotion`, which requires observed future
   frontier evidence to remain represented by the concrete future slot until it
   is promoted.
 - `FuturePromotionResetsActiveProgress`, which requires a freshly promoted
-  second slot to start with cleared active progress flags.
+  second slot to start with cleared active progress, validation, vote, QC,
+  recovery, quorum-window, and view flags.
+- `PendingProgressEventsTouchAge`, which requires every modeled pending
+  progress event to reset the abstract progress age.
+- `StaleRecoveryUnlockIsViewScoped`, which requires any stale recovery unlock
+  to have rotated at least the pending block's subject view.
 
 Frontier recovery temporal property:
 - `PostGstVoteBackedFrontierEventuallyResolves`: after GST, every unresolved
@@ -115,6 +144,8 @@ surfaces it abstracts:
 | `quorumRescheduleArmed`, `quorumWindowAge` | Vote-backed quorum reschedule pacing in `reschedule_stale_pending_blocks_with_now(...)`; regression coverage includes `reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`. |
 | `payloadRecovered` | Exact frontier body repair and stale RBC repair admission in `request_frontier_owner_body_repair(...)`, `handle_frontier_body_gap_with_topology(...)`, and `stale_frontier_rbc_repair_is_actionable(...)`. |
 | `quorumRetransmitted`, `rotated` | Quorum retransmit target selection, `rebroadcast_pending_block_updates(...)`, and deterministic view-change calls in `reschedule_stale_pending_blocks_with_now(...)`. |
+| `subjectView`, `progressAge`, `lastProgressKind`, `validationState`, `localVoteEmitted`, `commitQcObserved` | Pending-block progress age/touch accounting. Validation, local commit-vote emission, and commit-QC observation map to `PendingBlock::touch_progress(...)`, `PendingBlock::note_local_commit_vote_emitted(...)`, and `PendingBlock::note_commit_qc_observed(...)`. |
+| `recoveryLastRotationView`, `staleRecoveryUnlocked` | Same-height stale frontier recovery unlocks must be scoped by the vote/view that actually rotated. This maps to `stale_same_height_recovery_age(...)` and the stale-owner quorum-timeout guards in the Sumeragi main loop. |
 | `futurePresent`, `futureContiguous`, `futureCommitVotes`, `futureQueuedVotes`, `futurePayloadState`, `futureRecoveryOwner` | One concrete future frontier slot. `FutureFrontierEvidence` is derived from the slot instead of stored as an independent Boolean. |
 | `futureEvidenceObserved` | A late or initially present future-evidence obligation. Once observed, the future slot must remain concrete evidence until promotion. |
 | `futurePromotionReady`, `futurePromoted`, `promotionFresh` | The two-step future reanchor path: clear the stale/current pending wrapper, then promote the future slot into the active slot with active progress flags reset. This maps to future new-view / higher-frontier quorum handling in `on_pacemaker_propose_ready(...)`, covered by `pacemaker_reanchors_frontier_when_future_new_view_quorum_exists`, `pacemaker_reanchors_future_new_view_quorum_while_vote_queue_backlogged`, and `pacemaker_reanchors_future_new_view_quorum_over_stale_frontier_owner`. |
@@ -209,6 +240,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-clear
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-evidence-drop
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-promotion-reset
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-stale-owner
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-progress-touch
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-height-only-recovery
 ```
 
 If Apalache is not in `PATH`, you can:

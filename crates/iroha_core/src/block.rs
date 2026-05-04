@@ -15773,6 +15773,11 @@ mod tests {
 
     #[test]
     fn rejected_business_execution_still_charges_nexus_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
         let chain_id = ChainId::from("rejected-business-fee-test");
         let (payer_id, payer_keypair) = gen_account_in("wonderland");
         let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -15813,6 +15818,7 @@ mod tests {
             nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
@@ -15876,7 +15882,7 @@ mod tests {
             .to_string();
 
         assert_eq!(payer_balance, "9", "tx error: {first_error:?}");
-        assert_eq!(sink_balance, "1");
+        assert_eq!(sink_balance, "0");
         assert!(
             state_block.world.domain(&created_domain_id).is_err(),
             "failed transaction state changes must still be rolled back"
@@ -15885,6 +15891,11 @@ mod tests {
 
     #[test]
     fn rejected_data_trigger_execution_still_charges_nexus_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
         let chain_id = ChainId::from("rejected-trigger-fee-test");
         let (payer_id, payer_keypair) = gen_account_in("wonderland");
         let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -15925,6 +15936,7 @@ mod tests {
             nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         {
             let mut world = state.world.block();
@@ -16025,7 +16037,7 @@ mod tests {
             .to_string();
 
         assert_eq!(payer_balance, "9", "tx error: {first_error:?}");
-        assert_eq!(sink_balance, "1");
+        assert_eq!(sink_balance, "0");
         let event_value = state_block
             .world
             .map_account(&payer_id, |account| {

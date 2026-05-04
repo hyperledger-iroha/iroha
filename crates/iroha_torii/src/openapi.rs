@@ -2439,6 +2439,16 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/gov/citizens".to_owned(),
+        Value::Object(json_get_operation(
+            "Governance",
+            "Fetch citizenship registry count.",
+            "Return the exact number of accounts registered in the governance citizenship registry.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/gov/citizens/{account_id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
@@ -10579,6 +10589,7 @@ mod tests {
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
+        assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));

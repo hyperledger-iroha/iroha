@@ -11853,6 +11853,25 @@ fn selection_from_roster_artifacts(
         checkpoint_validate_ms,
         "block sync roster validation substeps"
     );
+    let resolved_stake_snapshot_for = |roster: &[PeerId]| -> Option<CommitStakeSnapshot> {
+        stake_snapshot
+            .filter(|snapshot| snapshot.matches_roster(roster))
+            .cloned()
+            .or_else(|| {
+                cert_inputs
+                    .as_ref()
+                    .and_then(|inputs| inputs.stake_snapshot.as_ref())
+                    .filter(|snapshot| snapshot.matches_roster(roster))
+                    .cloned()
+            })
+            .or_else(|| {
+                checkpoint_inputs
+                    .as_ref()
+                    .and_then(|inputs| inputs.stake_snapshot.as_ref())
+                    .filter(|snapshot| snapshot.matches_roster(roster))
+                    .cloned()
+            })
+    };
     match (validated_cert, validated_checkpoint) {
         (Some((roster, cert)), Some((checkpoint_roster, chk))) => {
             if roster != checkpoint_roster {
@@ -11870,9 +11889,7 @@ fn selection_from_roster_artifacts(
                     checkpoint_view = chk.view,
                     "commit certificate and checkpoint views differ; preferring commit certificate"
                 );
-                let stake_snapshot = stake_snapshot
-                    .filter(|snapshot| snapshot.matches_roster(&roster))
-                    .cloned();
+                let stake_snapshot = resolved_stake_snapshot_for(&roster);
                 return Some(BlockSyncRosterSelection {
                     roster,
                     source,
@@ -11889,9 +11906,7 @@ fn selection_from_roster_artifacts(
                     block = %block_hash,
                     "commit certificate and checkpoint roots differ; preferring commit certificate"
                 );
-                let stake_snapshot = stake_snapshot
-                    .filter(|snapshot| snapshot.matches_roster(&roster))
-                    .cloned();
+                let stake_snapshot = resolved_stake_snapshot_for(&roster);
                 return Some(BlockSyncRosterSelection {
                     roster,
                     source,
@@ -11900,9 +11915,7 @@ fn selection_from_roster_artifacts(
                     stake_snapshot,
                 });
             }
-            let stake_snapshot = stake_snapshot
-                .filter(|snapshot| snapshot.matches_roster(&roster))
-                .cloned();
+            let stake_snapshot = resolved_stake_snapshot_for(&roster);
             Some(BlockSyncRosterSelection {
                 roster,
                 source,
@@ -11912,9 +11925,7 @@ fn selection_from_roster_artifacts(
             })
         }
         (Some((roster, cert)), None) => {
-            let stake_snapshot = stake_snapshot
-                .filter(|snapshot| snapshot.matches_roster(&roster))
-                .cloned();
+            let stake_snapshot = resolved_stake_snapshot_for(&roster);
             Some(BlockSyncRosterSelection {
                 roster,
                 source,
@@ -11924,9 +11935,7 @@ fn selection_from_roster_artifacts(
             })
         }
         (None, Some((roster, chk))) => {
-            let stake_snapshot = stake_snapshot
-                .filter(|snapshot| snapshot.matches_roster(&roster))
-                .cloned();
+            let stake_snapshot = resolved_stake_snapshot_for(&roster);
             Some(BlockSyncRosterSelection {
                 roster,
                 source,

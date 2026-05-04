@@ -62,6 +62,8 @@ TAIRA_STORAGE_PATH="${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}"
 TAIRA_P2P_PORT="${TAIRA_P2P_PORT:-1337}"
 TAIRA_TORII_PORT="${TAIRA_TORII_PORT:-18080}"
 TAIRA_RUST_LOG="${TAIRA_RUST_LOG:-info}"
+TAIRA_INROU_PORTABLE_ACCEL="${TAIRA_INROU_PORTABLE_ACCEL:-auto}"
+TAIRA_EXPOSE_KVM="${TAIRA_EXPOSE_KVM:-auto}"
 TAIRA_GENESIS_PATH="${TAIRA_GENESIS_PATH:-}"
 TAIRA_SIGNED_GENESIS_PATH="${TAIRA_SIGNED_GENESIS_PATH:-}"
 TAIRA_SORAFS_SITE_BINDINGS_PATH="${TAIRA_SORAFS_SITE_BINDINGS_PATH:-}"
@@ -97,11 +99,18 @@ build_run_args() {
         --restart unless-stopped
         --init
         -e "RUST_LOG=$TAIRA_RUST_LOG"
+        -e "IROHA_INROU_PORTABLE_ACCEL=$TAIRA_INROU_PORTABLE_ACCEL"
         -p "${TAIRA_P2P_PORT}:1337"
         -p "${TAIRA_TORII_PORT}:8080"
         -v "${TAIRA_CONFIG_PATH}:/config/config.toml:ro"
         -v "${TAIRA_STORAGE_PATH}:/storage"
     )
+
+    if [[ "$TAIRA_EXPOSE_KVM" == "1" || "$TAIRA_EXPOSE_KVM" == "true" ]]; then
+        docker_run_args+=(--device /dev/kvm)
+    elif [[ "$TAIRA_EXPOSE_KVM" == "auto" && -e /dev/kvm ]]; then
+        docker_run_args+=(--device /dev/kvm)
+    fi
 
     if [[ -n "$TAIRA_DOCKER_NETWORK" ]]; then
         docker_run_args+=(
