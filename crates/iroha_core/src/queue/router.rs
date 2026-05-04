@@ -35,6 +35,7 @@ use iroha_data_model::{
     transaction::Executable,
 };
 use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
     asset::{
         CanBurnAssetWithDefinition, CanMintAssetWithDefinition,
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
@@ -304,12 +305,12 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
         return Ok(decision);
     }
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
-        return resolve_query_routing_decision(
+        return resolve_query_routing_decision_with_world(
             policy,
             lane_catalog,
             dataspace_catalog,
             account_id,
-            None,
+            world,
         );
     }
     let target_dataspace =
@@ -1745,6 +1746,18 @@ fn asset_definition_for_routing<W: WorldReadOnly>(
         })
 }
 
+fn account_alias_permission_scope_dataspace_target(
+    scope: &AccountAliasPermissionScope,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
+    match scope {
+        AccountAliasPermissionScope::Domain(domain_id) => {
+            domain_dataspace_target(domain_id, dataspace_catalog)
+        }
+        AccountAliasPermissionScope::Dataspace(dataspace_id) => Some(*dataspace_id),
+    }
+}
+
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
     match permission.name() {
         "CanMintAssetWithDefinition" => permission
@@ -1866,6 +1879,20 @@ fn dataspace_scoped_permission_target(
                         state_view,
                     )
                 }),
+            "CanManageAccountAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAccountAlias>()
+                .ok()
+                .and_then(|token| {
+                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                }),
+            "CanResolveAccountAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanResolveAccountAlias>()
+                .ok()
+                .and_then(|token| {
+                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                }),
             _ => None,
         };
     }
@@ -1961,6 +1988,20 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         dataspace_catalog,
                         world,
                     )
+                }),
+            "CanManageAccountAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAccountAlias>()
+                .ok()
+                .and_then(|token| {
+                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
+                }),
+            "CanResolveAccountAlias" => permission
+                .payload()
+                .try_into_any_norito::<CanResolveAccountAlias>()
+                .ok()
+                .and_then(|token| {
+                    account_alias_permission_scope_dataspace_target(&token.scope, dataspace_catalog)
                 }),
             _ => None,
         };
@@ -2096,6 +2137,26 @@ pub fn resolve_query_routing_decision(
     resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
 }
 
+fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    authority: &AccountId,
+    world: &W,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| query_rule_matches_with_world(rule, authority, dataspace_catalog, world));
+    resolve_policy_routing_decision(
+        policy,
+        matched_rule,
+        account_dataspace_target(Some(world), authority),
+        lane_catalog,
+        dataspace_catalog,
+    )
+}
+
 /// Resolve a policy decision against lane/dataspace catalogs without fallback.
 ///
 /// This function intentionally rejects unresolved or ambiguous combinations
@@ -2201,6 +2262,30 @@ fn query_rule_matches(
     })
 }
 
+fn query_rule_matches_with_world<W: WorldReadOnly>(
+    rule: &LaneRoutingRule,
+    authority: &AccountId,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
+    if rule.matcher.instruction.is_some() {
+        return false;
+    }
+
+    rule.matcher.account.as_deref().map_or(true, |account| {
+        account_matches_with_world(account, authority, dataspace_catalog, world)
+    })
+}
+
+fn account_matches_literal_or_encoded(pattern: &str, authority: &AccountId) -> bool {
+    if authority.to_string() == pattern {
+        return true;
+    }
+    iroha_data_model::account::AccountId::parse_encoded(pattern)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .is_ok_and(|parsed| parsed == *authority)
+}
+
 fn account_matches(
     pattern: &str,
     authority: &iroha_data_model::account::AccountId,
@@ -2211,13 +2296,7 @@ fn account_matches(
         return false;
     }
 
-    if authority.to_string() == pattern {
-        return true;
-    }
-    if iroha_data_model::account::AccountId::parse_encoded(pattern)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .is_ok_and(|parsed| parsed == *authority)
-    {
+    if account_matches_literal_or_encoded(pattern, authority) {
         return true;
     }
 
@@ -2225,15 +2304,37 @@ fn account_matches(
         return false;
     };
 
-    if let Some(scope) = pattern.strip_prefix("*@") {
-        return account_matches_alias_scope(scope, authority, state_view);
+    account_matches_with_world(
+        pattern,
+        authority,
+        &state_view.nexus().dataspace_catalog,
+        state_view.world(),
+    )
+}
+
+fn account_matches_with_world<W: WorldReadOnly>(
+    pattern: &str,
+    authority: &AccountId,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return false;
     }
 
-    AccountAlias::from_literal(pattern, &state_view.nexus().dataspace_catalog)
+    if account_matches_literal_or_encoded(pattern, authority) {
+        return true;
+    }
+
+    if let Some(scope) = pattern.strip_prefix("*@") {
+        return account_matches_alias_scope_with_world(scope, authority, dataspace_catalog, world);
+    }
+
+    AccountAlias::from_literal(pattern, dataspace_catalog)
         .ok()
         .is_some_and(|alias| {
-            state_view
-                .world()
+            world
                 .bound_account_aliases(authority)
                 .into_iter()
                 .any(|bound| bound == alias)
@@ -2245,20 +2346,31 @@ fn account_matches_alias_scope(
     account_id: &AccountId,
     state_view: &StateView<'_>,
 ) -> bool {
+    account_matches_alias_scope_with_world(
+        scope,
+        account_id,
+        &state_view.nexus().dataspace_catalog,
+        state_view.world(),
+    )
+}
+
+fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
+    scope: &str,
+    account_id: &AccountId,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> bool {
     let scope = scope.trim().to_ascii_lowercase();
     if scope.is_empty() {
         return false;
     }
 
-    if state_view
-        .world()
+    if world
         .account_scope_hierarchy(account_id)
         .ok()
         .is_some_and(|hierarchy| {
             hierarchy.into_iter().any(|(dataspace_id, domains)| {
-                state_view
-                    .nexus()
-                    .dataspace_catalog
+                dataspace_catalog
                     .by_id(dataspace_id)
                     .is_some_and(|entry| entry.alias.eq_ignore_ascii_case(scope.as_str()))
                     || domains
@@ -2270,13 +2382,12 @@ fn account_matches_alias_scope(
         return true;
     }
 
-    state_view
-        .world()
+    world
         .bound_account_aliases(account_id)
         .into_iter()
         .any(|alias| {
             alias
-                .to_literal(&state_view.nexus().dataspace_catalog)
+                .to_literal(dataspace_catalog)
                 .ok()
                 .and_then(|literal| {
                     literal
@@ -2904,8 +3015,9 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use iroha_executor_data_model::permission::{
-        account::{AccountAliasPermissionScope, CanManageAccountAlias},
+        account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
         nexus::CanPublishSpaceDirectoryManifest,
+        trigger::CanRegisterTrigger,
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec};
     use iroha_test_samples::gen_account_in;
@@ -7630,6 +7742,86 @@ mod tests {
     }
 
     #[test]
+    fn account_alias_dataspace_permission_grant_routes_by_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog,
+            lane_catalog,
+        );
+        let permission = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(dataspace_id),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission, holder_id,
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("dataspace alias permission should route without world state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
+    fn account_alias_domain_permission_grant_routes_by_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog,
+            lane_catalog,
+        );
+        let permission = Permission::from(CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(
+                DomainId::try_new("mibank", "bpng").expect("domain id"),
+            ),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission, holder_id,
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("domain alias permission should route without world state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
     fn account_scope_directory_scope_matches_destination_account_permission_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
         let (holder_id, _) = gen_account_in("wonderland");
@@ -7696,6 +7888,68 @@ mod tests {
         assert_eq!(
             router.route_with_view(&tx, &state_view),
             RoutingDecision::new(LaneId::new(1), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn world_validation_routes_account_permission_holder_by_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "bpng")]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: lane_id,
+                dataspace: Some(dataspace_id),
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@bpng".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let permission = Permission::from(CanRegisterTrigger {
+            authority: holder_id.clone(),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission,
+                holder_id.clone(),
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog.clone();
+        let state_view = state.view();
+        let expected = RoutingDecision::new(lane_id, dataspace_id);
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state_view)
+                .expect("state-view routing should use account scope"),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &state_view.nexus().dataspace_catalog,
+                &tx,
+                state_view.world(),
+            )
+            .expect("validation routing should use account scope"),
+            expected
         );
     }
 
