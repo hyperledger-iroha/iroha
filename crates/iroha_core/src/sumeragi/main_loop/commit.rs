@@ -7134,16 +7134,15 @@ impl Actor {
         let mut consensus_applied = 0_u64;
         for action in &effects.penalty_actions {
             match action {
-                iroha_data_model::consensus::NposPenaltyAction::VrfJail { .. } => {
+                iroha_data_model::consensus::NposPenaltyAction::VrfJail(_) => {
                     vrf_applied = vrf_applied.saturating_add(1);
                 }
-                iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash { .. } => {
+                iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash(_) => {
                     consensus_applied = consensus_applied.saturating_add(1);
                 }
-                iroha_data_model::consensus::NposPenaltyAction::MarkVrfPenaltiesApplied { .. }
-                | iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied {
-                    ..
-                } => {}
+                iroha_data_model::consensus::NposPenaltyAction::MarkVrfPenaltiesApplied(_)
+                | iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(_) =>
+                    {}
             }
         }
         super::status::inc_vrf_penalties_applied(vrf_applied);

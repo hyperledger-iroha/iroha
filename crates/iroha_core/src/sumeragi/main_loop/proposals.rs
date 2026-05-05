@@ -250,6 +250,7 @@ pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
         da_proof_policies: block.da_proof_policies().cloned(),
         da_pin_intents: block.da_pin_intents().cloned(),
         previous_roster_evidence: block.previous_roster_evidence().cloned(),
+        npos_consensus_effects: block.npos_consensus_effects().cloned(),
     }
     .encode()
 }

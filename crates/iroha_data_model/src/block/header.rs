@@ -663,7 +663,6 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
-                    npos_effects_hash,
                     sccp_commitment_root,
                     creation_time_ms,
                     view_change_index,

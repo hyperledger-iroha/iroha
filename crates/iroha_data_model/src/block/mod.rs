@@ -497,7 +497,7 @@ impl SignedBlock {
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
             previous_roster_evidence: None,
-                npos_consensus_effects: None,
+            npos_consensus_effects: None,
         };
 
         let result = BlockResult {
@@ -1479,7 +1479,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             previous_roster_evidence: None,
-                npos_consensus_effects: None,
+            npos_consensus_effects: None,
         };
         let key_pair =
             iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
