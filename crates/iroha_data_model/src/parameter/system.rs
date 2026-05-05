@@ -1312,7 +1312,7 @@ mod defaults {
             vec![Algorithm::BlsNormal]
         }
         pub fn key_allowed_hsm_providers() -> Vec<String> {
-            vec!["pkcs11".into(), "yubihsm".into(), "softkey".into()]
+            vec!["pkcs11".into(), "softkey".into(), "yubihsm".into()]
         }
 
         pub mod npos {

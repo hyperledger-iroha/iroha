@@ -170,7 +170,13 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     let poseidon_mode = map_poseidon_mode(cfg.poseidon_mode);
     #[cfg(feature = "fastpq-gpu")]
     if should_preflight_poseidon(mode, poseidon_mode) {
-        let _ = fastpq_prover::preflight_poseidon_gpu_backend();
+        let started_at = Instant::now();
+        let ok = fastpq_prover::preflight_poseidon_gpu_backend();
+        info!(
+            ok,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "fastpq lane: Poseidon GPU preflight completed"
+        );
     }
     match Prover::canonical_with_modes(FASTPQ_CANONICAL_PARAMETER_SET, mode, poseidon_mode) {
         Ok(prover) => Some(Arc::new(RealProofEngine { prover })),

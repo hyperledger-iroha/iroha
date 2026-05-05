@@ -4757,7 +4757,13 @@ impl Actor {
 
         let payload_bytes = super::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
-        let mut pending = PendingBlock::new(block.clone(), payload_hash, block_height, block_view);
+        let mut pending = PendingBlock::new_with_payload_bytes(
+            block.clone(),
+            payload_hash,
+            block_height,
+            block_view,
+            payload_bytes,
+        );
         if let Some(epoch) = observed_commit_qc_epoch.or(deferred_commit_qc_epoch) {
             pending.note_commit_qc_observed(epoch);
         }

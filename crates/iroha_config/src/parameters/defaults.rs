@@ -3058,7 +3058,7 @@ pub mod sumeragi {
     /// Allowed consensus key algorithms (validator signatures use BLS-Normal).
     pub const KEY_ALLOWED_ALGOS: &[Algorithm] = &[Algorithm::BlsNormal];
     /// Allowed HSM providers for consensus keys.
-    pub const KEY_ALLOWED_HSM_PROVIDERS: &[&str] = &["pkcs11", "yubihsm", "softkey"];
+    pub const KEY_ALLOWED_HSM_PROVIDERS: &[&str] = &["pkcs11", "softkey", "yubihsm"];
     /// Default list of allowed consensus key algorithms.
     pub fn key_allowed_algorithms() -> Vec<Algorithm> {
         KEY_ALLOWED_ALGOS.to_vec()

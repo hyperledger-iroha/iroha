@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-04
+Last updated: 2026-05-05
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -69,7 +69,14 @@ Completed history lives in `status.md`. This file should only track unfinished w
     passed after rebuild (`41` passed). The core signature slice, crypto
     Ed25519 tests, and strict clippy for core/crypto/integration are also green
     after the deterministic single-Ed25519 verifier cleanup and heartbeat
-    execution-context fixture repair.
+    execution-context fixture repair. The replay/checkpoint follow-up is green
+    as of 2026-05-05 for the focused replay units, Halo2 restart-marker
+    verifier, strict core/crypto/consensus integration clippy, and the
+    previously failing `consensus_and_da` restart/localnet cases:
+    `sumeragi_restart_retains_lock_convergence`,
+    `npos_pacemaker_resumes_after_downtime`,
+    `confidential_combined_peer_downtime_and_timeout_pressure_localnet`, and
+    `confidential_dual_restart_stress_mid_flow_localnet`.
   - Remaining validation: rerun `cargo test --workspace` from a clean start to
     completion in an uncontended multi-hour window.
 - Carry the RAM-LFE API/proof hardening through the remaining signing and clean

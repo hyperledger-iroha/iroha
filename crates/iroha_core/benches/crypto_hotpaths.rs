@@ -64,7 +64,7 @@ fn sample_transfer_transcripts(count: usize, precompute_digest: bool) -> Vec<Tra
 }
 
 fn bench_poseidon_hash_bytes(c: &mut Criterion) {
-    for &len in &[32usize, 128, 512, 4096] {
+    for &len in &[32usize, 33, 128, 129, 512, 4096] {
         let bytes = (0..len)
             .map(|idx| u8::try_from(idx & 0xff).expect("byte fits"))
             .collect::<Vec<_>>();

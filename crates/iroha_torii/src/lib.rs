@@ -29300,14 +29300,11 @@ async fn handler_post_transactions_batch(
                 accepted.push((accepted_tx, routing_decision));
             }
             let accepted_count = accepted.len();
-            for (accepted_tx, routing_decision) in accepted {
-                routing::push_accepted_transaction_for_ingress_with_routing(
-                    app.queue.clone(),
-                    app.state.clone(),
-                    accepted_tx,
-                    Some(routing_decision),
-                )?;
-            }
+            routing::push_accepted_transactions_for_ingress_with_routing(
+                app.queue.clone(),
+                app.state.clone(),
+                accepted,
+            )?;
             Ok::<usize, Error>(accepted_count)
         })
         .await

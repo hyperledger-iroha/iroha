@@ -421,6 +421,25 @@ pub struct GossipBatchEntry {
     pub payload: Arc<Vec<u8>>,
 }
 
+struct PreparedQueueAdmission {
+    checked: CheckedTransaction<'static>,
+    hash: SignedTxHash,
+    routing_decision: RoutingDecision,
+    encoded_len: usize,
+    gossip_payload: Option<Arc<Vec<u8>>>,
+    proposal_gas_cost: u64,
+    enqueued_at_ms: u64,
+    #[cfg(feature = "telemetry")]
+    pending_teu: u64,
+}
+
+#[derive(Clone, Copy)]
+struct QueueAdmissionNotification {
+    hash: SignedTxHash,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+}
+
 #[cfg(feature = "telemetry")]
 #[derive(Clone, Copy, Debug)]
 struct TxTeuInfo {
@@ -2019,6 +2038,41 @@ impl Queue {
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
+        let prepared = self.prepare_checked_for_enqueue(
+            checked,
+            routing_decision,
+            state_access,
+            gossip_payload,
+            #[cfg(feature = "telemetry")]
+            telemetry_handle,
+        )?;
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+
+        match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry) {
+            Ok(notifications) => {
+                self.publish_admission_notifications(&notifications);
+                Ok(routing_decision)
+            }
+            Err((notifications, failure)) => {
+                self.publish_admission_notifications(&notifications);
+                Err(failure)
+            }
+        }
+    }
+
+    /// Run admission checks that do not require mutating queue indexes.
+    #[allow(clippy::too_many_lines)]
+    fn prepare_checked_for_enqueue<C: QueueAdmissionStateAccess>(
+        &self,
+        checked: CheckedTransaction<'static>,
+        routing_decision: RoutingDecision,
+        state_access: &mut C,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+        #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
+    ) -> Result<PreparedQueueAdmission, Failure> {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -2070,10 +2124,6 @@ impl Queue {
             });
         }
         if let Some(status) = manifest_status {
-            // Private/admin-managed manifests still provide authoritative routing and
-            // privacy commitments even when the lane is not governed. Admission
-            // checks that depend on validator authority or governance metadata only
-            // apply when the lane explicitly declares a governance module.
             if status.governance.is_some()
                 && let Some(rules) = status.rules()
             {
@@ -2289,12 +2339,7 @@ impl Queue {
         if manifest_allowed {
             telemetry_handle.record_manifest_admission("allowed");
         }
-        #[cfg(feature = "telemetry")]
-        let pending_teu = Self::compute_teu_weight(checked.as_accepted());
-        #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
-        #[cfg(not(feature = "telemetry"))]
-        let backpressure_telemetry: Option<&StateTelemetry> = None;
+
         let provided_gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
         let canonical_gossip_payload = Some(checked.as_accepted().entrypoint_bytes());
         let gossip_payload = match (provided_gossip_payload, canonical_gossip_payload) {
@@ -2311,139 +2356,195 @@ impl Queue {
             .unwrap_or_else(|| Self::compute_tx_encoded_len(checked.as_accepted()));
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let hash = checked.as_ref().hash();
-        let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        #[cfg(feature = "telemetry")]
+        let pending_teu = Self::compute_teu_weight(checked.as_accepted());
+
+        Ok(PreparedQueueAdmission {
+            checked,
+            hash,
+            routing_decision,
+            encoded_len,
+            gossip_payload,
+            proposal_gas_cost,
+            enqueued_at_ms,
+            #[cfg(feature = "telemetry")]
+            pending_teu,
+        })
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn enqueue_prepared_admissions(
+        &self,
+        prepared: Vec<PreparedQueueAdmission>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<Vec<QueueAdmissionNotification>, (Vec<QueueAdmissionNotification>, Failure)> {
+        let mut notifications = Vec::with_capacity(prepared.len());
+        let mut failure = None;
         {
             let _guard = self.push_remove_lock.lock();
-            let txs_len = self.active_len();
-            let entry = match self.txs.entry(hash) {
-                Entry::Occupied(_) => {
-                    return Err(Failure {
-                        tx: checked.as_accepted().clone().into(),
-                        err: Error::IsInQueue,
-                    });
-                }
-                Entry::Vacant(entry) => entry,
-            };
+            for admission in prepared {
+                let PreparedQueueAdmission {
+                    checked,
+                    hash,
+                    routing_decision,
+                    encoded_len,
+                    gossip_payload,
+                    proposal_gas_cost,
+                    enqueued_at_ms,
+                    #[cfg(feature = "telemetry")]
+                    pending_teu,
+                } = admission;
+                let lane_id = routing_decision.lane_id;
+                let dataspace_id = routing_decision.dataspace_id;
+                let txs_len = self.active_len();
+                let entry = match self.txs.entry(hash) {
+                    Entry::Occupied(_) => {
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err: Error::IsInQueue,
+                        });
+                        break;
+                    }
+                    Entry::Vacant(entry) => entry,
+                };
 
-            if txs_len >= self.capacity.get() {
-                warn!(
-                    lane_id = %lane_id,
-                    dataspace_id = %dataspace_id,
-                    max = self.capacity,
-                    "Achieved maximum amount of transactions"
+                if txs_len >= self.capacity.get() {
+                    warn!(
+                        lane_id = %lane_id,
+                        dataspace_id = %dataspace_id,
+                        max = self.capacity,
+                        "Achieved maximum amount of transactions"
+                    );
+                    failure = Some(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::Full,
+                    });
+                    break;
+                }
+
+                if let Some(authority) = checked.as_ref().authority_opt() {
+                    if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                        failure = Some(Failure {
+                            tx: checked.as_accepted().clone().into(),
+                            err,
+                        });
+                        break;
+                    }
+                }
+
+                let tx_arc = Arc::new(checked);
+                entry.insert(Arc::clone(&tx_arc));
+                self.track_active_transaction();
+                self.routing_decisions.insert(hash, routing_decision);
+                routing_ledger::record(hash, routing_decision);
+                self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+                self.record_queued_age(hash, enqueued_at_ms);
+                drop(tx_arc);
+
+                let mut pushed = self.tx_hashes.push(hash).is_ok();
+                let mut restore_queued_age_after_compaction = false;
+                if !pushed {
+                    let compacted = self.compact_hash_queue_locked();
+                    if compacted > 0 {
+                        restore_queued_age_after_compaction = true;
+                        pushed = self.tx_hashes.push(hash).is_ok();
+                    }
+                }
+                if !pushed {
+                    warn!("Queue is full");
+                    let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+                    self.untrack_active_transaction();
+                    if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                    }
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
+                    if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    failure = Some(Failure {
+                        tx: Box::new(
+                            Arc::try_unwrap(err_tx)
+                                .unwrap_or_else(|_| {
+                                    panic!("no other Arc holders during push failure")
+                                })
+                                .into_accepted(),
+                        ),
+                        err: Error::Full,
+                    });
+                    break;
+                }
+                if restore_queued_age_after_compaction {
+                    self.record_queued_age(hash, enqueued_at_ms);
+                }
+                self.tx_encoded_len.insert(hash, encoded_len);
+                if let Some(payload) = gossip_payload {
+                    self.tx_gossip_payloads.insert(hash, payload);
+                }
+                self.tx_gas_cost.insert(hash, proposal_gas_cost);
+                self.track_expiry_hash(hash);
+                #[cfg(feature = "telemetry")]
+                self.record_teu_enqueue(
+                    hash,
+                    TxTeuInfo {
+                        lane_id,
+                        dataspace_id,
+                        teu: pending_teu,
+                    },
+                    telemetry
+                        .expect("telemetry handle is present when telemetry feature is enabled"),
                 );
-                self.publish_backpressure_state(txs_len, backpressure_telemetry);
-                return Err(Failure {
-                    tx: checked.as_accepted().clone().into(),
-                    err: Error::Full,
-                });
-            }
-
-            if let Some(authority) = checked.as_ref().authority_opt() {
-                if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
-                    return Err(Failure {
-                        tx: checked.as_accepted().clone().into(),
-                        err,
-                    });
-                }
-            }
-
-            // Insert before publishing the hash so consumers always find a
-            // matching `(hash, tx)` record in `txs`.
-            let tx_arc = Arc::new(checked);
-            entry.insert(Arc::clone(&tx_arc));
-            self.track_active_transaction();
-            self.routing_decisions.insert(hash, routing_decision);
-            routing_ledger::record(hash, routing_decision);
-            self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-            self.record_queued_age(hash, enqueue_at_ms);
-            // Drop the local holder before attempting to unwrap on push failure.
-            drop(tx_arc);
-            let mut pushed = self.tx_hashes.push(hash).is_ok();
-            let mut restore_queued_age_after_compaction = false;
-            if !pushed {
-                let compacted = self.compact_hash_queue_locked();
-                if compacted > 0 {
-                    restore_queued_age_after_compaction = true;
-                    pushed = self.tx_hashes.push(hash).is_ok();
-                }
-            }
-            if !pushed {
-                warn!("Queue is full");
-                let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
-                self.untrack_active_transaction();
-                if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                    routing_ledger::discard_if_matches(&hash, decision);
-                }
-                self.tx_enqueued_at_ms.remove(&hash);
-                self.remove_queued_age(&hash);
-                if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
-                    self.decrease_per_user_tx_count(authority);
-                }
-                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-                return Err(Failure {
-                    tx: Box::new(
-                        Arc::try_unwrap(err_tx)
-                            .unwrap_or_else(|_| panic!("no other Arc holders during push failure"))
-                            .into_accepted(),
-                    ),
-                    err: Error::Full,
-                });
-            }
-            if restore_queued_age_after_compaction {
-                self.record_queued_age(hash, enqueue_at_ms);
-            }
-            self.tx_encoded_len.insert(hash, encoded_len);
-            if let Some(payload) = gossip_payload {
-                self.tx_gossip_payloads.insert(hash, payload);
-            }
-            self.tx_gas_cost.insert(hash, proposal_gas_cost);
-            self.track_expiry_hash(hash);
-            #[cfg(feature = "telemetry")]
-            self.record_teu_enqueue(
-                hash,
-                TxTeuInfo {
+                notifications.push(QueueAdmissionNotification {
+                    hash,
                     lane_id,
                     dataspace_id,
-                    teu: pending_teu,
-                },
-                telemetry_handle,
-            );
-        }
-        iroha_logger::debug!(
-            tx = %hash,
-            lane_id = %lane_id,
-            dataspace_id = %dataspace_id,
-            queued = self.tx_hashes.len(),
-            "transaction enqueued"
-        );
-        self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-        if let Err(err_hash) = self.tx_gossip.push(hash) {
-            warn!(
-                lane_id = %lane_id,
-                dataspace_id = %dataspace_id,
-                tx = %err_hash,
-                "Gossiper is lagging behind, not able to queue tx for gossiping"
-            );
-        }
-        let _ = self.events_sender.send(
-            TransactionEvent {
-                hash,
-                block_height: None,
-                lane_id,
-                dataspace_id,
-                status: TransactionStatus::Queued,
+                });
             }
-            .into(),
-        );
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry);
+        match failure {
+            Some(failure) => Err((notifications, failure)),
+            None => Ok(notifications),
+        }
+    }
+
+    fn publish_admission_notifications(&self, notifications: &[QueueAdmissionNotification]) {
+        if notifications.is_empty() {
+            return;
+        }
+        for notification in notifications {
+            if let Err(err_hash) = self.tx_gossip.push(notification.hash) {
+                warn!(
+                    lane_id = %notification.lane_id,
+                    dataspace_id = %notification.dataspace_id,
+                    tx = %err_hash,
+                    "Gossiper is lagging behind, not able to queue tx for gossiping"
+                );
+            }
+            let _ = self.events_sender.send(
+                TransactionEvent {
+                    hash: notification.hash,
+                    block_height: None,
+                    lane_id: notification.lane_id,
+                    dataspace_id: notification.dataspace_id,
+                    status: TransactionStatus::Queued,
+                }
+                .into(),
+            );
+            iroha_logger::debug!(
+                tx = %notification.hash,
+                lane_id = %notification.lane_id,
+                dataspace_id = %notification.dataspace_id,
+                queued = self.tx_hashes.len(),
+                "transaction enqueued"
+            );
+        }
         trace!(
-            lane_id = %lane_id,
-            dataspace_id = %dataspace_id,
             len = self.tx_hashes.len(),
-            "Transaction queue length"
+            "Transaction queue length after batch admission"
         );
         self.wake_sumeragi();
-        Ok(routing_decision)
     }
 
     /// Pushes an accepted transaction into the queue using a cached default full-frame gossip payload.
@@ -2564,6 +2665,106 @@ impl Queue {
         routing_decision: RoutingDecision,
     ) -> Result<RoutingDecision, Failure> {
         self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_decision), None)
+    }
+
+    /// Push an input-ordered batch of accepted transactions using caller-provided routing
+    /// decisions.
+    ///
+    /// This preserves single-push semantics: transactions before the first failure remain queued,
+    /// the first failure is returned, and later transactions are not admitted. Queue indexes are
+    /// mutated while holding the push/remove lock once for the accepted prefix.
+    ///
+    /// # Errors
+    /// Returns the first [`Failure`] that would be observed by sequential single admission.
+    pub fn push_batch_with_lane_with_state_and_routing(
+        &self,
+        txs: Vec<(AcceptedTransaction<'static>, RoutingDecision)>,
+        state: &State,
+    ) -> Result<usize, Failure> {
+        if txs.is_empty() {
+            return Ok(0);
+        }
+
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state.metrics();
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+
+        let mut state_access = LazyAdmissionStateAccess::new(state);
+        let mut prepared = Vec::with_capacity(txs.len());
+        let mut precheck_failure = None;
+
+        for (tx, routing_decision) in txs {
+            let routing_decision = match self.resolve_queue_routing_decision(routing_decision) {
+                Ok(decision) => decision,
+                Err(err) => {
+                    precheck_failure = Some(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute {
+                            reason: err.to_string(),
+                        },
+                    });
+                    break;
+                }
+            };
+            let lane_id = routing_decision.lane_id;
+            let dataspace_id = routing_decision.dataspace_id;
+            trace!(
+                lane_id = %lane_id,
+                dataspace_id = %dataspace_id,
+                tx = %tx.hash(),
+                "Pushing to the queue in batch"
+            );
+
+            let hash = tx.hash();
+            if state.has_committed_transaction(hash) {
+                precheck_failure = Some(Failure {
+                    tx: tx.into(),
+                    err: Error::InBlockchain,
+                });
+                break;
+            }
+            let checked = CheckedTransaction::new_unchecked(tx);
+            if self.is_expired(checked.as_accepted()) {
+                precheck_failure = Some(Failure {
+                    tx: Box::new(checked.into_accepted()),
+                    err: Error::Expired,
+                });
+                break;
+            }
+            match self.prepare_checked_for_enqueue(
+                checked,
+                routing_decision,
+                &mut state_access,
+                None,
+                #[cfg(feature = "telemetry")]
+                telemetry_handle,
+            ) {
+                Ok(admission) => prepared.push(admission),
+                Err(failure) => {
+                    precheck_failure = Some(failure);
+                    break;
+                }
+            }
+        }
+
+        match self.enqueue_prepared_admissions(prepared, backpressure_telemetry) {
+            Ok(notifications) => {
+                let accepted = notifications.len();
+                self.publish_admission_notifications(&notifications);
+                if let Some(failure) = precheck_failure {
+                    Err(failure)
+                } else {
+                    Ok(accepted)
+                }
+            }
+            Err((notifications, failure)) => {
+                self.publish_admission_notifications(&notifications);
+                Err(failure)
+            }
+        }
     }
 
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
@@ -7686,6 +7887,158 @@ pub mod tests {
             Some(hash),
             "successful gossip admission should still enqueue the gossip side channel"
         );
+    }
+
+    #[test]
+    fn batch_push_with_precomputed_routing_enqueues_in_order_and_caches_payloads() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        let first_payload = first.entrypoint_bytes();
+        time_handle.advance(Duration::from_millis(1));
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.as_ref().hash();
+        let second_payload = second.entrypoint_bytes();
+
+        let accepted = queue
+            .push_batch_with_lane_with_state_and_routing(
+                vec![(first, routing), (second, routing)],
+                &state,
+            )
+            .expect("batch should be accepted");
+
+        assert_eq!(accepted, 2);
+        assert_eq!(queue.active_len(), 2);
+        assert_eq!(queue.queued_len(), 2);
+        assert_eq!(queue.current_backpressure().queued(), 2);
+
+        let batch = queue.gossip_batch_with_state(2, &state);
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
+        assert_eq!(batch[0].payload.as_slice(), first_payload.as_slice());
+        assert_eq!(batch[0].routing, routing);
+        assert_eq!(batch[1].tx.as_ref().hash(), second_hash);
+        assert_eq!(batch[1].payload.as_slice(), second_payload.as_slice());
+        assert_eq!(batch[1].routing, routing);
+    }
+
+    #[test]
+    fn batch_push_duplicate_matches_single_push_prefix_semantics() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let result = queue.push_batch_with_lane_with_state_and_routing(
+            vec![(tx.clone(), routing), (tx, routing)],
+            &state,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(Failure {
+                    err: Error::IsInQueue,
+                    ..
+                })
+            ),
+            "unexpected duplicate result: {result:?}"
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.current_backpressure().queued(), 1);
+        let batch = queue.gossip_batch_with_state(2, &state);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].tx.as_ref().hash(), hash);
+    }
+
+    #[test]
+    fn batch_push_full_queue_preserves_successful_prefix() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(1_usize);
+        let queue = Queue::test(cfg, &time_source);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        time_handle.advance(Duration::from_millis(1));
+        let second = accepted_tx_by_someone(&time_source);
+
+        let result = queue.push_batch_with_lane_with_state_and_routing(
+            vec![(first, routing), (second, routing)],
+            &state,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(Failure {
+                    err: Error::Full,
+                    ..
+                })
+            ),
+            "unexpected full-queue result: {result:?}"
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.current_backpressure().is_saturated());
+        let batch = queue.gossip_batch_with_state(2, &state);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
+    }
+
+    #[test]
+    fn batch_push_per_user_limit_preserves_successful_prefix() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut cfg = config_factory();
+        cfg.capacity_per_user = nonzero!(1_usize);
+        let queue = Queue::test(cfg, &time_source);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let (account_id, key_pair) = gen_account_in("wonderland");
+
+        let first = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
+        let first_hash = first.as_ref().hash();
+        time_handle.advance(Duration::from_millis(1));
+        let second = accepted_tx_by(account_id, &key_pair, &time_source);
+
+        let result = queue.push_batch_with_lane_with_state_and_routing(
+            vec![(first, routing), (second, routing)],
+            &state,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(Failure {
+                    err: Error::MaximumTransactionsPerUser,
+                    ..
+                })
+            ),
+            "unexpected per-user result: {result:?}"
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.current_backpressure().queued(), 1);
+        let batch = queue.gossip_batch_with_state(2, &state);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
     }
 
     fn config_factory() -> Config {

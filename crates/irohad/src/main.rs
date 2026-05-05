@@ -4964,6 +4964,17 @@ impl Iroha {
             runtime_deps
         };
         let queue_backpressure = queue.backpressure_handle();
+        // Start proof lanes before Torii begins accepting submissions so one-time GPU setup happens
+        // during node startup instead of the first hot-path transaction burst.
+        if let Some((_h, child)) = iroha_core::pipeline::zk_lane::start(&zk_cfg.halo2) {
+            supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
+        }
+        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
+            &zk_cfg.fastpq,
+            Some(queue_backpressure),
+        ) {
+            supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
+        }
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -5017,17 +5028,6 @@ impl Iroha {
             }
             .run(),
         ));
-        // Start ZK lane (non-forking trace verification) if enabled in config
-        if let Some((_h, child)) = iroha_core::pipeline::zk_lane::start(&zk_cfg.halo2) {
-            supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
-        }
-        // Start FASTPQ prover lane (background STARK generation) if the backend initialises.
-        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
-            &zk_cfg.fastpq,
-            Some(queue_backpressure),
-        ) {
-            supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
-        }
         // Start Network Time Service sampler with config parameters
         let (_nts_peers_tx, nts_peers_rx) =
             tokio::sync::watch::channel(std::collections::BTreeSet::new());

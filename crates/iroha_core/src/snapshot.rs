@@ -20,7 +20,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode as NoritoEncode;
-use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
+use norito::json::{self, FastJsonWrite, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "telemetry")]
@@ -1179,19 +1179,42 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
     Ok(())
 }
 
-/// Canonical bytes for the committed WSV surface used by replay parity tests.
+/// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    json::to_writer(&mut bytes, state).expect("state snapshot serialization must succeed");
-    bytes
+    let mut value = json::to_value(state).expect("state snapshot serialization must succeed");
+    normalize_canonical_state_snapshot_value(&mut value);
+    let mut json = String::new();
+    value.write_json(&mut json);
+    json.into_bytes()
 }
 
-/// Canonical hash for the committed WSV surface.
+fn normalize_canonical_state_snapshot_value(value: &mut json::Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+
+    // Commit topologies are consensus scheduling caches. Replay reconstructs
+    // them from Kura blocks and commit-roster journals rather than transaction
+    // execution, so they must not perturb committed ledger checkpoints.
+    root.remove("commit_topology");
+    root.remove("prev_commit_topology");
+
+    let Some(world) = root.get_mut("world").and_then(json::Value::as_object_mut) else {
+        return;
+    };
+
+    // Consensus evidence changes as peers exchange certificates and restart, and
+    // is reconstructed from Kura and sidecar journals rather than transactions.
+    world.remove("commit_qcs");
+    world.remove("vrf_epochs");
+}
+
+/// Canonical hash for the committed ledger WSV surface.
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash {
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes(state))
 }
 
-/// Canonical bytes for the committed WSV surface used by replay parity tests.
+/// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
 #[cfg(test)]
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
@@ -1406,6 +1429,80 @@ mod tests {
 
     fn state_factory() -> State {
         state_factory_with_kura(Kura::blank_kura_for_testing())
+    }
+
+    #[test]
+    async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
+        let state = state_factory();
+        let expected = canonical_state_snapshot_bytes_for_tests(&state);
+
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(keypair.public_key().clone());
+        let roster = vec![peer.clone()];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+        let commit_qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+            height: 2,
+            view: 1,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let vrf_epoch = iroha_data_model::consensus::VrfEpochRecord {
+            epoch: 0,
+            seed: [0x42; 32],
+            epoch_length: 10,
+            commit_deadline_offset: 2,
+            reveal_deadline_offset: 4,
+            roster_len: 1,
+            finalized: false,
+            updated_at_height: 2,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+
+        {
+            let mut world = state.world.block();
+            world
+                .commit_qcs_mut_for_testing()
+                .insert(block_hash, commit_qc);
+            world
+                .vrf_epochs_mut_for_testing()
+                .insert(vrf_epoch.epoch, vrf_epoch);
+            world.commit();
+        }
+        {
+            let mut commit_topology = state.commit_topology.block();
+            commit_topology.push(peer.clone());
+            commit_topology.commit();
+        }
+        {
+            let mut prev_commit_topology = state.prev_commit_topology.block();
+            prev_commit_topology.push(peer);
+            prev_commit_topology.commit();
+        }
+
+        assert_eq!(
+            canonical_state_snapshot_bytes_for_tests(&state),
+            expected,
+            "consensus evidence caches must not perturb canonical replay checkpoints"
+        );
     }
 
     #[test]

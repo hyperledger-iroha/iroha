@@ -8530,9 +8530,17 @@ pub mod isi {
                 ));
             }
             if !report.ok {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid transfer proof".into(),
-                ));
+                if state_transaction.trust_committed_execution_results {
+                    iroha_logger::warn!(
+                        backend = attachment.backend.as_str(),
+                        proof_len,
+                        "replay accepted committed ZK transfer result after local proof verifier rejection"
+                    );
+                } else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "invalid transfer proof".into(),
+                    ));
+                }
             }
             for &nullifier in self.inputs() {
                 st.nullifiers.insert(nullifier);

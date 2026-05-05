@@ -1,6 +1,31 @@
 # Status
 
-Last updated: 2026-05-04
+Last updated: 2026-05-05
+
+## 2026-05-05 UAID replay/checkpoint hardening
+
+- Kura replay now restores per-block commit-QC hints from the commit-roster
+  journal without pre-populating WSV commit-QC storage during journal restore.
+  Canonical replay checkpoints ignore consensus scheduling/evidence caches
+  (`commit_topology`, `prev_commit_topology`, `world.commit_qcs`, and
+  `world.vrf_epochs`) that are reconstructed from Kura and sidecar journals
+  rather than from transaction execution.
+- Checkpointed replay preserves committed Kura transaction results when local
+  execution drifts on already-committed history, then enforces the stored WSV
+  checkpoint. The committed-result fallback now seeds canonical transaction
+  context, replays successful committed transactions, runs time triggers, and
+  allows ZK transfer effects only in that replay-trust path so normal admission
+  still rejects invalid local proof verification.
+- Focused validation passed with the replay/checkpoint unit tests, the Halo2
+  restart-marker fixture verifier, and the previously failing
+  `consensus_and_da` restart/localnet cases:
+  `sumeragi_restart_retains_lock_convergence`,
+  `npos_pacemaker_resumes_after_downtime`,
+  `confidential_combined_peer_downtime_and_timeout_pressure_localnet`, and
+  `confidential_dual_restart_stress_mid_flow_localnet`. Formatting,
+  diff-whitespace, Cargo.lock, debug/source-guard checks, strict clippy for
+  `iroha_core --lib`, `iroha_crypto --lib --tests`, and
+  `integration_tests --test consensus_and_da` are green.
 
 ## 2026-05-04 UAID workspace-test corridor follow-up
 
@@ -6320,6 +6345,19 @@ Last updated: 2026-05-04
   A round-constant destructuring experiment and a shared mask-table experiment
   were rejected after filtered runs showed no stable gain and a regression in at
   least one hot filter.
+- `field_to_bytes` now converts `Fr::to_repr()` directly into `[u8; 32]`
+  instead of copying through `as_ref()`. Filtered Criterion kept the conversion
+  cleanup after `hash_bytes/128` improved to about `174.1 us`, while
+  `hash_bytes/32`, `hash_bytes/512`, `hash2_u64`, and packed
+  `hash_u64_words_bytes` filters stayed within noise or showed no detected
+  regression.
+- The direct `hash_bytes` path now packs short trailing byte words from the
+  input slice without a temporary zeroed `[u8; 8]`, and the hot-path benchmark
+  now covers 33- and 129-byte inputs. Same-session A/B kept the helper after
+  restoring the temporary-copy path regressed one `hash_bytes/129` run to about
+  `176.7 us`; the final helper rerun measured about `58.6 us` for 33 bytes and
+  `175.8 us` for 129 bytes, both within the noise threshold against the
+  immediately preceding baseline.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
   to stream Norito encodings into the Poseidon byte hasher and to pack GPU
   digest batches into a shared word buffer with preallocated slice/word

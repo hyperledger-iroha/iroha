@@ -3720,7 +3720,13 @@ impl Actor {
                 }
             }
             Entry::Vacant(vac) => {
-                let mut pending = PendingBlock::new(block, payload_hash, height, view);
+                let mut pending = PendingBlock::new_with_payload_bytes(
+                    block,
+                    payload_hash,
+                    height,
+                    view,
+                    payload_bytes.clone(),
+                );
                 if stale_payload_only {
                     pending.retire_same_height();
                 } else if let Some(epoch) = observed_commit_qc_epoch {

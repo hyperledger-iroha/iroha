@@ -213,8 +213,8 @@ pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
     let mut header = block.header();
     header.result_merkle_root = None;
     let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
-    let entry_merkle: MerkleTree<TransactionEntrypoint> = block
-        .external_entrypoints_cloned()
+    let entry_merkle: MerkleTree<TransactionEntrypoint> = external_entrypoints
+        .iter()
         .map(|entrypoint| entrypoint.hash())
         .collect();
     header.merkle_root = entry_merkle.root();

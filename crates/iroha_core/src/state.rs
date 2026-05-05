@@ -6701,6 +6701,8 @@ pub struct StateBlock<'state> {
     committed_fragments: usize,
     /// True while rebuilding state from already committed Kura blocks.
     pub(crate) replay_compatibility: bool,
+    /// True when applying committed Kura results after replay execution drift.
+    pub(crate) trust_committed_execution_results: bool,
 }
 
 impl<'state> StateBlock<'state> {
@@ -7059,6 +7061,8 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
     pub(crate) replay_compatibility: bool,
+    /// True when replay is applying committed Kura results after execution drift.
+    pub(crate) trust_committed_execution_results: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -17288,9 +17292,10 @@ impl State {
         }
         let restored = snapshots.len();
         for snapshot in &snapshots {
+            // Keep journal restore out of WSV storage: block replay materializes
+            // `world.commit_qcs` with the same MVCC layer shape as the original commit.
             status::record_commit_qc(snapshot.commit_qc.clone());
             status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
-            self.upsert_commit_qc_in_world(&snapshot.commit_qc);
         }
         debug!(restored, "restored commit rosters from journal");
     }
@@ -18897,6 +18902,7 @@ impl State {
             preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
+            trust_committed_execution_results: false,
         };
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
@@ -19377,6 +19383,7 @@ impl State {
             preverified_batch: None,
             committed_fragments: 0,
             replay_compatibility: false,
+            trust_committed_execution_results: false,
         }
     }
 
@@ -23155,6 +23162,7 @@ impl<'state> StateBlock<'state> {
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             replay_compatibility: self.replay_compatibility,
+            trust_committed_execution_results: self.trust_committed_execution_results,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
@@ -24430,6 +24438,7 @@ impl<'state> StateBlock<'state> {
             if block.error(idx).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
+                Self::seed_committed_transaction_context(&mut transaction, tx, idx);
                 transaction.apply_executable(tx.instructions(), tx.authority());
                 transaction
                     .execute_data_triggers_dfs(tx.authority())
@@ -24437,6 +24446,18 @@ impl<'state> StateBlock<'state> {
                 transaction.apply();
             }
         }
+    }
+
+    fn seed_committed_transaction_context(
+        transaction: &mut StateTransaction<'_, '_>,
+        tx: &SignedTransaction,
+        entrypoint_index: usize,
+    ) {
+        transaction.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        transaction.current_tx_hash =
+            Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash);
+        transaction.current_entrypoint_index =
+            Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));
     }
 
     /// Install a block-level preverified batch map (`proof_hash` -> ok).
@@ -24696,6 +24717,43 @@ mod state_commit_lock_order_tests {
 
         lane_handle.join().expect("lane lifecycle thread");
         commit_handle.join().expect("commit thread");
+    }
+}
+
+#[cfg(test)]
+mod committed_transaction_context_tests {
+    use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+    use iroha_logger::Level;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore};
+
+    #[test]
+    fn committed_transaction_context_uses_canonical_entrypoint_metadata() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut transaction = state_block.transaction();
+        let signed = TransactionBuilder::new((*DEFAULT_TEST_CHAIN_ID).clone(), ALICE_ID.clone())
+            .with_instructions([Log::new(Level::INFO, "context".into())])
+            .sign(ALICE_KEYPAIR.private_key());
+
+        StateBlock::seed_committed_transaction_context(&mut transaction, &signed, 7);
+
+        assert_eq!(
+            transaction.tx_call_hash,
+            Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()))
+        );
+        assert_eq!(
+            transaction.current_tx_hash,
+            Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(&signed).signed_hash)
+        );
+        assert_eq!(transaction.current_entrypoint_index, Some(7));
     }
 }
 
@@ -25404,8 +25462,24 @@ fn ensure_replayed_results_match_committed(
     let committed_result_root = committed.header().result_merkle_root();
     let replayed_result_root = replayed.header().result_merkle_root();
     if committed_result_root != replayed_result_root {
+        let committed_result_hashes = committed.result_hashes().collect::<Vec<_>>();
+        let replayed_result_hashes = replayed.result_hashes().collect::<Vec<_>>();
+        let first_hash_mismatch = committed_result_hashes
+            .iter()
+            .zip(&replayed_result_hashes)
+            .position(|(committed, replayed)| committed != replayed);
+        let committed_results = committed.results().cloned().collect::<Vec<_>>();
+        let replayed_results = replayed.results().cloned().collect::<Vec<_>>();
+        let first_payload_mismatch = committed_results
+            .iter()
+            .zip(&replayed_results)
+            .position(|(committed, replayed)| committed != replayed);
         return Err(eyre!(
-            "replayed block #{height} result root mismatch: committed={committed_result_root:?} replayed={replayed_result_root:?}"
+            "replayed block #{height} result root mismatch: committed={committed_result_root:?} replayed={replayed_result_root:?} first_hash_mismatch={first_hash_mismatch:?} committed_hash={:?} replayed_hash={:?} first_payload_mismatch={first_payload_mismatch:?} committed_payload={:?} replayed_payload={:?}",
+            first_hash_mismatch.and_then(|idx| committed_result_hashes.get(idx)),
+            first_hash_mismatch.and_then(|idx| replayed_result_hashes.get(idx)),
+            first_payload_mismatch.and_then(|idx| committed_results.get(idx)),
+            first_payload_mismatch.and_then(|idx| replayed_results.get(idx))
         ));
     }
 
@@ -25430,20 +25504,32 @@ fn ensure_replayed_results_match_committed(
     let committed_result_hashes = committed.result_hashes().collect::<Vec<_>>();
     let replayed_result_hashes = replayed.result_hashes().collect::<Vec<_>>();
     if committed_result_hashes != replayed_result_hashes {
+        let first_mismatch = committed_result_hashes
+            .iter()
+            .zip(&replayed_result_hashes)
+            .position(|(committed, replayed)| committed != replayed);
         return Err(eyre!(
-            "replayed block #{height} result hash sequence mismatch: committed_len={} replayed_len={}",
+            "replayed block #{height} result hash sequence mismatch: committed_len={} replayed_len={} first_mismatch={first_mismatch:?} committed={:?} replayed={:?}",
             committed_result_hashes.len(),
-            replayed_result_hashes.len()
+            replayed_result_hashes.len(),
+            first_mismatch.and_then(|idx| committed_result_hashes.get(idx)),
+            first_mismatch.and_then(|idx| replayed_result_hashes.get(idx))
         ));
     }
 
     let committed_results = committed.results().cloned().collect::<Vec<_>>();
     let replayed_results = replayed.results().cloned().collect::<Vec<_>>();
     if committed_results != replayed_results {
+        let first_mismatch = committed_results
+            .iter()
+            .zip(&replayed_results)
+            .position(|(committed, replayed)| committed != replayed);
         return Err(eyre!(
-            "replayed block #{height} transaction result payload mismatch: committed_len={} replayed_len={}",
+            "replayed block #{height} transaction result payload mismatch: committed_len={} replayed_len={} first_mismatch={first_mismatch:?} committed={:?} replayed={:?}",
             committed_results.len(),
-            replayed_results.len()
+            replayed_results.len(),
+            first_mismatch.and_then(|idx| committed_results.get(idx)),
+            first_mismatch.and_then(|idx| replayed_results.get(idx))
         ));
     }
 
@@ -25536,10 +25622,16 @@ pub fn replay_blocks_from_kura_range(
             .ok_or_else(|| eyre!("missing block at height {height} during replay"))?;
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
         let signed_block = (*block_arc).clone();
+        let height = signed_block.header().height().get();
+        let replay_commit_qc_hint = state
+            .commit_roster_snapshot_for_block(height, signed_block.hash())
+            .map(|snapshot| snapshot.commit_qc);
+        if let Some(commit_qc) = replay_commit_qc_hint.as_ref() {
+            state.upsert_commit_qc_in_world(commit_qc);
+        }
         let roster = replay_roster_for_block(state, kura, &signed_block, topology);
         let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = signed_block.header().view_change_index();
-        let height = signed_block.header().height().get();
         let wsv_checkpoint = kura
             .wsv_checkpoint(height)
             .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?;
@@ -25702,18 +25794,33 @@ pub fn replay_blocks_from_kura_range(
         };
         let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
         let mut committed_block = replayed_committed_block;
+        let mut replay_result_mismatch = None;
+        let mut apply_committed_transactions = false;
         if let Err(err) =
             ensure_replayed_results_match_committed(height, &signed_block, committed_block.as_ref())
         {
             let legacy_uncheckpointed_history = wsv_checkpoint.is_none() && !wsv_checkpoint_seen;
-            if legacy_uncheckpointed_history {
+            if legacy_uncheckpointed_history || wsv_checkpoint.is_some() {
+                replay_result_mismatch = Some(err.to_string());
                 iroha_logger::warn!(
                     height,
                     error = %err,
-                    "legacy uncheckpointed block replay produced different execution-result material; preserving committed Kura block hash and continuing"
+                    checkpointed = wsv_checkpoint.is_some(),
+                    "block replay produced different execution-result material; preserving committed Kura block results and continuing"
                 );
+                let replay_header = signed_block.header();
                 committed_block = ValidBlock::committed_from_replay_signed_block(signed_block);
+                drop(state_block);
+                state_block = state.block(replay_header);
+                state_block.replay_compatibility = true;
+                state_block.trust_committed_execution_results = true;
+                apply_committed_transactions = true;
             } else {
+                iroha_logger::error!(
+                    height,
+                    error = %err,
+                    "replayed block execution results differ from committed block"
+                );
                 return Err(err).wrap_err_with(|| {
                     format!(
                         "failed to verify replayed block #{height} against committed execution results"
@@ -25758,17 +25865,31 @@ pub fn replay_blocks_from_kura_range(
                 "transaction replays were rejected while rebuilding state"
             );
         }
-        let _ = state_block.apply_without_execution(&committed_block, roster);
+        if apply_committed_transactions {
+            state_block.apply_transactions(&committed_block);
+            state_block.execute_time_triggers(&committed_block.as_ref().header());
+        }
+        let _ = state_block.apply_without_execution_with_commit_qc(
+            &committed_block,
+            roster,
+            replay_commit_qc_hint.as_ref(),
+        );
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
         if let Some(checkpoint) = wsv_checkpoint {
             let actual = crate::snapshot::canonical_state_snapshot_hash(state);
             if actual != checkpoint.state_hash() {
-                return Err(eyre!(
+                let checkpoint_err = eyre!(
                     "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
                     checkpoint.state_hash()
-                ));
+                );
+                if let Some(mismatch) = replay_result_mismatch.as_deref() {
+                    return Err(checkpoint_err.wrap_err(format!(
+                        "committed execution results were preserved after replay mismatch: {mismatch}"
+                    )));
+                }
+                return Err(checkpoint_err);
             }
         }
     }
@@ -26731,7 +26852,7 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_rejects_committed_result_mismatch_before_applying_block() {
+    fn replay_preserves_committed_result_mismatch_until_wsv_checkpoint() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -26838,15 +26959,16 @@ mod replay_validation_tests {
             2,
             ConsensusMode::Permissioned,
         );
-        let err = result.expect_err("result mismatch must stop replay");
+        let err = result.expect_err("checkpoint mismatch must stop replay");
+        let err_text = format!("{err:?}");
         assert!(
-            format!("{err:?}").contains("result"),
-            "replay error should report the result mismatch: {err:?}"
+            err_text.contains("result") && err_text.contains("WSV checkpoint"),
+            "replay error should report the preserved result mismatch and WSV mismatch: {err:?}"
         );
         assert_eq!(
             replay_state.view().height(),
-            1,
-            "mismatched block must not be committed"
+            2,
+            "checkpointed replay preserves committed results before enforcing the WSV checkpoint"
         );
     }
 
@@ -39091,10 +39213,9 @@ mod tests {
         );
         let view = state.view();
         let stored = view.world().commit_qcs().get(&block_hash);
-        assert_eq!(
-            stored,
-            Some(&commit_cert),
-            "commit certificate should be restored into world storage"
+        assert!(
+            stored.is_none(),
+            "commit-roster journal restore must not pre-populate WSV commit QC storage"
         );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();

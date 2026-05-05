@@ -537,8 +537,13 @@ impl Actor {
 
         let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
         let payload_hash = iroha_crypto::Hash::new(&payload_bytes);
-        let mut pending =
-            PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
+        let mut pending = PendingBlock::new_with_payload_bytes(
+            block.as_ref().clone(),
+            payload_hash,
+            qc.height,
+            qc.view,
+            payload_bytes,
+        );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             pending.note_commit_qc_observed(qc.epoch);
         }

@@ -127,6 +127,32 @@ fn partial_u64_from_le_bytes(bytes: &[u8; 8], len: usize) -> u64 {
 }
 
 #[inline(always)]
+fn partial_u64_from_le_slice(bytes: &[u8]) -> u64 {
+    debug_assert!(bytes.len() < 8);
+    match bytes.len() {
+        0 => 0,
+        1 => u64::from(bytes[0]),
+        2 => u64::from(u16::from_le_bytes([bytes[0], bytes[1]])),
+        3 => u64::from(bytes[0]) | (u64::from(bytes[1]) << 8) | (u64::from(bytes[2]) << 16),
+        4 => u64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+        5 => {
+            u64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                | (u64::from(bytes[4]) << 32)
+        }
+        6 => {
+            u64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                | (u64::from(u16::from_le_bytes([bytes[4], bytes[5]])) << 32)
+        }
+        7 => {
+            u64::from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                | (u64::from(u16::from_le_bytes([bytes[4], bytes[5]])) << 32)
+                | (u64::from(bytes[6]) << 48)
+        }
+        _ => unreachable!("partial byte word must be shorter than a u64"),
+    }
+}
+
+#[inline(always)]
 fn apply_mds6(state: &mut [Fr; 6], mds: &[[Fr; 6]; 6]) {
     let s0 = state[0];
     let s1 = state[1];
@@ -512,9 +538,7 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
 
     if !bytes.is_empty() {
         debug_assert!(bytes.len() < 8);
-        let mut pending = [0u8; 8];
-        pending[..bytes.len()].copy_from_slice(bytes);
-        state[rate_len] += Fr::from(u64::from_le_bytes(pending));
+        state[rate_len] += Fr::from(partial_u64_from_le_slice(bytes));
         rate_len += 1;
         if rate_len == 2 {
             poseidon3_permute(&mut state);
@@ -598,6 +622,20 @@ mod tests {
         let bytes_second = hash6_bytes(inputs);
         assert_eq!(bytes_first, bytes_second, "Poseidon6 must be deterministic");
         assert_eq!(bytes_first[..8], hash6_u64(inputs).to_le_bytes());
+    }
+
+    #[test]
+    fn partial_u64_from_le_slice_matches_zero_padded_words() {
+        let input = [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76];
+        for len in 0..=input.len() {
+            let mut padded = [0u8; 8];
+            padded[..len].copy_from_slice(&input[..len]);
+            assert_eq!(
+                partial_u64_from_le_slice(&input[..len]),
+                u64::from_le_bytes(padded),
+                "len {len}"
+            );
+        }
     }
 
     #[test]
