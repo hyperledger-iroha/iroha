@@ -5311,6 +5311,7 @@ impl Actor {
                 },
             )
             .max_by_key(|lock| (lock.vote_count, lock.commit_vote_observed, lock.view))
+            .filter(|lock| lock.vote_count.saturating_add(1) >= required)
     }
 
     fn slot_has_locally_known_vote_backed_consensus_evidence(
@@ -5811,6 +5812,28 @@ impl Actor {
             || queue_depths.block_rx > 0
     }
 
+    fn frontier_proposal_ingress_defer_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+        unobserved_ingress_window: Duration,
+    ) -> bool {
+        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+            return false;
+        }
+
+        self.phase_tracker
+            .view_age(frontier_height, now)
+            .is_none_or(|age| age < unobserved_ingress_window)
+            || self.frontier_recovery_same_slot_inflight_progress_recent(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+    }
+
     fn frontier_consensus_ingress_queued(
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
@@ -5902,6 +5925,37 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let cached_same_slot_payload = self
+            .slot_tracker
+            .proposals_seen
+            .contains(&(frontier_height, frontier_view))
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_hint(frontier_height, frontier_view)
+                .is_some()
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(frontier_height, frontier_view)
+                .is_some();
+
+        cached_same_slot_payload
+            || self.frontier_recovery_same_slot_inflight_progress_recent(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+    }
+
+    fn frontier_recovery_same_slot_inflight_progress_recent(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -5922,25 +5976,8 @@ impl Actor {
                     && recent(slot_progress_at)
                     && (slot.exact_fetch_armed || (slot.block_created_seen && !slot.body_present))
             });
-        let cached_same_slot_payload = self
-            .slot_tracker
-            .proposals_seen
-            .contains(&(frontier_height, frontier_view))
-            || self
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_hint(frontier_height, frontier_view)
-                .is_some()
-            || self
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_proposal(frontier_height, frontier_view)
-                .is_some();
 
         frontier_slot_progress_recent
-            || cached_same_slot_payload
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.height == frontier_height
@@ -33556,6 +33593,31 @@ impl Actor {
             self.slot_has_vote_backed_consensus_evidence(height, current_view);
         let missing_qc_recovery_already_armed =
             self.frontier_recovery_already_armed_for_missing_qc(height, current_view);
+        if height == contiguous_frontier_height
+            && !proposal_seen
+            && self.frontier_proposal_ingress_defer_active(
+                height,
+                current_view,
+                now,
+                queue_depths,
+                timeout.saturating_add(self.frontier_ingress_drain_grace(da_enabled)),
+            )
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                ingress_grace_ms = self.frontier_ingress_drain_grace(da_enabled).as_millis(),
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "deferring empty-frontier idle rotation while proposal ingress drains"
+            );
+            return false;
+        }
         if height == contiguous_frontier_height
             && !proposal_seen
             && current_view == 0

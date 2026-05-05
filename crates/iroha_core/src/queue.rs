@@ -6603,6 +6603,51 @@ pub mod tests {
     }
 
     #[test]
+    fn push_with_lane_with_state_accepts_external_settled_sponsor_without_local_fee_asset() {
+        let mut fixture = nexus_fee_fixture(None, None);
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .fees
+            .external_settlement_enabled = true;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+        stx.apply();
+        block.commit().expect("commit sponsor permission grant");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("external-settled sponsor should not require local fee asset");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
     fn read_only_fee_sponsor_check_accepts_granted_permission() {
         let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

@@ -241,10 +241,11 @@ fn permissions_allow_manifest<'a>(
 ) -> bool {
     permissions.into_iter().any(|permission| {
         permission.name() == MANIFEST_PERMISSION
-            && permission
-                .payload()
-                .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
-                .is_ok_and(|token| token.dataspace == dataspace)
+            && (permission.payload().as_ref().trim() == "null"
+                || permission
+                    .payload()
+                    .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
+                    .is_ok_and(|token| token.dataspace == dataspace))
     })
 }
 
@@ -265,6 +266,7 @@ mod tests {
         permission::Permissions,
         prelude::Register,
     };
+    use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -288,6 +290,20 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
+    }
+
+    #[test]
+    fn permissions_allow_manifest_accepts_legacy_null_payload_as_wildcard() {
+        let mut permissions = Permissions::new();
+        permissions.insert(Permission::new(
+            MANIFEST_PERMISSION.parse().expect("permission ident"),
+            Json::from_string_unchecked("null".to_string()),
+        ));
+
+        assert!(permissions_allow_manifest(
+            &permissions,
+            DataSpaceId::new(10)
+        ));
     }
 
     fn sample_manifest(

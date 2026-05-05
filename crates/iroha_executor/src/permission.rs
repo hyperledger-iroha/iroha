@@ -337,9 +337,85 @@ mod nexus {
 
     use super::*;
 
+    const SPACE_DIRECTORY_MANIFEST_PERMISSION: &str = "CanPublishSpaceDirectoryManifest";
+
+    fn is_legacy_space_directory_manifest_wildcard(permission: &PermissionObject) -> bool {
+        permission.name() == SPACE_DIRECTORY_MANIFEST_PERMISSION
+            && permission.payload().as_ref().trim() == "null"
+    }
+
+    fn has_legacy_space_directory_manifest_wildcard(authority: &AccountId, host: &Iroha) -> bool {
+        let account_permissions: Vec<_> = host
+            .query(FindPermissionsByAccountId::new(authority.clone()))
+            .execute()
+            .expect("INTERNAL BUG: `FindPermissionsByAccountId` must never fail")
+            .map(|res| res.dbg_expect("Failed to get permission from cursor"))
+            .collect();
+        if account_permissions
+            .iter()
+            .any(is_legacy_space_directory_manifest_wildcard)
+        {
+            return true;
+        }
+
+        let role_ids: Vec<RoleId> = host
+            .query(FindRolesByAccountId::new(authority.clone()))
+            .execute()
+            .expect("INTERNAL BUG: `FindRolesByAccountId` must never fail")
+            .map(|role_id| role_id.dbg_expect("Failed to get role from cursor"))
+            .collect();
+        if role_ids.is_empty() {
+            return false;
+        }
+
+        let role_filter: BTreeSet<_> = role_ids.iter().cloned().collect();
+        roles_permissions(host)
+            .filter(|(role_id, _)| role_filter.contains(role_id))
+            .any(|(_, permission)| is_legacy_space_directory_manifest_wildcard(&permission))
+    }
+
+    fn ensure_publish_manifest_grant_authority(
+        permission: &CanPublishSpaceDirectoryManifest,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        #[cfg(test)]
+        {
+            let override_permissions = test_override::permissions();
+            if !override_permissions.is_empty() {
+                if has_permission_in_account(&override_permissions, permission)
+                    || override_permissions
+                        .iter()
+                        .any(is_legacy_space_directory_manifest_wildcard)
+                {
+                    return Ok(());
+                }
+                return Err(ValidationFail::NotPermitted(
+                    "Current authority doesn't have the CanPublishSpaceDirectoryManifest permission, therefore it can't grant or revoke it"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        if permission.is_owned_by(authority, host)
+            || has_legacy_space_directory_manifest_wildcard(authority, host)
+        {
+            Ok(())
+        } else {
+            Err(ValidationFail::NotPermitted(
+                "Current authority doesn't have the CanPublishSpaceDirectoryManifest permission, therefore it can't grant or revoke it"
+                    .to_owned(),
+            ))
+        }
+    }
+
     impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifest {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_publish_manifest_grant_authority(self, authority, host)
         }
 
         fn validate_revoke(
@@ -348,7 +424,11 @@ mod nexus {
             context: &Context,
             host: &Iroha,
         ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_publish_manifest_grant_authority(self, authority, host)
         }
     }
 
@@ -1550,10 +1630,15 @@ mod tests {
 
     use iroha_crypto::PublicKey;
     use iroha_executor_data_model::permission::{
-        asset::CanMintAssetWithDefinition, domain::CanRegisterDomain, peer::CanManagePeers,
+        asset::CanMintAssetWithDefinition, domain::CanRegisterDomain,
+        nexus::CanPublishSpaceDirectoryManifest, peer::CanManagePeers,
     };
 
-    use super::{OnlyGenesis, PassCondition, has_permission_in_roles, permission_owned_in_sources};
+    use super::{
+        OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
+        permission_owned_in_sources,
+    };
+    use crate::permission::test_override;
     use crate::{
         data_model::ValidationFail,
         prelude::Context,
@@ -1561,8 +1646,9 @@ mod tests {
             Iroha,
             data_model::{
                 block::BlockHeader,
+                nexus::DataSpaceId,
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, AssetDefinitionId, RoleId},
+                prelude::{AccountId, AssetDefinitionId, Json, RoleId},
             },
         },
     };
@@ -1706,6 +1792,60 @@ mod tests {
         let err = OnlyGenesis
             .validate(&authority, &Iroha, &context)
             .expect_err("expected rejection");
+        assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn can_publish_space_directory_manifest_grant_allows_existing_holder_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let token = CanPublishSpaceDirectoryManifest {
+            dataspace: DataSpaceId::new(10),
+        };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(token.clone())]);
+
+        let result = token.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn can_publish_space_directory_manifest_grant_allows_legacy_wildcard_holder_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let token = CanPublishSpaceDirectoryManifest {
+            dataspace: DataSpaceId::new(10),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::new(
+            "CanPublishSpaceDirectoryManifest"
+                .parse()
+                .expect("permission ident"),
+            Json::from_string_unchecked("null".to_string()),
+        )]);
+
+        let result = token.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn can_publish_space_directory_manifest_grant_rejects_missing_holder_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let token = CanPublishSpaceDirectoryManifest {
+            dataspace: DataSpaceId::new(10),
+        };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(CanManagePeers)]);
+
+        let err = token
+            .validate_grant(&authority, &context, &Iroha)
+            .expect_err("expected rejection");
+
+        test_override::replace_permissions(previous);
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
     }
 }

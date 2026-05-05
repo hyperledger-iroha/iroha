@@ -1897,6 +1897,7 @@ fn render_peer_config(
             Value::String("0.000001".to_owned()),
         );
         fees.insert("sponsorship_enabled".into(), Value::Boolean(false));
+        fees.insert("external_settlement_enabled".into(), Value::Boolean(false));
         fees.insert("sponsor_max_fee".into(), Value::String("0".to_owned()));
         fees.insert(
             "fee_sink_account_id".into(),
@@ -6823,6 +6824,11 @@ mod tests {
         assert_eq!(
             fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
             Some("0.000001")
+        );
+        assert_eq!(
+            fees.get("external_settlement_enabled")
+                .and_then(toml::Value::as_bool),
+            Some(false)
         );
         assert_eq!(
             fees.get("fee_sink_account_id")

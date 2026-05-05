@@ -533,7 +533,7 @@ use crate::{
         smallset::sort_dedup_u32_in_place,
     },
     prelude::*,
-    queue::{evaluate_policy_with_catalog_and_world, routing_ledger},
+    queue::{evaluate_policy_with_catalog_and_world, resolve_routing_decision, routing_ledger},
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
@@ -5268,6 +5268,19 @@ pub(crate) mod valid {
                 .zip(bundle.external.iter())
                 .enumerate()
             {
+                let committed_decision =
+                    crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id);
+                resolve_routing_decision(
+                    committed_decision,
+                    &nexus.lane_catalog,
+                    &nexus.dataspace_catalog,
+                )
+                .map_err(|err| {
+                    Self::execution_context_error(format!(
+                        "execution context route cannot be resolved at index {idx}: {err}"
+                    ))
+                })?;
+
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                     Cow::Owned(entrypoint),
                 );
@@ -5283,8 +5296,11 @@ pub(crate) mod valid {
                         "execution context routing cannot be resolved at index {idx}: {err}"
                     ))
                 })?;
-                if decision.lane_id != context.lane_id
-                    || decision.dataspace_id != context.dataspace_id
+                let derived_decision =
+                    crate::queue::RoutingDecision::new(decision.lane_id, decision.dataspace_id);
+                if derived_decision != committed_decision
+                    && !(derived_decision == crate::queue::RoutingDecision::default()
+                        && committed_decision != crate::queue::RoutingDecision::default())
                 {
                     return Err(Self::execution_context_error(format!(
                         "execution context routing mismatch at index {idx}: expected lane {} dataspace {}, got lane {} dataspace {}",
@@ -9923,7 +9939,9 @@ pub(crate) mod valid {
             },
             isi::{Log, error::Mismatch},
             metadata::Metadata,
-            nexus::LaneId,
+            nexus::{
+                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            },
             parameter::Parameters,
             prelude::{Account, Domain, PeerId},
             soracloud::{
@@ -11415,8 +11433,100 @@ pub(crate) mod valid {
             assert!(matches!(
                 err,
                 BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("routing mismatch")
+                    if message.contains("route cannot be resolved")
             ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_accepts_committed_context_when_policy_derives_default() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let (authority, signer) = gen_account_in("context-check");
+            let domain_id = DomainId::try_new("context-check", "universal").expect("domain id");
+            let domain = Domain::new(domain_id).build(&authority);
+            let account = Account::new(authority.clone()).build(&authority);
+            let mut world = World::with([domain], [account], []);
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let bpng_lane = LaneId::new(3);
+            let bpng_dataspace = DataSpaceId::new(10);
+            {
+                let mut nexus = state.nexus.write();
+                nexus.lane_catalog = LaneCatalog::new(
+                    nonzero!(4_u32),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: bpng_lane,
+                            dataspace_id: bpng_dataspace,
+                            alias: "bpng".to_owned(),
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("lane catalog");
+                nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                    DataSpaceMetadata::default(),
+                    DataSpaceMetadata {
+                        id: bpng_dataspace,
+                        alias: "bpng".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog");
+            }
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            time_handle.advance(Duration::from_millis(1));
+
+            let execution_context =
+                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                    tx.hash_as_entrypoint(),
+                    bpng_lane,
+                    bpng_dataspace,
+                )]);
+            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_execution_context(Some(execution_context))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let view = state.query_view();
+            ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect("committed execution context should be accepted as durable routing");
         }
 
         #[test]

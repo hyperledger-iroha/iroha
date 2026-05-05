@@ -1490,6 +1490,7 @@ fn minimal_config_snapshot() {
                         mantissa: 0,
                         scale: 0,
                     },
+                    external_settlement_enabled: false,
                     burn_from_unix_timestamp_ms: 18446744073709551615,
                     settlement_mode: NexusFeeSettlementMode::Direct,
                     successful_claim_fee_exempt_authorities: [],

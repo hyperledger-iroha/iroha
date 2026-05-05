@@ -932,6 +932,8 @@ pub(crate) fn check_external_nexus_fee_admission(
     let metadata = transaction.metadata();
     let fee_sponsor = parse_fee_sponsor(world, world.dataspace_catalog(), metadata)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
+    let externally_settled_sponsored_fee =
+        fee_sponsor.is_some() && nexus.fees.external_settlement_enabled;
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission(transaction)?;
     let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
@@ -963,6 +965,7 @@ pub(crate) fn check_external_nexus_fee_admission(
 
     if nexus.fees.settlement_mode
         == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+        || externally_settled_sponsored_fee
     {
         return Ok(());
     }
@@ -1480,6 +1483,16 @@ impl Executor {
                     },
                 },
             );
+            state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                payer_kind,
+                payer_id,
+                amount: fee,
+                asset_id: asset_label,
+            });
+            return Ok(());
+        }
+
+        if matches!(payer_kind, NexusFeePayer::Sponsor) && cfg.external_settlement_enabled {
             state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
                 payer_kind,
                 payer_id,
@@ -6617,6 +6630,93 @@ mod tests {
         assert_eq!(
             snap.last_payer,
             Some(crate::sumeragi::status::NexusFeePayer::Sponsor)
+        );
+    }
+
+    #[test]
+    fn nexus_fee_external_settled_sponsor_does_not_require_local_fee_asset() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let asset_definition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [asset_definition],
+            [],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.external_settlement_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: sponsor_id.clone(),
+            },
+            authority_id.clone(),
+        )
+        .execute(&sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("external-settled sponsor should not require local fee asset");
+
+        assert!(
+            stx.world
+                .assets()
+                .get(&AssetId::of(asset_def_id, sponsor_id))
+                .is_none(),
+            "external settlement must not create or debit a local sponsor asset"
         );
     }
 
