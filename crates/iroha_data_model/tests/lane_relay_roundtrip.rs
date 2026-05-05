@@ -76,6 +76,7 @@ fn sample_settlement() -> LaneBlockCommitment {
         total_xor_variance_micro: receipt.xor_variance_micro,
         swap_metadata: None,
         receipts: vec![receipt],
+        nexus_fee_receipts: Vec::new(),
     }
 }
 

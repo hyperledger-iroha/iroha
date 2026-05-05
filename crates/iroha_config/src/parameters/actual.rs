@@ -2532,10 +2532,38 @@ pub struct NexusFees {
     pub sponsorship_enabled: bool,
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
     pub sponsor_max_fee: Numeric,
+    /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
+    pub sponsor_verified_balance_safety_floor: Numeric,
+    /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
+    pub canonical_sponsor_account_id: Option<String>,
+    /// First block height whose lane commitments include Nexus fee receipts.
+    pub fee_receipts_activation_height: u64,
+    /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
+    pub external_settlement_enabled: bool,
     /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
     pub burn_from_unix_timestamp_ms: u64,
+    /// How fees are settled after they are computed.
+    pub settlement_mode: NexusFeeSettlementMode,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     pub successful_claim_fee_exempt_authorities: Vec<String>,
+}
+
+/// Settlement mode for Nexus fee debits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NexusFeeSettlementMode {
+    /// Fees are debited in the same chain transaction execution path.
+    Direct,
+    /// Fees are committed into lane receipts and burned during Nexus merge settlement.
+    LaneRelayBurn,
+}
+
+impl NexusFees {
+    /// Whether the asynchronous lane-relay-burn receipt path is active for `block_height`.
+    #[must_use]
+    pub fn lane_relay_burn_receipts_active_at(&self, block_height: u64) -> bool {
+        self.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
+            && block_height >= self.fee_receipts_activation_height
+    }
 }
 
 impl Default for NexusFees {
@@ -2549,8 +2577,53 @@ impl Default for NexusFees {
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
             sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
+            sponsor_verified_balance_safety_floor:
+                defaults::nexus::fees::sponsor_verified_balance_safety_floor(),
+            canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
+                .map(str::to_owned),
+            fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
+            external_settlement_enabled: defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED,
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
+            settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),
+        }
+    }
+}
+
+/// Asynchronous worker that proves DPN lane relays and sponsor fee budgets.
+#[derive(Debug, Clone)]
+pub struct NexusRelayWorker {
+    /// Whether the protocol worker is active.
+    pub enabled: bool,
+    /// Optional account id that must match the node signing key's account id.
+    pub authority_account_id: Option<String>,
+    /// Maximum relay envelopes retained for retry.
+    pub max_pending_relays: NonZeroUsize,
+    /// Delay between proof/submission retry passes.
+    pub retry_backoff: Duration,
+    /// Maximum proof/submission attempts before local worker retry stops.
+    pub max_retry_attempts: NonZeroU32,
+    /// Block interval between sponsor budget proof refreshes.
+    pub budget_refresh_interval_blocks: NonZeroU64,
+}
+
+impl Default for NexusRelayWorker {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::nexus::relay_worker::ENABLED,
+            authority_account_id: defaults::nexus::relay_worker::AUTHORITY_ACCOUNT_ID
+                .map(str::to_owned),
+            max_pending_relays: NonZeroUsize::new(
+                defaults::nexus::relay_worker::MAX_PENDING_RELAYS,
+            )
+            .expect("default Nexus relay worker max_pending_relays is non-zero"),
+            retry_backoff: Duration::from_millis(defaults::nexus::relay_worker::RETRY_BACKOFF_MS),
+            max_retry_attempts: NonZeroU32::new(defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS)
+                .expect("default Nexus relay worker max_retry_attempts is non-zero"),
+            budget_refresh_interval_blocks: NonZeroU64::new(
+                defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS,
+            )
+            .expect("default Nexus relay worker budget refresh interval is non-zero"),
         }
     }
 }
@@ -2915,6 +2988,8 @@ pub struct Nexus {
     pub staking: NexusStaking,
     /// Universal fee schedule for Nexus transactions.
     pub fees: NexusFees,
+    /// Asynchronous lane-relay proof and sponsor-budget worker.
+    pub relay_worker: NexusRelayWorker,
     /// Shared Hugging Face lease policy.
     pub hf_shared_leases: NexusHfSharedLeases,
     /// Uploaded private-model quota policy.
@@ -2957,6 +3032,7 @@ impl Default for Nexus {
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
+            relay_worker: NexusRelayWorker::default(),
             hf_shared_leases: NexusHfSharedLeases::default(),
             uploaded_models: NexusUploadedModels::default(),
             endorsement: NexusEndorsement::default(),

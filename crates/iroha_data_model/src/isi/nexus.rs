@@ -1,9 +1,11 @@
 use super::*;
 use crate::{
+    account::AccountId,
     metadata::Metadata,
     nexus::{LaneId, LaneRelayEnvelope, ProofBlob},
     peer::PeerId,
 };
+use iroha_primitives::numeric::Numeric;
 
 isi! {
     /// Set or clear emergency validator peers used for lane relay quorum recovery.
@@ -42,6 +44,27 @@ iroha_data_model_derive::model_single! {
     }
 }
 
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Persist a verified Nexus public XOR fee-budget cache for asynchronous DPN fee admission.
+    pub struct RegisterVerifiedNexusFeeBudget {
+        /// Sponsor or payer account whose Nexus public XOR balance was verified.
+        pub sponsor_account_id: AccountId,
+        /// Fee asset selector used for the verified balance, fixed operationally to public XOR.
+        pub fee_asset_id: String,
+        /// Verified public Nexus balance for the sponsor and fee asset.
+        pub verified_balance: Numeric,
+        /// Manifest root committed by the balance proof.
+        pub manifest_root: [u8; 32],
+        /// FASTPQ/AXT proof blob used to verify the public balance claim.
+        pub proof_blob: ProofBlob,
+    }
+}
+
 impl PartialOrd for RegisterVerifiedLaneRelay {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -54,13 +77,27 @@ impl Ord for RegisterVerifiedLaneRelay {
     }
 }
 
+impl PartialOrd for RegisterVerifiedNexusFeeBudget {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RegisterVerifiedNexusFeeBudget {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
 impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
 impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}
+impl crate::seal::Instruction for RegisterVerifiedNexusFeeBudget {}
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
 
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::Encode;
 
     use super::*;
@@ -81,6 +118,7 @@ mod tests {
             total_xor_variance_micro: 1,
             swap_metadata: None,
             receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
         }
     }
 
@@ -121,6 +159,35 @@ mod tests {
                 payload: vec![0x02],
                 expiry_slot: None,
             },
+        };
+
+        assert_eq!(
+            left.partial_cmp(&right),
+            Some(left.encode().cmp(&right.encode()))
+        );
+        assert_eq!(left.cmp(&right), left.encode().cmp(&right.encode()));
+    }
+
+    #[test]
+    fn register_verified_nexus_fee_budget_order_uses_canonical_encoding() {
+        let sponsor_keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+        let sponsor_account_id = AccountId::new(sponsor_keypair.public_key().clone());
+        let left = RegisterVerifiedNexusFeeBudget {
+            sponsor_account_id,
+            fee_asset_id: "xor#universal".to_owned(),
+            verified_balance: Numeric::from(10_u32),
+            manifest_root: [0x11; 32],
+            proof_blob: ProofBlob {
+                payload: vec![0x01],
+                expiry_slot: None,
+            },
+        };
+        let right = RegisterVerifiedNexusFeeBudget {
+            proof_blob: ProofBlob {
+                payload: vec![0x02],
+                expiry_slot: None,
+            },
+            ..left.clone()
         };
 
         assert_eq!(

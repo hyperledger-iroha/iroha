@@ -7,7 +7,10 @@ use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
-        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
+        nexus::{
+            RegisterVerifiedLaneRelay, RegisterVerifiedNexusFeeBudget,
+            SetLaneRelayEmergencyValidators,
+        },
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
             AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost, AdvertiseSoracloudModelHost,
@@ -162,6 +165,11 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
         visitor.visit_set_lane_relay_emergency_validators(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RegisterVerifiedLaneRelay>() {
         visitor.visit_register_verified_lane_relay(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RegisterVerifiedNexusFeeBudget>()
+    {
+        visitor.visit_register_verified_nexus_fee_budget(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RegisterIdentifierPolicy>() {
         visitor.visit_register_identifier_policy(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivateIdentifierPolicy>() {
@@ -535,6 +543,7 @@ macro_rules! instruction_visitors {
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
             visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
             visit_register_verified_lane_relay(&RegisterVerifiedLaneRelay),
+            visit_register_verified_nexus_fee_budget(&$crate::isi::nexus::RegisterVerifiedNexusFeeBudget),
             visit_register_identifier_policy(&RegisterIdentifierPolicy),
             visit_activate_identifier_policy(&ActivateIdentifierPolicy),
             visit_claim_identifier(&ClaimIdentifier),

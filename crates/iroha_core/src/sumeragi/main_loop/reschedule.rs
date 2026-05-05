@@ -2167,6 +2167,65 @@ impl Actor {
         (limit, cooldown, pressure_score)
     }
 
+    fn broadcast_vote_backed_block_sync_update(
+        &mut self,
+        block: &SignedBlock,
+        targets: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        if targets.is_empty() {
+            return false;
+        }
+
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let msg = self.build_fetch_pending_block_payload(block);
+        let BlockMessage::BlockSyncUpdate(_) = msg else {
+            return false;
+        };
+
+        let encoded_len = super::consensus_block_wire_len(self.common_config.peer.id(), &msg);
+        if encoded_len > self.consensus_payload_frame_cap {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                encoded_len,
+                cap = self.consensus_payload_frame_cap,
+                trigger,
+                "skipping vote-backed BlockSyncUpdate rebroadcast: frame cap exceeded"
+            );
+            return false;
+        }
+
+        let msg = Arc::new(msg);
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        let local_peer = self.common_config.peer.id().clone();
+        let mut sent = false;
+        for peer in targets {
+            if peer == &local_peer {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+            });
+            sent = true;
+        }
+        if sent {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                targets = targets.len(),
+                trigger,
+                "rebroadcasting vote-backed BlockSyncUpdate for quorum recovery"
+            );
+        }
+        sent
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn rebroadcast_pending_block_updates(
         &mut self,
@@ -2365,6 +2424,22 @@ impl Actor {
         }
         let mut block = false;
         if !drop_pending && !retransmit_targets.is_empty() && observed_vote_backing {
+            let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
+                && pending_extends_tip(
+                    height,
+                    pending.block.header().prev_block_hash(),
+                    self.state.committed_height(),
+                    self.state.latest_block_hash_fast(),
+                );
+            let near_commit_quorum = current_vote_count < min_votes_for_commit
+                && current_vote_count.saturating_add(1) >= min_votes_for_commit;
+            if contiguous_frontier && near_commit_quorum {
+                block_sync |= self.broadcast_vote_backed_block_sync_update(
+                    &pending.block,
+                    &retransmit_targets,
+                    "quorum_reschedule",
+                );
+            }
             let created = self.frontier_block_created_for_wire(&pending.block);
             self.broadcast_block_created(created, &retransmit_targets);
             block = true;

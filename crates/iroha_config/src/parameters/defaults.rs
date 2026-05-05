@@ -2305,6 +2305,8 @@ pub mod nexus {
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
         /// Whether fee sponsorship is allowed.
         pub const SPONSORSHIP_ENABLED: bool = false;
+        /// Whether sponsored fee settlement is performed outside this chain.
+        pub const EXTERNAL_SETTLEMENT_ENABLED: bool = false;
         /// Base fee charged per transaction.
         pub fn base_fee() -> Numeric {
             Numeric::from(0_u64)
@@ -2325,16 +2327,42 @@ pub mod nexus {
         pub fn sponsor_max_fee() -> Numeric {
             Numeric::from(0_u64)
         }
+        /// Minimum verified sponsor balance left unused by asynchronous lane-relay fee admission.
+        pub fn sponsor_verified_balance_safety_floor() -> Numeric {
+            Numeric::from(0_u64)
+        }
+        /// Default canonical sponsor for asynchronous lane-relay fee burns.
+        pub const CANONICAL_SPONSOR_ACCOUNT_ID: Option<&str> = None;
+        /// First block height whose lane commitments include Nexus fee receipts.
+        pub const FEE_RECEIPTS_ACTIVATION_HEIGHT: u64 = u64::MAX;
         /// Unix timestamp in milliseconds from which Nexus fees are burned.
         ///
         /// The default keeps legacy transfer/self-fee behavior until an
         /// operator explicitly activates burning at a block timestamp.
         pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = u64::MAX;
+        /// Default Nexus fee settlement mode.
+        pub const SETTLEMENT_MODE: &str = "direct";
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
             super::super::canonical_asset_definition_literal("universal.universal", "xor")
         }
+    }
+
+    /// Asynchronous Nexus lane-relay worker defaults.
+    pub mod relay_worker {
+        /// Protocol relay worker is disabled until rollout config activates it.
+        pub const ENABLED: bool = false;
+        /// Optional relayer account override; by default the node account signs worker transactions.
+        pub const AUTHORITY_ACCOUNT_ID: Option<&str> = None;
+        /// Maximum relays retained in the in-memory retry set.
+        pub const MAX_PENDING_RELAYS: usize = 1024;
+        /// Worker retry cadence in milliseconds.
+        pub const RETRY_BACKOFF_MS: u64 = 5_000;
+        /// Maximum proof/submission attempts before marking local worker state rejected.
+        pub const MAX_RETRY_ATTEMPTS: u32 = 10;
+        /// Sponsor budget proof refresh interval measured in committed blocks.
+        pub const BUDGET_REFRESH_INTERVAL_BLOCKS: u64 = 10;
     }
 
     /// Domain endorsement defaults.

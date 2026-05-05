@@ -36,3 +36,35 @@ operators can reconcile gas debits against the Nexus fee model.
 Consumers can watch `lane_settlement_commitments` alongside the existing lane
 and dataspace commitment snapshots to verify that fee buffers, haircut tiers,
 and swap execution match the configured Nexus fee model.
+
+## Lane Relay XOR Burn Settlement
+
+The default `nexus.fees.settlement_mode = "direct"` path keeps the existing
+fee behavior. For DPN lanes that finalize locally and settle fees on Nexus,
+operators can enable `nexus.fees.settlement_mode = "lane_relay_burn"`.
+
+In lane relay burn mode, DPN block production remains local. Transaction
+execution validates the configured sponsor metadata, computes the Nexus fee
+deterministically, and records a versioned Nexus fee receipt in the block
+settlement accumulator. The receipt is part of the lane block commitment and
+includes the source transaction id, dataspace id, lane id, block height, payer
+or sponsor Nexus account id, `xor#universal` fee asset id, computed amount, and
+the fee schedule inputs required to recompute the amount. DPN does not burn,
+transfer, escrow, or otherwise mutate public XOR in this mode.
+
+`record_lane_relay()` remains non-mutating. Nexus applies XOR burns only when a
+merge entry commits a relayed lane block settlement. Settlement validates the
+referenced relay, settlement hash, receipt coordinates, fee asset, deterministic
+fee amount, duplicate receipt source ids, and sponsor balance before mutating
+state. The merge settlement is all-or-nothing for Nexus fee burns: invalid
+proof material, invalid receipts, duplicate receipt ids, or insufficient public
+XOR reject the settlement without partial fee mutation.
+
+Receipt idempotency is keyed by the settled dataspace, lane, block height,
+settlement hash, and receipt source ids so duplicate relay submission, merge
+replay, and restart recovery do not double-burn public XOR. Operators should
+keep the temporary `taira-DPN-nexus-fee-reconciler.timer` active until a
+post-activation DPN block is observed settling through a protocol Nexus burn.
+After that verification, disable the timer, preserve the reconciler settlement
+records for audit, and mark the reconciler retired rather than part of normal
+fee settlement.

@@ -10114,6 +10114,7 @@ mod tests {
                 xor_variance_micro: 5,
                 timestamp_ms: 1_700_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         }
     }
 

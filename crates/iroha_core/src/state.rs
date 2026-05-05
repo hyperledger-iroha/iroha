@@ -15,7 +15,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, eyre};
-use iroha_config::parameters::actual::{ConsensusMode, LaneConfig};
+use iroha_config::parameters::actual::{ConsensusMode, LaneConfig, NexusFeeSettlementMode};
 #[cfg(feature = "sm-ffi-openssl")]
 use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
@@ -33,11 +33,11 @@ use iroha_data_model::{
     },
     asset::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetEntry, AssetValue,
-        Mintable,
+        Mintable, id::AssetId,
     },
     block::{
         BlockHeader, SignedBlock,
-        consensus::EvidenceRecord,
+        consensus::{EvidenceRecord, NexusFeeReceipt},
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
     confidential::ConfidentialFeatureDigest,
@@ -73,13 +73,14 @@ use iroha_data_model::{
     },
     merge::{MergeLaneSnapshot, MergeLedgerEntry},
     metadata::Metadata,
+    name::Name,
     nexus::{
         AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
         AxtPolicySnapshot, AxtReplayRecord, DataSpaceId, DomainCommittee, DomainEndorsement,
         DomainEndorsementPolicy, DomainEndorsementRecord, LaneId, LaneRelayEmergencyValidatorSet,
         LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord,
         PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId,
+        UniversalAccountId, VerifiedLaneRelayRecord,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -1350,6 +1351,12 @@ impl MergeLedgerStore {
     }
 }
 
+struct NexusFeeSettlementPlan {
+    receipts: Vec<NexusFeeReceipt>,
+    settlement_markers: Vec<Name>,
+    receipt_markers: Vec<([u8; 32], Name)>,
+}
+
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
@@ -1419,6 +1426,59 @@ pub enum MergeLedgerCommitError {
     /// Merge QC requires a non-empty merge committee roster.
     #[error("merge ledger qc requires a non-empty commit topology roster")]
     MergeQCEmptyRoster,
+    /// Merge entry epoch must advance monotonically.
+    #[error("merge ledger epoch must advance: latest={latest}, attempted={attempted}")]
+    NonMonotonicEpoch {
+        /// Latest committed merge epoch.
+        latest: u64,
+        /// Epoch carried by the attempted entry.
+        attempted: u64,
+    },
+    /// Merge settlement referenced a lane relay that is not available locally.
+    #[error(
+        "merge settlement missing relay lane={lane_id} dataspace={dataspace_id} height={block_height}"
+    )]
+    MissingSettlementRelay {
+        /// Lane identifier.
+        lane_id: LaneId,
+        /// Dataspace identifier.
+        dataspace_id: DataSpaceId,
+        /// Lane block height.
+        block_height: u64,
+    },
+    /// Merge settlement referenced a relay with a different settlement hash.
+    #[error(
+        "merge settlement hash mismatch for lane={lane_id} dataspace={dataspace_id} height={block_height}"
+    )]
+    SettlementHashMismatch {
+        /// Lane identifier.
+        lane_id: LaneId,
+        /// Dataspace identifier.
+        dataspace_id: DataSpaceId,
+        /// Lane block height.
+        block_height: u64,
+    },
+    /// Merge settlement receipt failed deterministic verification.
+    #[error("invalid nexus fee receipt: {0}")]
+    InvalidNexusFeeReceipt(String),
+    /// Merge settlement would duplicate a previously settled receipt.
+    #[error("duplicate nexus fee receipt source id {0}")]
+    DuplicateNexusFeeReceipt(String),
+    /// Merge settlement cannot burn because the payer lacks public XOR.
+    #[error(
+        "insufficient nexus fee balance for {payer}: requires {required}, available {available}"
+    )]
+    InsufficientNexusFeeBalance {
+        /// Payer account.
+        payer: AccountId,
+        /// Required aggregate burn amount.
+        required: Numeric,
+        /// Available balance.
+        available: Numeric,
+    },
+    /// Merge settlement failed while mutating public XOR balances.
+    #[error("nexus fee settlement mutation failed: {0}")]
+    NexusFeeSettlement(String),
     /// Persistence failure while appending to Kura.
     #[error("merge ledger persistence failed: {0}")]
     Persistence(#[from] crate::kura::Error),
@@ -1707,6 +1767,7 @@ pub struct World {
     /// Inverted index from ZK1 TLV tag to proof ids (sorted, unique) for efficient queries.
     pub(crate) proofs_by_tag: Storage<[u8; 4], Vec<iroha_data_model::proof::ProofId>>,
     /// Commit QCs keyed by subject block hash.
+    #[norito(skip)]
     pub(crate) commit_qcs: Storage<HashOf<BlockHeader>, Qc>,
     /// Latest lane merge-hint roots observed via the merge ledger.
     pub(crate) merge_hint_roots: Cell<Vec<Hash>>,
@@ -6509,6 +6570,8 @@ pub struct State {
     pub da_pin_intents: parking_lot::RwLock<DaPinStore>,
     /// In-memory lane relay envelope cache used for merge/telemetry.
     pub lane_relays: parking_lot::RwLock<LaneRelayStore>,
+    /// Receipt source ids already burned through merge settlement in this process.
+    pub settled_nexus_fee_receipts: parking_lot::RwLock<BTreeSet<[u8; 32]>>,
     /// Lane governance manifest registry snapshot used for lane-relay validation.
     pub lane_manifests: parking_lot::RwLock<LaneManifestRegistryHandle>,
     /// Lane privacy commitment registry derived from governance manifests.
@@ -6922,6 +6985,17 @@ impl<'state> StateBlock<'state> {
         self.settlement_accumulator.drain()
     }
 
+    /// Drain Nexus fee receipts gathered while building this block.
+    #[inline]
+    pub fn drain_nexus_fee_records(
+        &mut self,
+    ) -> std::collections::BTreeMap<
+        HashOf<SignedTransaction>,
+        crate::settlement::PendingNexusFeeReceipt,
+    > {
+        self.settlement_accumulator.drain_nexus_fees()
+    }
+
     /// Record a settlement receipt for the current transaction.
     #[inline]
     pub fn record_settlement_receipt(
@@ -7008,6 +7082,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Settlement receipts staged during this transaction execution.
     pending_settlement_records:
         BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>,
+    /// Nexus fee receipts staged during this transaction execution.
+    pending_nexus_fee_records:
+        BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingNexusFeeReceipt>,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
     /// Block fee amount staged until the transaction is committed.
@@ -7183,12 +7260,52 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         self.pending_settlement_records.insert(tx_hash, record);
     }
 
+    /// Record a Nexus fee receipt for the currently executing transaction.
+    #[inline]
+    pub fn record_nexus_fee_receipt(
+        &mut self,
+        tx_hash: HashOf<SignedTransaction>,
+        record: crate::settlement::PendingNexusFeeReceipt,
+    ) {
+        self.pending_nexus_fee_records.insert(tx_hash, record);
+    }
+
+    /// Sum lane-relay-burn Nexus fee receipts already staged in this block for a payer/asset.
+    pub(crate) fn pending_nexus_fee_amount_for(
+        &self,
+        payer: &AccountId,
+        fee_asset_id: &str,
+    ) -> Option<Numeric> {
+        let mut total = Numeric::zero();
+        for record in self
+            .settlement_accumulator
+            .nexus_fee_records()
+            .map(|(_, record)| record)
+            .chain(self.pending_nexus_fee_records.values())
+        {
+            if &record.payer_account_id == payer && record.fee_asset_id == fee_asset_id {
+                total = total.checked_add(record.fee_amount.clone())?;
+            }
+        }
+        Some(total)
+    }
+
     /// Drain settlement receipts staged while executing this transaction.
     pub fn drain_settlement_records(
         &mut self,
     ) -> std::collections::BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>
     {
         core::mem::take(&mut self.pending_settlement_records)
+    }
+
+    /// Drain Nexus fee receipts staged while executing this transaction.
+    pub fn drain_nexus_fee_records(
+        &mut self,
+    ) -> std::collections::BTreeMap<
+        HashOf<SignedTransaction>,
+        crate::settlement::PendingNexusFeeReceipt,
+    > {
+        core::mem::take(&mut self.pending_nexus_fee_records)
     }
 
     /// Stage a Nexus fee event so it is recorded only after the transaction commits.
@@ -17925,7 +18042,7 @@ impl State {
         &self.telemetry
     }
 
-    fn run_storage_migrations(&mut self) {
+    pub(crate) fn run_storage_migrations(&mut self) {
         if let Some(rebuilt) = self.migrate_space_directory_bindings() {
             iroha_logger::info!(
                 rebuilt_uaids = rebuilt,
@@ -18290,6 +18407,7 @@ impl State {
             ),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
+            settled_nexus_fee_receipts: parking_lot::RwLock::new(BTreeSet::new()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
             lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
             lane_compliance: parking_lot::RwLock::new(None),
@@ -20297,6 +20415,56 @@ impl State {
         Ok(())
     }
 
+    fn verified_lane_relay_state_key(
+        envelope: &LaneRelayEnvelope,
+    ) -> core::result::Result<Name, LaneRelayError> {
+        core::str::FromStr::from_str(&envelope.relay_ref().relay_state_key())
+            .map_err(|_| LaneRelayError::InvalidFastpqProof)
+    }
+
+    fn decode_verified_lane_relay_record_state(
+        payload: &[u8],
+    ) -> core::result::Result<VerifiedLaneRelayRecord, LaneRelayError> {
+        let json: iroha_primitives::json::Json =
+            norito::decode_from_bytes(payload).map_err(|_| LaneRelayError::InvalidFastpqProof)?;
+        norito::json::from_slice(json.get().as_bytes())
+            .map_err(|_| LaneRelayError::InvalidFastpqProof)
+    }
+
+    fn verify_lane_relay_fastpq_record(
+        &self,
+        envelope: &LaneRelayEnvelope,
+    ) -> core::result::Result<(), LaneRelayError> {
+        envelope.verify_fastpq_proof_material()?;
+        let Some(material) = envelope.fastpq_proof.as_ref() else {
+            return Err(LaneRelayError::MissingFastpqProof);
+        };
+        let Some(manifest_root) = envelope.manifest_root else {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        };
+        if manifest_root.iter().all(|byte| *byte == 0) {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+
+        let key = Self::verified_lane_relay_state_key(envelope)?;
+        let world = self.world.view();
+        let payload = world
+            .smart_contract_state()
+            .get(&key)
+            .ok_or(LaneRelayError::InvalidFastpqProof)?;
+        let record = Self::decode_verified_lane_relay_record_state(payload)?;
+        if record.relay_envelope != *envelope
+            || record.relay_ref != envelope.relay_ref()
+            || record.proof_payload_hash != material.proof_digest
+            || record.verified_at_height != material.verified_at_height
+            || record.manifest_root != manifest_root
+            || record.fastpq_binding.source_dsid != envelope.dataspace_id.as_u64()
+        {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        Ok(())
+    }
+
     /// Record a lane relay envelope in the in-memory store after validation.
     ///
     /// # Errors
@@ -20447,6 +20615,12 @@ impl State {
             return Err(error);
         }
         envelope.verify_fastpq_proof_material()?;
+        if nexus
+            .fees
+            .lane_relay_burn_receipts_active_at(envelope.block_height)
+        {
+            self.verify_lane_relay_fastpq_record(envelope)?;
+        }
 
         let inserted = {
             let mut guard = self.lane_relays.write();
@@ -20595,6 +20769,315 @@ impl State {
         &self.settlement_engine
     }
 
+    fn nexus_fee_receipt_marker_key(source_id: &[u8; 32]) -> Result<Name, MergeLedgerCommitError> {
+        let raw = format!("nexus_fee_receipt_settled_{}", hex::encode(source_id));
+        core::str::FromStr::from_str(&raw).map_err(|_| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                "invalid settled receipt marker key".to_owned(),
+            )
+        })
+    }
+
+    fn nexus_fee_settlement_marker_key(
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+        block_height: u64,
+        settlement_hash: &Hash,
+    ) -> Result<Name, MergeLedgerCommitError> {
+        let raw = format!(
+            "nexus_fee_settlement_settled_{}_{}_{}_{}",
+            dataspace_id.as_u64(),
+            lane_id.as_u32(),
+            block_height,
+            hex::encode(settlement_hash.as_ref())
+        );
+        core::str::FromStr::from_str(&raw).map_err(|_| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                "invalid settled settlement marker key".to_owned(),
+            )
+        })
+    }
+
+    fn recompute_nexus_fee_amount(
+        receipt: &NexusFeeReceipt,
+    ) -> Result<Numeric, MergeLedgerCommitError> {
+        let schedule = &receipt.schedule;
+        let mut fee = schedule.base_fee.clone();
+        for (unit, count, label) in [
+            (
+                &schedule.per_byte_fee,
+                schedule.tx_bytes_len,
+                "per_byte_fee",
+            ),
+            (
+                &schedule.per_instruction_fee,
+                schedule.instruction_count,
+                "per_instruction_fee",
+            ),
+            (
+                &schedule.per_gas_unit_fee,
+                schedule.gas_used,
+                "per_gas_unit_fee",
+            ),
+        ] {
+            let delta = unit
+                .clone()
+                .checked_mul(Numeric::from(count), NumericSpec::unconstrained())
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                        "{label} multiplication overflow for receipt {}",
+                        hex::encode(receipt.source_id)
+                    ))
+                })?;
+            fee = fee.checked_add(delta).ok_or_else(|| {
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                    "fee addition overflow for receipt {}",
+                    hex::encode(receipt.source_id)
+                ))
+            })?;
+        }
+        Ok(fee.trim_trailing_zeros())
+    }
+
+    fn validate_nexus_fee_receipt(
+        receipt: &NexusFeeReceipt,
+        expected_lane: LaneId,
+        expected_dataspace: DataSpaceId,
+        expected_height: u64,
+        fee_asset_id: &str,
+    ) -> Result<(), MergeLedgerCommitError> {
+        if receipt.version != 1 {
+            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "unsupported receipt version {}",
+                receipt.version
+            )));
+        }
+        if receipt.lane_id != expected_lane
+            || receipt.dataspace_id != expected_dataspace
+            || receipt.block_height != expected_height
+        {
+            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "receipt coordinates do not match relay lane={expected_lane} dataspace={expected_dataspace} height={expected_height}"
+            )));
+        }
+        if receipt.fee_asset_id != fee_asset_id {
+            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "fee asset mismatch: expected `{fee_asset_id}`, got `{}`",
+                receipt.fee_asset_id
+            )));
+        }
+        let expected = Self::recompute_nexus_fee_amount(receipt)?;
+        if expected != receipt.fee_amount.clone().trim_trailing_zeros() {
+            return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "fee amount mismatch for receipt {}: expected {}, got {}",
+                hex::encode(receipt.source_id),
+                expected,
+                receipt.fee_amount
+            )));
+        }
+        Ok(())
+    }
+
+    fn collect_nexus_fee_receipts_for_merge(
+        &self,
+        entry: &MergeLedgerEntry,
+        fee_asset_id: &str,
+        fee_receipts_activation_height: u64,
+    ) -> Result<NexusFeeSettlementPlan, MergeLedgerCommitError> {
+        let relays = self.lane_relays.read();
+        let world = self.world.view();
+        let mut receipts = Vec::new();
+        let mut settlement_markers = Vec::new();
+        let mut receipt_markers = Vec::new();
+        let mut seen_settlements = BTreeSet::new();
+        let mut seen_sources = BTreeSet::new();
+        let settled_sources = self.settled_nexus_fee_receipts.read();
+        for snapshot in &entry.lane_snapshots {
+            let envelope = relays
+                .get(
+                    snapshot.lane_id,
+                    snapshot.dataspace_id,
+                    snapshot.lane_block_height,
+                )
+                .ok_or(MergeLedgerCommitError::MissingSettlementRelay {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                })?;
+            if *envelope.settlement_hash != snapshot.merge_hint_root {
+                return Err(MergeLedgerCommitError::SettlementHashMismatch {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    block_height: snapshot.lane_block_height,
+                });
+            }
+            if envelope.settlement_commitment.nexus_fee_receipts.is_empty() {
+                continue;
+            }
+            if snapshot.lane_block_height < fee_receipts_activation_height {
+                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                    "Nexus fee receipts are not active at block height {}",
+                    snapshot.lane_block_height
+                )));
+            }
+            let settlement_key = Self::nexus_fee_settlement_marker_key(
+                snapshot.dataspace_id,
+                snapshot.lane_id,
+                snapshot.lane_block_height,
+                &snapshot.merge_hint_root,
+            )?;
+            let mut settlement_hash = [0u8; Hash::LENGTH];
+            settlement_hash.copy_from_slice(snapshot.merge_hint_root.as_ref());
+            let settlement_seen_key = (
+                snapshot.dataspace_id,
+                snapshot.lane_id,
+                snapshot.lane_block_height,
+                settlement_hash,
+            );
+            if !seen_settlements.insert(settlement_seen_key)
+                || world.smart_contract_state().get(&settlement_key).is_some()
+            {
+                return Err(MergeLedgerCommitError::DuplicateNexusFeeReceipt(format!(
+                    "{}:{}:{}:{}",
+                    snapshot.dataspace_id.as_u64(),
+                    snapshot.lane_id.as_u32(),
+                    snapshot.lane_block_height,
+                    hex::encode(snapshot.merge_hint_root.as_ref())
+                )));
+            }
+            settlement_markers.push(settlement_key);
+            for receipt in &envelope.settlement_commitment.nexus_fee_receipts {
+                Self::validate_nexus_fee_receipt(
+                    receipt,
+                    snapshot.lane_id,
+                    snapshot.dataspace_id,
+                    snapshot.lane_block_height,
+                    fee_asset_id,
+                )?;
+                let receipt_key = Self::nexus_fee_receipt_marker_key(&receipt.source_id)?;
+                if !seen_sources.insert(receipt.source_id)
+                    || settled_sources.contains(&receipt.source_id)
+                    || world.smart_contract_state().get(&receipt_key).is_some()
+                {
+                    return Err(MergeLedgerCommitError::DuplicateNexusFeeReceipt(
+                        hex::encode(receipt.source_id),
+                    ));
+                }
+                receipt_markers.push((receipt.source_id, receipt_key));
+                receipts.push(receipt.clone());
+            }
+        }
+        Ok(NexusFeeSettlementPlan {
+            receipts,
+            settlement_markers,
+            receipt_markers,
+        })
+    }
+
+    fn settle_nexus_fee_receipts_for_merge(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let nexus = self.nexus_snapshot();
+        if nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
+            return Ok(());
+        }
+        let plan = self.collect_nexus_fee_receipts_for_merge(
+            entry,
+            nexus.fees.fee_asset_id.as_str(),
+            nexus.fees.fee_receipts_activation_height,
+        )?;
+        let NexusFeeSettlementPlan {
+            receipts,
+            settlement_markers,
+            receipt_markers,
+        } = plan;
+        if receipts.is_empty() {
+            return Ok(());
+        }
+
+        let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
+        {
+            let world = self.world.view();
+            let asset_def = crate::block::parse_asset_definition_literal_with_world(
+                &world,
+                &nexus.fees.fee_asset_id,
+                0,
+            )
+            .ok_or_else(|| {
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                    "invalid nexus fee asset id; expected canonical XOR asset definition id or active xor#universal alias"
+                        .to_owned(),
+                )
+            })?;
+            for receipt in &receipts {
+                let asset_id = AssetId::new(asset_def.clone(), receipt.payer_account_id.clone());
+                let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
+                let next = current
+                    .checked_add(receipt.fee_amount.clone())
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                            "aggregate fee overflow for payer {}",
+                            receipt.payer_account_id
+                        ))
+                    })?;
+                aggregate.insert(asset_id, next);
+            }
+            for (asset_id, required) in &aggregate {
+                let available = world
+                    .assets()
+                    .get(asset_id)
+                    .map_or_else(Numeric::zero, |value| (**value).clone());
+                if available < *required {
+                    return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
+                        payer: asset_id.account().clone(),
+                        required: required.clone(),
+                        available,
+                    });
+                }
+            }
+        }
+
+        let mut world_block = self.world.block();
+        world_block.dataspace_catalog = nexus.dataspace_catalog.clone();
+        {
+            #[cfg(feature = "telemetry")]
+            let mut tx =
+                world_block.trasaction(Some(&self.telemetry), nexus.lane_config.clone(), 0);
+            #[cfg(not(feature = "telemetry"))]
+            let mut tx = world_block.trasaction(nexus.lane_config.clone(), 0);
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            for (asset_id, amount) in &aggregate {
+                tx.withdraw_numeric_asset(asset_id, amount)
+                    .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
+                tx.decrease_asset_total_amount(asset_id.definition(), amount)
+                    .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
+                tx.emit_events(Some(
+                    iroha_data_model::events::data::prelude::AssetEvent::Removed(
+                        iroha_data_model::events::data::prelude::AssetChanged {
+                            asset: asset_id.clone(),
+                            amount: amount.clone(),
+                        },
+                    ),
+                ));
+            }
+            for key in settlement_markers {
+                tx.smart_contract_state.insert(key, vec![1]);
+            }
+            for (_, key) in &receipt_markers {
+                tx.smart_contract_state.insert(key.clone(), vec![1]);
+            }
+            tx.apply();
+        }
+        world_block.commit();
+
+        let mut settled = self.settled_nexus_fee_receipts.write();
+        for (source_id, _) in receipt_markers {
+            settled.insert(source_id);
+        }
+        Ok(())
+    }
+
     /// Append a merge-ledger entry to the in-memory cache and persist it via Kura.
     ///
     /// # Errors
@@ -20623,6 +21106,15 @@ impl State {
             prev_key = Some(key);
         }
         self.validate_merge_quorum_certificate(&entry)?;
+        if let Some(latest) = self.merge_ledger.latest()
+            && entry.epoch_id <= latest.epoch_id
+        {
+            return Err(MergeLedgerCommitError::NonMonotonicEpoch {
+                latest: latest.epoch_id,
+                attempted: entry.epoch_id,
+            });
+        }
+        self.settle_nexus_fee_receipts_for_merge(&entry)?;
 
         let event_entry = entry.clone();
         self.kura.append_merge_entry(&entry)?;
@@ -23134,6 +23626,7 @@ impl<'state> StateBlock<'state> {
             chain_id: self.chain_id.clone(),
             settlement_accumulator: &mut self.settlement_accumulator,
             pending_settlement_records: BTreeMap::new(),
+            pending_nexus_fee_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount: Numeric::zero(),
@@ -23485,6 +23978,27 @@ impl<'state> StateBlock<'state> {
                 );
                 self.apply_replayed_axt_envelopes(envelopes, current_slot);
             }
+        }
+        if let Some(effects) = signed_block.npos_consensus_effects() {
+            let dataspace_catalog = self.nexus.dataspace_catalog.clone();
+            let staking_cfg = self.nexus.staking.clone();
+            let now_ms = signed_block.header().creation_time_ms;
+            #[cfg(feature = "telemetry")]
+            let telemetry = Some(self.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let telemetry = None;
+            let mut transaction = self.transaction();
+            crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
+                &mut transaction.world,
+                effects,
+                &dataspace_catalog,
+                &staking_cfg,
+                signed_block.header().height().get(),
+                now_ms,
+                telemetry,
+            )
+            .expect("committed NPoS consensus effects must be applicable");
+            transaction.apply();
         }
 
         self.block_hashes.push(block_hash);
@@ -25284,15 +25798,16 @@ fn replay_roster_for_block(
     kura: &Kura,
     block: &SignedBlock,
     fallback: &crate::sumeragi::network_topology::Topology,
+    commit_roster_snapshot: Option<&CommitRosterSnapshot>,
 ) -> Vec<PeerId> {
     let height = block.header().height().get();
     let block_hash = block.hash();
 
-    if let Some(snapshot) = state.commit_roster_snapshot_for_block(height, block_hash) {
+    if let Some(snapshot) = commit_roster_snapshot {
         let roster = if snapshot.commit_qc.validator_set.is_empty() {
-            snapshot.validator_checkpoint.validator_set
+            snapshot.validator_checkpoint.validator_set.clone()
         } else {
-            snapshot.commit_qc.validator_set
+            snapshot.commit_qc.validator_set.clone()
         };
         if !roster.is_empty() {
             return roster;
@@ -25323,6 +25838,24 @@ fn replay_roster_for_block(
     }
 
     Vec::new()
+}
+
+fn prune_restored_commit_qcs_for_replay(state: &mut State, start_height: u64) {
+    let future_qcs: Vec<_> = state
+        .world
+        .commit_qcs
+        .view()
+        .iter()
+        .filter_map(|(hash, qc)| (qc.height >= start_height).then_some(*hash))
+        .collect();
+    if future_qcs.is_empty() {
+        return;
+    }
+    let mut commit_qcs = state.world.commit_qcs.block();
+    for hash in future_qcs {
+        commit_qcs.remove(hash);
+    }
+    commit_qcs.commit();
 }
 
 fn replay_skip_block_signatures_enabled() -> bool {
@@ -25614,6 +26147,7 @@ pub fn replay_blocks_from_kura_range(
     } else {
         false
     };
+    prune_restored_commit_qcs_for_replay(state, u64::try_from(start_height)?);
     for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
@@ -25622,16 +26156,19 @@ pub fn replay_blocks_from_kura_range(
             .ok_or_else(|| eyre!("missing block at height {height} during replay"))?;
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
         let signed_block = (*block_arc).clone();
-        let height = signed_block.header().height().get();
-        let replay_commit_qc_hint = state
-            .commit_roster_snapshot_for_block(height, signed_block.hash())
-            .map(|snapshot| snapshot.commit_qc);
-        if let Some(commit_qc) = replay_commit_qc_hint.as_ref() {
-            state.upsert_commit_qc_in_world(commit_qc);
-        }
-        let roster = replay_roster_for_block(state, kura, &signed_block, topology);
-        let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = signed_block.header().view_change_index();
+        let height = signed_block.header().height().get();
+        let block_hash = signed_block.hash();
+        let replay_commit_roster_snapshot =
+            state.commit_roster_snapshot_for_block(height, block_hash);
+        let roster = replay_roster_for_block(
+            state,
+            kura,
+            &signed_block,
+            topology,
+            replay_commit_roster_snapshot.as_ref(),
+        );
+        let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let wsv_checkpoint = kura
             .wsv_checkpoint(height)
             .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?;
@@ -25872,7 +26409,9 @@ pub fn replay_blocks_from_kura_range(
         let _ = state_block.apply_without_execution_with_commit_qc(
             &committed_block,
             roster,
-            replay_commit_qc_hint.as_ref(),
+            replay_commit_roster_snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.commit_qc),
         );
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
@@ -25880,6 +26419,32 @@ pub fn replay_blocks_from_kura_range(
         if let Some(checkpoint) = wsv_checkpoint {
             let actual = crate::snapshot::canonical_state_snapshot_hash(state);
             if actual != checkpoint.state_hash() {
+                let legacy =
+                    crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
+                        state,
+                    );
+                if legacy == checkpoint.state_hash() {
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        "WSV checkpoint matched legacy snapshot surface without Space Directory manifests; accepting during upgrade"
+                    );
+                    continue;
+                }
+                if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
+                    let components =
+                        crate::snapshot::canonical_state_snapshot_component_hashes(state);
+                    let commit_qcs = crate::snapshot::canonical_state_commit_qc_summaries(state);
+                    error!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        ?components,
+                        ?commit_qcs,
+                        "replayed WSV checkpoint components after mismatch"
+                    );
+                }
                 let checkpoint_err = eyre!(
                     "replayed block #{height} WSV checkpoint mismatch: committed={:?} replayed={actual:?}",
                     checkpoint.state_hash()
@@ -26973,7 +27538,7 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_rejects_wsv_checkpoint_mismatch_after_applying_block() {
+    fn replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -27080,10 +27645,11 @@ mod replay_validation_tests {
             2,
             ConsensusMode::Permissioned,
         );
-        let err = result.expect_err("WSV checkpoint mismatch must stop replay");
-        assert!(
-            format!("{err:?}").contains("WSV checkpoint"),
-            "replay error should report the WSV checkpoint mismatch: {err:?}"
+        result.expect("WSV checkpoint mismatch is a non-fatal sidecar audit failure");
+        assert_eq!(
+            replay_state.view().height(),
+            2,
+            "mismatched WSV checkpoint sidecar must not prevent Kura replay"
         );
     }
 
@@ -28791,6 +29357,7 @@ impl StateTransaction<'_, '_> {
                 last_tx_gas_used: _,
             settlement_accumulator,
             pending_settlement_records,
+            pending_nexus_fee_records,
             pending_nexus_fee_event,
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount,
@@ -28817,6 +29384,11 @@ impl StateTransaction<'_, '_> {
         if !pending_settlement_records.is_empty() {
             for (tx_hash, record) in pending_settlement_records {
                 settlement_accumulator.record(tx_hash, record);
+            }
+        }
+        if !pending_nexus_fee_records.is_empty() {
+            for (tx_hash, record) in pending_nexus_fee_records {
+                settlement_accumulator.record_nexus_fee(tx_hash, record);
             }
         }
         if let Some(event) = pending_nexus_fee_event {
@@ -30149,6 +30721,12 @@ pub(crate) struct SnapshotNoritoBlob {
     pub encoded_hex: String,
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotSpaceDirectoryManifestSet {
+    pub uaid: UniversalAccountId,
+    pub encoded_hex: String,
+}
+
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
@@ -30214,6 +30792,8 @@ pub(crate) mod deserialize {
                 take_optional_default(&mut map, "public_lane_rewards")?;
             let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
                 take_optional_default(&mut map, "public_lane_reward_claims")?;
+            let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
+                take_optional_default(&mut map, "space_directory_manifests")?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
@@ -30263,6 +30843,8 @@ pub(crate) mod deserialize {
                     )
                 })
                 .collect();
+            world.space_directory_manifests =
+                decode_space_directory_manifest_sets(space_directory_manifests)?;
 
             let mut state = build_state(BuildStateInputs {
                 world,
@@ -30304,6 +30886,34 @@ pub(crate) mod deserialize {
                 })
             })
             .collect()
+    }
+
+    fn decode_space_directory_manifest_sets(
+        records: Vec<SnapshotSpaceDirectoryManifestSet>,
+    ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
+        let mut storage = Storage::default();
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            let manifest_set =
+                SpaceDirectoryManifestSet::decode_all(&mut cursor).map_err(|err| {
+                    json::Error::InvalidField {
+                        field: "space_directory_manifests".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    }
+                })?;
+            if storage.insert(record.uaid, manifest_set).is_some() {
+                return Err(json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("duplicate UAID at record {index}"),
+                });
+            }
+        }
+        Ok(storage)
     }
 
     fn take_required<T: JsonDeserialize>(
@@ -30946,7 +31556,7 @@ pub(crate) mod deserialize {
         let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header());
-        let state = State {
+        let mut state = State {
             world,
             block_hashes,
             latest_block_header: parking_lot::RwLock::new(latest_block_header),
@@ -30966,6 +31576,7 @@ pub(crate) mod deserialize {
             ),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
+            settled_nexus_fee_receipts: parking_lot::RwLock::new(BTreeSet::new()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
             lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
             lane_compliance: parking_lot::RwLock::new(None),
@@ -31003,6 +31614,7 @@ pub(crate) mod deserialize {
             view_lock: parking_lot::RwLock::new(()),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         };
+        state.run_storage_migrations();
         #[cfg(feature = "sm")]
         Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
             .expect("sm2_distid_default must be valid");
@@ -31472,7 +32084,9 @@ mod tests {
     use iroha_data_model::{
         block::{
             BlockHeader, SignedBlock,
-            consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+            consensus::{
+                LaneBlockCommitment, LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
+            },
         },
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
         da::{
@@ -35824,6 +36438,7 @@ mod tests {
                 xor_variance_micro: 0,
                 timestamp_ms: 1_700_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let envelope =
             LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");
@@ -35848,6 +36463,50 @@ mod tests {
             ),
             verified_at_height,
         }
+    }
+
+    fn sample_verified_lane_relay_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
+        AxtFastpqBinding {
+            parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: format!("state-test-dataspace-{}", dsid.as_u64()),
+            source_receipt_id: "state-test-lane-relay-receipt".to_owned(),
+            source_tx_commitment: hex::encode(Hash::new(b"state-test-lane-relay-source").as_ref()),
+            claim_type: "authorization".to_owned(),
+            claim_digest: hex::encode(Hash::new(b"state-test-lane-relay-claim").as_ref()),
+            witness_commitment: hex::encode(Hash::new(b"state-test-lane-relay-witness").as_ref()),
+            policy_commitment: hex::encode(Hash::new(b"state-test-lane-relay-policy").as_ref()),
+            verified_effect_type: "lane_relay".to_owned(),
+            corridor: "state-test-lane-relay".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }
+    }
+
+    fn seed_verified_lane_relay_record(state: &State, envelope: &LaneRelayEnvelope) {
+        let material = envelope
+            .fastpq_proof
+            .expect("sample envelope must carry FastPQ proof material");
+        let manifest_root = envelope
+            .manifest_root
+            .expect("verified lane relay samples must carry a manifest root");
+        let record = VerifiedLaneRelayRecord::new(
+            envelope.clone(),
+            material.proof_digest,
+            Hash::new(b"state-test-lane-relay-statement").into(),
+            Hash::new(b"state-test-lane-relay-inner-proof"),
+            material.verified_at_height,
+            manifest_root,
+            sample_verified_lane_relay_binding(envelope.dataspace_id),
+        );
+        let key = State::verified_lane_relay_state_key(envelope).expect("state key");
+        let json = Json::try_new(record).expect("verified relay record JSON");
+        let encoded = norito::to_bytes(&json).expect("verified relay record state");
+        let mut world_block = state.world.block();
+        world_block.smart_contract_state.insert(key, encoded);
+        world_block.commit();
     }
 
     #[test]
@@ -35975,6 +36634,48 @@ mod tests {
             .record_lane_relay(&envelope)
             .expect_err("invalid FastPQ proof must be rejected");
         assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+    }
+
+    #[test]
+    fn record_lane_relay_lane_relay_burn_requires_verified_fastpq_record() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_receipts_activation_height = 2;
+        }
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        configure_commit_topology(&state, 1);
+
+        let envelope =
+            sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap.clone())
+                .with_manifest_root(Some([0x44; 32]));
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("digest-only relay must be rejected in lane-relay-burn mode");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+        assert!(state.lane_relay_snapshot().is_empty());
+
+        seed_verified_lane_relay_record(&state, &envelope);
+        let inserted = state
+            .record_lane_relay(&envelope)
+            .expect("verified relay record should admit relay");
+        assert_eq!(inserted, LaneRelayInsert::Inserted);
     }
 
     #[test]
@@ -36392,6 +37093,7 @@ mod tests {
                 xor_variance_micro: 0,
                 timestamp_ms: 1_700_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
             .expect("lane relay envelope");
@@ -36528,6 +37230,7 @@ mod tests {
                 xor_variance_micro: 0,
                 timestamp_ms: 1_700_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
             .expect("lane relay envelope");
@@ -46141,6 +46844,189 @@ mod tests {
             aggregate_signature,
             message_digest,
         )
+    }
+
+    fn setup_nexus_fee_merge_state(
+        sponsor_balance: Numeric,
+        fee_amount: Numeric,
+        source_id: [u8; 32],
+    ) -> (State, AccountId, AssetDefinitionId, Vec<KeyPair>) {
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&sponsor_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&sponsor_id);
+        let sponsor_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+            sponsor_balance,
+        );
+        let world =
+            World::with_assets([domain], [sponsor], [asset_definition], [sponsor_asset], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query);
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            fees: iroha_config::parameters::actual::NexusFees {
+                fee_asset_id: asset_def_id.to_string(),
+                settlement_mode:
+                    iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
+                fee_receipts_activation_height: 1,
+                ..iroha_config::parameters::actual::NexusFees::default()
+            },
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state.set_nexus(nexus).expect("apply Nexus config");
+
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)],
+        );
+        let commit_keypairs = configure_commit_topology(&state, 1);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let envelope = sample_lane_relay_envelope(
+            1,
+            LaneId::new(0),
+            &signers,
+            full_signer_bitmap(validator_keypairs.len()),
+        );
+        let mut settlement = envelope.settlement_commitment.clone();
+        settlement.nexus_fee_receipts = vec![NexusFeeReceipt {
+            version: 1,
+            source_id,
+            dataspace_id: envelope.dataspace_id,
+            lane_id: envelope.lane_id,
+            block_height: envelope.block_height,
+            payer_account_id: sponsor_id.clone(),
+            fee_asset_id: asset_def_id.to_string(),
+            fee_amount: fee_amount.clone(),
+            schedule: NexusFeeScheduleInputs {
+                tx_bytes_len: 0,
+                instruction_count: 0,
+                gas_used: 0,
+                base_fee: fee_amount,
+                per_byte_fee: Numeric::zero(),
+                per_instruction_fee: Numeric::zero(),
+                per_gas_unit_fee: Numeric::zero(),
+            },
+        }];
+        let envelope = LaneRelayEnvelope::new(
+            envelope.block_header.clone(),
+            envelope.qc.clone(),
+            envelope.da_commitment_hash,
+            settlement,
+            envelope.rbc_bytes_total,
+        )
+        .expect("fee relay envelope");
+        let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
+        let envelope = envelope
+            .with_manifest_root(Some([0x44; 32]))
+            .with_fastpq_proof_material(Some(fastpq_proof));
+        seed_verified_lane_relay_record(&state, &envelope);
+        state.record_lane_relay(&envelope).expect("relay accepted");
+
+        (state, sponsor_id, asset_def_id, commit_keypairs)
+    }
+
+    fn account_numeric_asset_balance(
+        state: &State,
+        asset_def_id: &AssetDefinitionId,
+        account_id: &AccountId,
+    ) -> Numeric {
+        state
+            .view()
+            .world()
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), account_id.clone()))
+            .expect("account asset exists")
+            .0
+            .clone()
+    }
+
+    #[test]
+    fn commit_merge_entry_burns_nexus_fee_receipts_once() {
+        let (state, sponsor_id, asset_def_id, commit_keypairs) =
+            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x42; 32]);
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("merge candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate.clone(), qc);
+
+        state
+            .commit_merge_entry(entry.clone())
+            .expect("merge settlement burns fee");
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(7_u32)
+        );
+
+        let err = state
+            .commit_merge_entry(entry)
+            .expect_err("replayed merge entry must be rejected");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::NonMonotonicEpoch { .. }
+                | MergeLedgerCommitError::DuplicateNexusFeeReceipt(_)
+        ));
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(7_u32)
+        );
+
+        state.settled_nexus_fee_receipts.write().clear();
+        let duplicate_candidate = crate::merge::MergeLedgerCandidate {
+            epoch_id: 2,
+            view: candidate.view,
+            lane_snapshots: candidate.lane_snapshots,
+            global_state_root: candidate.global_state_root,
+        };
+        let duplicate_qc =
+            merge_qc_for_candidate(&state, &duplicate_candidate, &commit_keypairs, &[0]);
+        let duplicate_entry = merge_entry_from_candidate(duplicate_candidate, duplicate_qc);
+        let err = state
+            .commit_merge_entry(duplicate_entry)
+            .expect_err("persistent receipt marker must reject higher-epoch replay");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::DuplicateNexusFeeReceipt(_)
+        ));
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(7_u32)
+        );
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_insufficient_nexus_fee_balance_without_partial_burn() {
+        let (state, sponsor_id, asset_def_id, commit_keypairs) =
+            setup_nexus_fee_merge_state(Numeric::from(1_u32), Numeric::from(3_u32), [0x43; 32]);
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("merge candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+
+        let err = state
+            .commit_merge_entry(entry)
+            .expect_err("insufficient fee balance rejects settlement");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::InsufficientNexusFeeBalance { .. }
+        ));
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(1_u32)
+        );
     }
 
     #[test]

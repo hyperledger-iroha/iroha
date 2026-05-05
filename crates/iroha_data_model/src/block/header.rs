@@ -7,7 +7,7 @@ use norito::{codec::Encode, core as ncore};
 
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
-    consensus::PreviousRosterEvidence,
+    consensus::{NposConsensusEffects, PreviousRosterEvidence},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -73,6 +73,11 @@ mod model {
         /// Optional hash covering previous-height roster evidence embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
         pub prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+        /// Optional hash covering deterministic NPoS effects embedded in the block payload.
+        #[getset(get_copy = "pub", set = "pub")]
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
         /// Optional SCCP commitment root finalized in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub sccp_commitment_root: Option<[u8; 32]>,
@@ -532,6 +537,7 @@ impl BlockHeader {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
             creation_time_ms,
@@ -605,6 +611,31 @@ impl BlockHeader {
             confidential_features: Option<ConfidentialFeatureDigest>,
         }
 
+        #[derive(Encode)]
+        struct BlockHeaderForConsensusWithNposEffects {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            /// Merkle root over externally submitted transactions (time-trigger entrypoints live in [`BlockResult`]).
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            /// Optional DA proof policy bundle hash.
+            da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
+            /// Optional DA commitment bundle hash.
+            da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
+            /// Optional DA pin intent bundle hash.
+            da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            /// Optional previous-roster evidence hash.
+            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            /// Optional deterministic NPoS effects hash.
+            npos_effects_hash: HashOf<NposConsensusEffects>,
+            /// Optional durable execution context hash.
+            execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
+            /// Optional SCCP commitment root.
+            sccp_commitment_root: Option<[u8; 32]>,
+            creation_time_ms: u64,
+            view_change_index: u64,
+            confidential_features: Option<ConfidentialFeatureDigest>,
+        }
+
         impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
             fn from(value: &BlockHeader) -> Self {
                 let BlockHeader {
@@ -616,6 +647,7 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
+                    npos_effects_hash: _,
                     execution_context_hash: _,
                     sccp_commitment_root,
                     creation_time_ms,
@@ -631,6 +663,7 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
+                    npos_effects_hash,
                     sccp_commitment_root,
                     creation_time_ms,
                     view_change_index,
@@ -639,13 +672,30 @@ impl BlockHeader {
             }
         }
 
+        let legacy = BlockHeaderForConsensusLegacy::from(self);
+        if let Some(npos_effects_hash) = self.npos_effects_hash {
+            let header = BlockHeaderForConsensusWithNposEffects {
+                height: legacy.height,
+                prev_block_hash: legacy.prev_block_hash,
+                merkle_root: legacy.merkle_root,
+                da_proof_policies_hash: legacy.da_proof_policies_hash,
+                da_commitments_hash: legacy.da_commitments_hash,
+                da_pin_intents_hash: legacy.da_pin_intents_hash,
+                prev_roster_evidence_hash: legacy.prev_roster_evidence_hash,
+                npos_effects_hash,
+                execution_context_hash: self.execution_context_hash,
+                sccp_commitment_root: legacy.sccp_commitment_root,
+                creation_time_ms: legacy.creation_time_ms,
+                view_change_index: legacy.view_change_index,
+                confidential_features: legacy.confidential_features,
+            };
+            return HashOf::from_untyped_unchecked(HashOf::new(&header).into());
+        }
+
         let Some(execution_context_hash) = self.execution_context_hash else {
-            return HashOf::from_untyped_unchecked(
-                HashOf::new(&BlockHeaderForConsensusLegacy::from(self)).into(),
-            );
+            return HashOf::from_untyped_unchecked(HashOf::new(&legacy).into());
         };
 
-        let legacy = BlockHeaderForConsensusLegacy::from(self);
         let header = BlockHeaderForConsensus {
             height: legacy.height,
             prev_block_hash: legacy.prev_block_hash,
@@ -709,14 +759,14 @@ impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
 
 #[cfg(test)]
 mod tests {
+    use crate::block::ExternalExecutionContext;
+
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
         codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
-
-    use crate::block::ExternalExecutionContext;
 
     use super::*;
 

@@ -1992,28 +1992,89 @@ impl Actor {
                 });
         let authoritative_frontier_owner_supersede = allow_authoritative_frontier_owner_supersede
             && height == committed_height.saturating_add(1);
+        let frontier_highest_qc = frontier.as_ref().map(|frontier| frontier.highest_qc);
+        let local_conflicting_same_height_vote =
+            self.local_conflicting_frontier_vote(height, block_hash);
+        let new_view_qc_supersedes_local_vote = local_conflicting_same_height_vote
+            .as_ref()
+            .is_some_and(|vote| {
+                frontier_highest_qc.is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        vote.block_hash,
+                        vote.view,
+                    )
+                })
+            });
         let passive_conflicting_same_height_vote = !authoritative_frontier_owner_supersede
-            && self
-                .local_conflicting_frontier_vote(height, block_hash)
-                .is_some();
+            && local_conflicting_same_height_vote.is_some()
+            && !new_view_qc_supersedes_local_vote;
+        let conflicting_same_height_owner =
+            self.frontier_slot_conflicts_with_live_local_owner(height, view, block_hash);
+        let new_view_qc_supersedes_local_owner = conflicting_same_height_owner
+            .as_ref()
+            .is_some_and(|(owner_hash, owner_view)| {
+                frontier_highest_qc.is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        *owner_hash,
+                        *owner_view,
+                    )
+                })
+            });
         let passive_conflicting_same_height_owner = !authoritative_frontier_owner_supersede
-            && self
-                .frontier_slot_conflicts_with_live_local_owner(height, view, block_hash)
-                .is_some();
+            && conflicting_same_height_owner.is_some()
+            && !new_view_qc_supersedes_local_owner;
+        let same_height_vote_lock =
+            self.same_height_vote_lock_blocking_candidate(height, view, Some(block_hash));
+        let new_view_qc_supersedes_vote_lock = same_height_vote_lock.as_ref().is_some_and(|lock| {
+            frontier_highest_qc.is_some_and(|highest_qc| {
+                self.new_view_qc_supersedes_same_height_vote_lock(height, view, highest_qc, lock)
+            })
+        });
         let quorum_locked_same_height_conflict = !authoritative_frontier_owner_supersede
             && observed_commit_qc_epoch.is_none()
-            && self
-                .same_height_vote_lock_blocking_candidate(height, view, Some(block_hash))
-                .is_some();
+            && same_height_vote_lock.is_some()
+            && !new_view_qc_supersedes_vote_lock;
         let passive_conflicting_same_height = passive_conflicting_same_height_vote
             || passive_conflicting_same_height_owner
             || quorum_locked_same_height_conflict;
+        let contiguous_frontier_extends_tip = height == committed_height.saturating_add(1)
+            && pending_extends_tip(
+                height,
+                header.prev_block_hash(),
+                self.state.committed_height(),
+                self.state.latest_block_hash_fast(),
+            );
+        let stale_recovery_has_commit_evidence = stale_view.is_some()
+            && !passive_conflicting_same_height_vote
+            && contiguous_frontier_extends_tip
+            && (observed_commit_qc_epoch.is_some()
+                || self.pending_block_has_commit_votes(block_hash, height, view)
+                || self.pending_block_has_qc(block_hash, height, view));
         if authoritative_frontier_owner_supersede {
             debug!(
                 height,
                 view,
                 block = %block_hash,
                 "accepting BlockCreated as authoritative same-height supersede for the contiguous frontier"
+            );
+        } else if new_view_qc_supersedes_local_vote
+            || new_view_qc_supersedes_local_owner
+            || new_view_qc_supersedes_vote_lock
+        {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                local_vote_superseded = new_view_qc_supersedes_local_vote,
+                local_owner_superseded = new_view_qc_supersedes_local_owner,
+                vote_lock_superseded = new_view_qc_supersedes_vote_lock,
+                "accepting BlockCreated as authoritative: NEW_VIEW QC supersedes raw same-height conflict"
             );
         } else if passive_conflicting_same_height_vote {
             debug!(
@@ -2034,7 +2095,7 @@ impl Actor {
             if !allow_stale_block_created(
                 missing_request,
                 stale_retired_match,
-                allow_stale_recovery_without_request,
+                allow_stale_recovery_without_request || stale_recovery_has_commit_evidence,
             ) {
                 debug!(
                     height,
@@ -2056,6 +2117,7 @@ impl Actor {
                 local_view,
                 missing_request,
                 stale_retired_match,
+                stale_recovery_has_commit_evidence,
                 "accepting BlockCreated for stale view to recover missing payload"
             );
         }
@@ -2219,18 +2281,6 @@ impl Actor {
                 pending.commit_qc_observed(),
             )
         });
-        let stale_recovery_has_commit_evidence = stale_view.is_some()
-            && !passive_conflicting_same_height_vote
-            && height == committed_height.saturating_add(1)
-            && pending_extends_tip(
-                height,
-                header.prev_block_hash(),
-                self.state.committed_height(),
-                self.state.latest_block_hash_fast(),
-            )
-            && (observed_commit_qc_epoch.is_some()
-                || self.pending_block_has_commit_votes(block_hash, height, view)
-                || self.pending_block_has_qc(block_hash, height, view));
         if passive_conflicting_same_height_owner {
             if stale_recovery_has_commit_evidence {
                 debug!(

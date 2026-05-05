@@ -72,8 +72,9 @@ pub mod isi {
         name::Name,
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
-            DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
-            VerifiedLaneRelayRecord,
+            DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet,
+            LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
+            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest,
         },
         parameter::{Parameter, SumeragiParameter},
         prelude::*,
@@ -252,6 +253,38 @@ pub mod isi {
             ))
         })
     }
+
+    fn verified_nexus_fee_budget_state_key(
+        sponsor: &AccountId,
+        fee_asset_id: &str,
+    ) -> Result<Name, Error> {
+        let key = VerifiedNexusFeeBudgetRecord::state_key_for(sponsor, fee_asset_id);
+        Name::from_str(&key).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "invalid verified Nexus fee budget state key".into(),
+            ))
+            .into()
+        })
+    }
+
+    fn encode_verified_nexus_fee_budget_record_state(
+        record: &VerifiedNexusFeeBudgetRecord,
+    ) -> Result<Vec<u8>, String> {
+        let json = Json::try_new(record.clone())
+            .map_err(|err| format!("verified Nexus fee budget JSON encode failed: {err}"))?;
+        norito::to_bytes(&json)
+            .map_err(|err| format!("verified Nexus fee budget state encode failed: {err}"))
+    }
+
+    fn decode_verified_nexus_fee_budget_record_state(
+        payload: &[u8],
+    ) -> Result<VerifiedNexusFeeBudgetRecord, String> {
+        let json: Json = norito::decode_from_bytes(payload)
+            .map_err(|err| format!("verified Nexus fee budget JSON decode failed: {err}"))?;
+        norito::json::from_slice(json.get().as_bytes())
+            .map_err(|err| format!("verified Nexus fee budget JSON materialization failed: {err}"))
+    }
+
     fn protected_contract_namespaces(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> BTreeSet<String> {
@@ -10877,6 +10910,30 @@ pub mod isi {
                 )
                 .into());
             }
+            if binding.verified_effect_type != LANE_RELAY_FASTPQ_EFFECT_TYPE {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof effect must be lane_relay_block".into(),
+                    ),
+                )
+                .into());
+            }
+            let expected_claim_digest =
+                lane_relay_fastpq_claim_digest(&envelope).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "verified lane relay claim digest failed: {err}"
+                        )),
+                    )
+                })?;
+            if binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof claim_digest mismatch".into(),
+                    ),
+                )
+                .into());
+            }
             let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
                 .map_err(|err| {
                     InstructionExecutionError::InvariantViolation(
@@ -10912,6 +10969,222 @@ pub mod isi {
                     .into());
                 }
                 return Ok(());
+            }
+
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(key, encoded);
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::RegisterVerifiedNexusFeeBudget {
+        #[metrics(+"register_verified_nexus_fee_budget")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.nexus.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verified Nexus fee budget registration requires nexus.enabled=true".into(),
+                ));
+            }
+
+            let sponsor = self.sponsor_account_id().clone();
+            if state_transaction.world.accounts.get(&sponsor).is_none() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown Nexus fee budget sponsor `{sponsor}`"
+                    )),
+                )
+                .into());
+            }
+
+            let fee_asset_id = self.fee_asset_id().trim().to_owned();
+            if fee_asset_id != state_transaction.nexus.fees.fee_asset_id.as_str() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified Nexus fee budget asset `{fee_asset_id}` does not match configured nexus.fees.fee_asset_id `{}`",
+                        state_transaction.nexus.fees.fee_asset_id
+                    )),
+                )
+                .into());
+            }
+            if self.verified_balance() < &Numeric::zero() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget balance must be non-negative".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let manifest_root = *self.manifest_root();
+            if manifest_root.iter().all(|byte| *byte == 0) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget manifest_root cannot be zeroed".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let proof_blob = self.proof_blob().clone();
+            if proof_blob.payload.is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof payload is empty".into(),
+                    ),
+                )
+                .into());
+            }
+            let verified_at_height = state_transaction.block_height();
+            if let Some(expiry_slot) = proof_blob.expiry_slot
+                && verified_at_height > expiry_slot
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified Nexus fee budget proof expired at slot {expiry_slot}"
+                    )),
+                )
+                .into());
+            }
+
+            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "verified Nexus fee budget proof envelope decode failed: {err}"
+                        )),
+                    )
+                })?;
+            if proof_envelope.dsid != DataSpaceId::UNIVERSAL
+                || proof_envelope.manifest_root != manifest_root
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof must bind universal dataspace and declared manifest_root"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
+            if let Some(committed_amount) = proof_envelope.committed_amount {
+                let expected = self.verified_balance().try_mantissa_u128().ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "committed Nexus fee budget amount requires a non-negative u128 mantissa"
+                                .into(),
+                        ),
+                    )
+                })?;
+                if self.verified_balance().scale() != 0 || committed_amount != expected {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "verified Nexus fee budget committed_amount mismatch".into(),
+                        ),
+                    )
+                    .into());
+                }
+            }
+
+            let Some(binding) = proof_envelope.fastpq_binding.clone() else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof is missing fastpq_binding".into(),
+                    ),
+                )
+                .into());
+            };
+            if binding.source_dsid != DataSpaceId::UNIVERSAL.as_u64() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof source_dsid mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+            if binding.verified_effect_type != "nexus_fee_budget" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof effect must be nexus_fee_budget".into(),
+                    ),
+                )
+                .into());
+            }
+            let expected_claim_digest =
+                nexus_fee_budget_claim_digest(&sponsor, &fee_asset_id, self.verified_balance());
+            if binding.claim_digest != hex::encode(expected_claim_digest.as_ref()) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof claim_digest mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+            let Some(effect) = binding.effect_binding.as_ref() else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof is missing effect_binding".into(),
+                    ),
+                )
+                .into());
+            };
+            if effect.destination_account_id.as_deref() != Some(sponsor.to_string().as_str())
+                || effect.source_asset_definition_id.as_deref() != Some(fee_asset_id.as_str())
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified Nexus fee budget proof effect_binding mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("verified Nexus fee budget FASTPQ verification failed: {err}")
+                            .into(),
+                    )
+                })?;
+            let proof_payload_hash = CryptoHash::new(&proof_blob.payload);
+            let record = VerifiedNexusFeeBudgetRecord::new(
+                sponsor.clone(),
+                fee_asset_id.clone(),
+                self.verified_balance().clone(),
+                proof_payload_hash,
+                verified_fastpq.statement_digest,
+                verified_fastpq.proof_digest,
+                verified_at_height,
+                manifest_root,
+                binding,
+            );
+            let key = verified_nexus_fee_budget_state_key(&sponsor, &fee_asset_id)?;
+            let encoded =
+                encode_verified_nexus_fee_budget_record_state(&record).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(err),
+                    )
+                })?;
+            if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+                let decoded =
+                    decode_verified_nexus_fee_budget_record_state(existing).map_err(|err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!("stored {err}")),
+                        )
+                    })?;
+                if decoded == record {
+                    return Ok(());
+                }
+                if decoded.verified_at_height >= record.verified_at_height {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting or stale verified Nexus fee budget already exists".into(),
+                    )
+                    .into());
+                }
             }
 
             state_transaction
@@ -12143,6 +12416,7 @@ pub mod isi {
                 total_xor_variance_micro: 0,
                 swap_metadata: None,
                 receipts: Vec::new(),
+                nexus_fee_receipts: Vec::new(),
             };
             let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
                 block_header,

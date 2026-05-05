@@ -96,6 +96,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<crate::isi::staking::CancelConsensusEvidencePenalty>,
     InstructionRegistry::register::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register::<nexus::RegisterVerifiedLaneRelay>,
+    InstructionRegistry::register::<nexus::RegisterVerifiedNexusFeeBudget>,
     InstructionRegistry::register::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register::<oracle::AggregateOracleFeed>,
@@ -601,6 +602,9 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     );
     registry = registry
         .register_with_id::<nexus::RegisterVerifiedLaneRelay>("nexus::RegisterVerifiedLaneRelay");
+    registry = registry.register_with_id::<nexus::RegisterVerifiedNexusFeeBudget>(
+        "nexus::RegisterVerifiedNexusFeeBudget",
+    );
     registry
 }
 

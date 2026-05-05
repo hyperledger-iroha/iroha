@@ -71,7 +71,10 @@ use iroha_data_model::{
         *,
     },
     confidential::ConfidentialFeatureDigest,
-    consensus::{ConsensusKeyRole, PreviousRosterEvidence, Qc, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{
+        ConsensusKeyRole, NposConsensusEffects, PreviousRosterEvidence, Qc,
+        VALIDATOR_SET_HASH_VERSION_V1,
+    },
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -299,6 +302,7 @@ struct LaneSettlementBuilder {
     total_xor_variance_micro: u128,
     swap_evidence: Option<SwapEvidence>,
     receipts: Vec<LaneSettlementReceipt>,
+    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
 }
@@ -532,7 +536,7 @@ use crate::{
         smallset::sort_dedup_u32_in_place,
     },
     prelude::*,
-    queue::{evaluate_policy_with_catalog_and_world, routing_ledger},
+    queue::{evaluate_policy_with_catalog_and_world, resolve_routing_decision, routing_ledger},
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
@@ -1824,6 +1828,8 @@ pub enum BlockValidationError {
     DaShardCursor(#[from] DaShardCursorError),
     /// AXT envelope export contained invalid or inconsistent fragments: {0}
     AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails),
+    /// NPoS consensus effects are invalid: {0}
+    NposEffectsInvalid(String),
 }
 
 /// Error during signature verification
@@ -2142,6 +2148,7 @@ mod pending {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
                 execution_context: None,
             })
         }
@@ -2163,6 +2170,8 @@ mod chained {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+        npos_consensus_effects: None,
+        pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
@@ -2211,6 +2220,19 @@ mod chained {
             let hash = evidence.as_ref().map(HashOf::new);
             self.0.header.set_prev_roster_evidence_hash(hash);
             self.0.previous_roster_evidence = evidence;
+            self
+        }
+
+        /// Attach deterministic NPoS effects and update the header hash accordingly.
+        #[must_use]
+        pub fn with_npos_consensus_effects(
+            mut self,
+            effects: Option<NposConsensusEffects>,
+        ) -> Self {
+            let effects = effects.filter(|bundle| !bundle.is_empty());
+            let hash = effects.as_ref().map(HashOf::new);
+            self.0.header.set_npos_effects_hash(hash);
+            self.0.npos_consensus_effects = effects;
             self
         }
 
@@ -2290,6 +2312,7 @@ mod chained {
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
                 previous_roster_evidence: builder.0.previous_roster_evidence,
+                npos_consensus_effects: builder.0.npos_consensus_effects,
                 execution_context: builder.0.execution_context,
             })
         }
@@ -2317,6 +2340,8 @@ mod new {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+        npos_consensus_effects: None,
+        pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
@@ -2367,6 +2392,11 @@ mod new {
             self.previous_roster_evidence.as_ref()
         }
 
+        /// NPoS consensus effects embedded in this block, if any.
+        pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
+            self.npos_consensus_effects.as_ref()
+        }
+
         #[cfg(test)]
         #[allow(dead_code)]
         pub(crate) fn update_header(self, header: &BlockHeader, private_key: &PrivateKey) -> Self {
@@ -2383,6 +2413,7 @@ mod new {
                 da_proof_policies: self.da_proof_policies,
                 da_pin_intents: self.da_pin_intents,
                 previous_roster_evidence: self.previous_roster_evidence,
+                npos_consensus_effects: self.npos_consensus_effects,
                 execution_context: self.execution_context,
             }
         }
@@ -2408,6 +2439,7 @@ mod new {
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
             signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
+            signed_block.set_npos_consensus_effects(block.npos_consensus_effects);
             signed_block.set_execution_context(block.execution_context);
             signed_block
         }
@@ -5017,6 +5049,7 @@ pub(crate) mod valid {
                 block.header().height().get(),
                 actual_prev_block_hash,
             )?;
+            Self::validate_npos_effects_header(block)?;
             Self::validate_execution_context_with_state(
                 block,
                 state,
@@ -5087,6 +5120,32 @@ pub(crate) mod valid {
                 pipeline_cfg,
                 aggregate_lane,
             })
+        }
+
+        fn npos_effects_error(message: impl Into<String>) -> BlockValidationError {
+            BlockValidationError::NposEffectsInvalid(message.into())
+        }
+
+        fn validate_npos_effects_header(block: &SignedBlock) -> Result<(), BlockValidationError> {
+            match (
+                block.header().npos_effects_hash(),
+                block.npos_consensus_effects(),
+            ) {
+                (None, None) => Ok(()),
+                (Some(_), None) => Err(Self::npos_effects_error(
+                    "header references NPoS effects but payload is missing",
+                )),
+                (None, Some(_)) => Err(Self::npos_effects_error(
+                    "payload includes NPoS effects but header hash is absent",
+                )),
+                (Some(expected), Some(effects)) => {
+                    let actual = HashOf::new(effects);
+                    if actual != expected {
+                        return Err(Self::npos_effects_error("NPoS effects hash mismatch"));
+                    }
+                    Ok(())
+                }
+            }
         }
 
         fn validate_previous_roster_evidence(
@@ -5267,6 +5326,19 @@ pub(crate) mod valid {
                 .zip(bundle.external.iter())
                 .enumerate()
             {
+                let committed_decision =
+                    crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id);
+                resolve_routing_decision(
+                    committed_decision,
+                    &nexus.lane_catalog,
+                    &nexus.dataspace_catalog,
+                )
+                .map_err(|err| {
+                    Self::execution_context_error(format!(
+                        "execution context route cannot be resolved at index {idx}: {err}"
+                    ))
+                })?;
+
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                     Cow::Owned(entrypoint),
                 );
@@ -5282,8 +5354,11 @@ pub(crate) mod valid {
                         "execution context routing cannot be resolved at index {idx}: {err}"
                     ))
                 })?;
-                if decision.lane_id != context.lane_id
-                    || decision.dataspace_id != context.dataspace_id
+                let derived_decision =
+                    crate::queue::RoutingDecision::new(decision.lane_id, decision.dataspace_id);
+                if derived_decision != committed_decision
+                    && !(derived_decision == crate::queue::RoutingDecision::default()
+                        && committed_decision != crate::queue::RoutingDecision::default())
                 {
                     return Err(Self::execution_context_error(format!(
                         "execution context routing mismatch at index {idx}: expected lane {} dataspace {}, got lane {} dataspace {}",
@@ -7388,6 +7463,11 @@ pub(crate) mod valid {
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
             let mut pending_settlements = state_block.drain_settlement_records();
+            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
+            let nexus_fee_receipts_active = state_block
+                .nexus
+                .fees
+                .lane_relay_burn_receipts_active_at(block.header().height().get());
 
             let mut lane_settlement_builders: BTreeMap<
                 (LaneId, DataSpaceId),
@@ -7422,6 +7502,7 @@ pub(crate) mod valid {
                         .rbc_bytes_total
                         .saturating_add(prepared_txs[idx].metadata.encoded_len as u64);
 
+                    let mut counted_settlement_tx = false;
                     if let Some(record) =
                         pending_settlements.remove(&prepared_txs[idx].metadata.signed_hash)
                     {
@@ -7429,6 +7510,7 @@ pub(crate) mod valid {
                             .entry((decision.lane_id, decision.dataspace_id))
                             .or_default();
                         builder.tx_count = builder.tx_count.saturating_add(1);
+                        counted_settlement_tx = true;
                         builder.total_local_micro = builder
                             .total_local_micro
                             .saturating_add(record.local_amount_micro);
@@ -7465,6 +7547,29 @@ pub(crate) mod valid {
                             }
                         }
                         builder.receipts.push(record.into_lane_receipt());
+                    }
+                    if let Some(record) =
+                        pending_nexus_fee_receipts.remove(&prepared_txs[idx].metadata.signed_hash)
+                    {
+                        if !nexus_fee_receipts_active {
+                            iroha_logger::warn!(
+                                height = block.header().height().get(),
+                                tx = %prepared_txs[idx].metadata.signed_hash,
+                                "dropping staged Nexus fee receipt before fee receipt activation height"
+                            );
+                            continue;
+                        }
+                        let builder = lane_settlement_builders
+                            .entry((decision.lane_id, decision.dataspace_id))
+                            .or_default();
+                        if !counted_settlement_tx {
+                            builder.tx_count = builder.tx_count.saturating_add(1);
+                        }
+                        builder.nexus_fee_receipts.push(record.into_lane_receipt(
+                            block.header().height().get(),
+                            decision.lane_id,
+                            decision.dataspace_id,
+                        ));
                     }
                 }
 
@@ -7749,6 +7854,7 @@ pub(crate) mod valid {
                                 .swap_evidence
                                 .map(SwapEvidence::into_lane_metadata),
                             receipts: builder.receipts,
+                            nexus_fee_receipts: builder.nexus_fee_receipts,
                         }
                     })
                     .collect()
@@ -9828,6 +9934,7 @@ pub(crate) mod valid {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
                 execution_context: None,
             });
             let default_policies = crate::da::proof_policy_bundle(
@@ -9903,7 +10010,9 @@ pub(crate) mod valid {
             },
             isi::{Log, error::Mismatch},
             metadata::Metadata,
-            nexus::LaneId,
+            nexus::{
+                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            },
             parameter::Parameters,
             prelude::{Account, Domain, PeerId},
             soracloud::{
@@ -11395,8 +11504,100 @@ pub(crate) mod valid {
             assert!(matches!(
                 err,
                 BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("routing mismatch")
+                    if message.contains("route cannot be resolved")
             ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_accepts_committed_context_when_policy_derives_default() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let (authority, signer) = gen_account_in("context-check");
+            let domain_id = DomainId::try_new("context-check", "universal").expect("domain id");
+            let domain = Domain::new(domain_id).build(&authority);
+            let account = Account::new(authority.clone()).build(&authority);
+            let mut world = World::with([domain], [account], []);
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let bpng_lane = LaneId::new(3);
+            let bpng_dataspace = DataSpaceId::new(10);
+            {
+                let mut nexus = state.nexus.write();
+                nexus.lane_catalog = LaneCatalog::new(
+                    nonzero!(4_u32),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: bpng_lane,
+                            dataspace_id: bpng_dataspace,
+                            alias: "bpng".to_owned(),
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("lane catalog");
+                nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                    DataSpaceMetadata::default(),
+                    DataSpaceMetadata {
+                        id: bpng_dataspace,
+                        alias: "bpng".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog");
+            }
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            time_handle.advance(Duration::from_millis(1));
+
+            let execution_context =
+                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                    tx.hash_as_entrypoint(),
+                    bpng_lane,
+                    bpng_dataspace,
+                )]);
+            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_execution_context(Some(execution_context))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let view = state.query_view();
+            ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect("committed execution context should be accepted as durable routing");
         }
 
         #[test]
@@ -15136,6 +15337,7 @@ mod event {
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {
                 Reason::TransactionValidationFailed
             }
+            BlockValidationError::NposEffectsInvalid(_) => Reason::NposEffectsMismatch,
         }
     }
 
@@ -15876,6 +16078,7 @@ mod tests {
             total_xor_variance_micro: receipt.xor_variance_micro,
             swap_metadata: None,
             receipts: vec![receipt],
+            nexus_fee_receipts: Vec::new(),
         };
 
         let mut lane_summaries = BTreeMap::new();
@@ -15978,6 +16181,7 @@ mod tests {
             total_xor_variance_micro: receipt.xor_variance_micro,
             swap_metadata: None,
             receipts: vec![receipt],
+            nexus_fee_receipts: Vec::new(),
         };
 
         let mut lane_summaries = BTreeMap::new();

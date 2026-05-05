@@ -1,5 +1,6 @@
 //! This module contains [`State`] snapshot actor service.
 use std::{
+    collections::BTreeSet,
     io::Write,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -14,7 +15,19 @@ use iroha_config::{
 };
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
 use iroha_data_model::{
-    ChainId, account::AccountId, asset::AssetId, block::BlockHeader, nexus::LaneId,
+    ChainId,
+    account::AccountId,
+    asset::AssetId,
+    block::BlockHeader,
+    isi::{
+        InstructionBox,
+        space_directory::{
+            ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
+            RevokeSpaceDirectoryManifest,
+        },
+    },
+    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    transaction::Executable,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
@@ -27,110 +40,138 @@ use sha2::{Digest, Sha256};
 use crate::telemetry::StateTelemetry;
 use crate::{
     kura::{BlockCount, Kura},
+    nexus::space_directory::SpaceDirectoryManifestRecord,
     query::store::LiveQueryStoreHandle,
     state::{
-        SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, State, deserialize::KuraSeed,
-        storage_transactions::TransactionsBlockError,
+        SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet,
+        State, deserialize::KuraSeed, storage_transactions::TransactionsBlockError,
     },
 };
+
+fn serialize_state_snapshot(
+    state: &State,
+    out: &mut String,
+    include_space_directory_manifests: bool,
+) {
+    let view = state.view();
+    let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
+    let commit_topology = view.commit_topology.to_vec();
+    let prev_commit_topology = view.prev_commit_topology.to_vec();
+    let public_lane_validators: Vec<_> = view
+        .world
+        .public_lane_validators
+        .iter()
+        .map(|(_key, value)| SnapshotNoritoBlob {
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
+    let public_lane_stake_shares: Vec<_> = view
+        .world
+        .public_lane_stake_shares
+        .iter()
+        .map(|(_key, value)| SnapshotNoritoBlob {
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
+    let public_lane_rewards: Vec<_> = view
+        .world
+        .public_lane_rewards
+        .iter()
+        .map(|(_key, value)| SnapshotNoritoBlob {
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
+    let public_lane_reward_claims: Vec<_> = view
+        .world
+        .public_lane_reward_claims
+        .iter()
+        .map(
+            |(key, last_claimed_epoch): (&(LaneId, AccountId, AssetId), &u64)| {
+                let (lane_id, account, asset) = key;
+                SnapshotPublicLaneRewardClaim {
+                    lane_id: *lane_id,
+                    account: account.clone(),
+                    asset: asset.clone(),
+                    last_claimed_epoch: *last_claimed_epoch,
+                }
+            },
+        )
+        .collect();
+    let space_directory_manifests: Vec<_> = if include_space_directory_manifests {
+        view.world
+            .space_directory_manifests
+            .iter()
+            .map(|(uaid, value)| SnapshotSpaceDirectoryManifestSet {
+                uaid: *uaid,
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    out.push('{');
+    json::write_json_string("chain_id", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&state.chain_id, out);
+    out.push(',');
+    json::write_json_string("world", out);
+    out.push(':');
+    state.world.json_serialize(out);
+    out.push(',');
+
+    json::write_json_string("block_hashes", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&block_hashes, out);
+    out.push(',');
+
+    json::write_json_string("transactions", out);
+    out.push(':');
+    state.transactions.json_serialize(out);
+    out.push(',');
+
+    json::write_json_string("public_lane_validators", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_validators, out);
+    out.push(',');
+
+    json::write_json_string("public_lane_stake_shares", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
+    out.push(',');
+
+    json::write_json_string("public_lane_rewards", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_rewards, out);
+    out.push(',');
+
+    json::write_json_string("public_lane_reward_claims", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
+
+    if include_space_directory_manifests {
+        out.push(',');
+        json::write_json_string("space_directory_manifests", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&space_directory_manifests, out);
+    }
+
+    out.push(',');
+    json::write_json_string("commit_topology", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&commit_topology, out);
+    out.push(',');
+
+    json::write_json_string("prev_commit_topology", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&prev_commit_topology, out);
+    out.push('}');
+}
 
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
 impl JsonSerializeTrait for State {
     fn json_serialize(&self, out: &mut String) {
-        let view = self.view();
-        let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
-        let commit_topology = view.commit_topology.to_vec();
-        let prev_commit_topology = view.prev_commit_topology.to_vec();
-        let public_lane_validators: Vec<_> = view
-            .world
-            .public_lane_validators
-            .iter()
-            .map(|(_key, value)| SnapshotNoritoBlob {
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect();
-        let public_lane_stake_shares: Vec<_> = view
-            .world
-            .public_lane_stake_shares
-            .iter()
-            .map(|(_key, value)| SnapshotNoritoBlob {
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect();
-        let public_lane_rewards: Vec<_> = view
-            .world
-            .public_lane_rewards
-            .iter()
-            .map(|(_key, value)| SnapshotNoritoBlob {
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect();
-        let public_lane_reward_claims: Vec<_> = view
-            .world
-            .public_lane_reward_claims
-            .iter()
-            .map(
-                |(key, last_claimed_epoch): (&(LaneId, AccountId, AssetId), &u64)| {
-                    let (lane_id, account, asset) = key;
-                    SnapshotPublicLaneRewardClaim {
-                        lane_id: *lane_id,
-                        account: account.clone(),
-                        asset: asset.clone(),
-                        last_claimed_epoch: *last_claimed_epoch,
-                    }
-                },
-            )
-            .collect();
-
-        out.push('{');
-        json::write_json_string("chain_id", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&self.chain_id, out);
-        out.push(',');
-        json::write_json_string("world", out);
-        out.push(':');
-        self.world.json_serialize(out);
-        out.push(',');
-
-        json::write_json_string("block_hashes", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&block_hashes, out);
-        out.push(',');
-
-        json::write_json_string("transactions", out);
-        out.push(':');
-        self.transactions.json_serialize(out);
-        out.push(',');
-
-        json::write_json_string("public_lane_validators", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_validators, out);
-        out.push(',');
-
-        json::write_json_string("public_lane_stake_shares", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
-        out.push(',');
-
-        json::write_json_string("public_lane_rewards", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_rewards, out);
-        out.push(',');
-
-        json::write_json_string("public_lane_reward_claims", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
-        out.push(',');
-
-        json::write_json_string("commit_topology", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&commit_topology, out);
-        out.push(',');
-
-        json::write_json_string("prev_commit_topology", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&prev_commit_topology, out);
-        out.push('}');
+        serialize_state_snapshot(self, out, true);
     }
 }
 
@@ -792,6 +833,148 @@ fn snapshot_payload_preview(bytes: &[u8]) -> String {
     preview
 }
 
+fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
+    matches!(
+        value,
+        json::Value::Object(map) if map.contains_key("space_directory_manifests")
+    )
+}
+
+fn restore_space_directory_manifest_instruction(
+    state: &mut State,
+    instruction: &InstructionBox,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+) -> bool {
+    let any = instruction.as_any();
+    if let Some(instruction) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
+        let manifest = instruction.manifest.clone();
+        let uaid = manifest.uaid;
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record
+            .lifecycle
+            .mark_activated(record.manifest.activation_epoch);
+        let mut set = {
+            let view = state.world.space_directory_manifests.view();
+            view.get(&uaid).cloned().unwrap_or_default()
+        };
+        set.upsert(record);
+        state.world.space_directory_manifests.insert(uaid, set);
+        touched_uaids.insert(uaid);
+        return true;
+    }
+
+    if let Some(instruction) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
+        if update_space_directory_manifest_record(
+            state,
+            instruction.uaid,
+            instruction.dataspace,
+            touched_uaids,
+            |record| record.lifecycle.mark_expired(instruction.expired_epoch),
+        ) {
+            return true;
+        }
+    }
+
+    if let Some(instruction) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
+        if update_space_directory_manifest_record(
+            state,
+            instruction.uaid,
+            instruction.dataspace,
+            touched_uaids,
+            |record| {
+                record
+                    .lifecycle
+                    .mark_revoked(instruction.revoked_epoch, instruction.reason.clone());
+            },
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn update_space_directory_manifest_record(
+    state: &mut State,
+    uaid: UniversalAccountId,
+    dataspace: DataSpaceId,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+    mutator: impl FnOnce(&mut SpaceDirectoryManifestRecord),
+) -> bool {
+    let Some(mut set) = ({
+        let view = state.world.space_directory_manifests.view();
+        view.get(&uaid).cloned()
+    }) else {
+        warn!(
+            %uaid,
+            dataspace_id = dataspace.as_u64(),
+            "Skipping legacy snapshot Space Directory lifecycle restore because UAID has no manifest"
+        );
+        return false;
+    };
+    let Some(mut record) = set.get(&dataspace).cloned() else {
+        warn!(
+            %uaid,
+            dataspace_id = dataspace.as_u64(),
+            "Skipping legacy snapshot Space Directory lifecycle restore because dataspace has no manifest"
+        );
+        return false;
+    };
+    mutator(&mut record);
+    set.upsert(record);
+    state.world.space_directory_manifests.insert(uaid, set);
+    touched_uaids.insert(uaid);
+    true
+}
+
+fn restore_space_directory_manifests_from_executable(
+    state: &mut State,
+    executable: &Executable,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+) -> usize {
+    match executable {
+        Executable::Instructions(instructions) => instructions
+            .iter()
+            .filter(|instruction| {
+                restore_space_directory_manifest_instruction(state, instruction, touched_uaids)
+            })
+            .count(),
+        Executable::IvmProved(proved) => proved
+            .overlay
+            .iter()
+            .filter(|instruction| {
+                restore_space_directory_manifest_instruction(state, instruction, touched_uaids)
+            })
+            .count(),
+        Executable::ContractCall(_) | Executable::Ivm(_) => 0,
+    }
+}
+
+fn restore_space_directory_manifests_from_kura(
+    state: &mut State,
+    kura: &Kura,
+    snapshot_height: usize,
+) -> Result<usize, TryReadError> {
+    let mut restored = 0usize;
+    let mut touched_uaids = BTreeSet::new();
+    for height in 1..=snapshot_height {
+        let block = kura
+            .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
+            .ok_or(TryReadError::MissingBlock { height })?;
+        for transaction in block.as_ref().transactions_vec() {
+            restored += restore_space_directory_manifests_from_executable(
+                state,
+                transaction.instructions(),
+                &mut touched_uaids,
+            );
+        }
+    }
+    if !touched_uaids.is_empty() {
+        state.run_storage_migrations();
+    }
+    Ok(restored)
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
@@ -840,13 +1023,15 @@ fn try_read_snapshot_bundle(
             return Err(TryReadError::Serialization(err));
         }
     };
+    let has_space_directory_manifest_section =
+        snapshot_has_space_directory_manifest_section(&value);
     let seed = KuraSeed {
         kura: Arc::clone(kura),
         query_handle: live_query_store.clone(),
         #[cfg(feature = "telemetry")]
         telemetry,
     };
-    let state = seed.into_state_from_json(value).map_err(|err| {
+    let mut state = seed.into_state_from_json(value).map_err(|err| {
         iroha_logger::warn!(
             ?err,
             data_used_tmp,
@@ -892,6 +1077,17 @@ fn try_read_snapshot_bundle(
                     kura_block_hash: kura_block.hash(),
                 });
             }
+        }
+    }
+    if !has_space_directory_manifest_section && snapshot_height > 0 {
+        let restored =
+            restore_space_directory_manifests_from_kura(&mut state, kura, snapshot_height)?;
+        if restored > 0 {
+            warn!(
+                snapshot_height,
+                restored,
+                "Restored Space Directory manifests from Kura for a legacy snapshot missing the durable manifest section"
+            );
         }
     }
 
@@ -1181,32 +1377,19 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
 
 /// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
-    let mut value = json::to_value(state).expect("state snapshot serialization must succeed");
-    normalize_canonical_state_snapshot_value(&mut value);
-    let mut json = String::new();
-    value.write_json(&mut json);
-    json.into_bytes()
+    canonical_state_snapshot_bytes_with_options(state, true)
 }
 
-fn normalize_canonical_state_snapshot_value(value: &mut json::Value) {
-    let Some(root) = value.as_object_mut() else {
-        return;
-    };
-
-    // Commit topologies are consensus scheduling caches. Replay reconstructs
-    // them from Kura blocks and commit-roster journals rather than transaction
-    // execution, so they must not perturb committed ledger checkpoints.
-    root.remove("commit_topology");
-    root.remove("prev_commit_topology");
-
-    let Some(world) = root.get_mut("world").and_then(json::Value::as_object_mut) else {
-        return;
-    };
-
-    // Consensus evidence changes as peers exchange certificates and restart, and
-    // is reconstructed from Kura and sidecar journals rather than transactions.
-    world.remove("commit_qcs");
-    world.remove("vrf_epochs");
+fn canonical_state_snapshot_bytes_with_options(
+    state: &State,
+    include_space_directory_manifests: bool,
+) -> Vec<u8> {
+    json::to_json(&canonical_state_snapshot_value_with_options(
+        state,
+        include_space_directory_manifests,
+    ))
+    .expect("state snapshot serialization must succeed")
+    .into_bytes()
 }
 
 /// Canonical hash for the committed ledger WSV surface.
@@ -1214,8 +1397,207 @@ pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes(state))
 }
 
-/// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
-#[cfg(test)]
+fn canonical_state_snapshot_value(state: &State) -> json::Value {
+    canonical_state_snapshot_value_with_options(state, true)
+}
+
+fn canonical_state_snapshot_value_with_options(
+    state: &State,
+    include_space_directory_manifests: bool,
+) -> json::Value {
+    let mut json = String::new();
+    serialize_state_snapshot(state, &mut json, include_space_directory_manifests);
+    let mut value: json::Value =
+        json::from_str(&json).expect("state snapshot serialization must produce valid JSON");
+    normalize_mv_cell_fields_in_state_value(&mut value);
+    normalize_set_like_parameter_fields_in_state_value(&mut value);
+    redact_consensus_sidecars_from_state_value(&mut value);
+    value
+}
+
+fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
+    let Some(state) = value.as_object_mut() else {
+        return;
+    };
+
+    normalize_serialized_cell_field(state, "commit_topology");
+    normalize_serialized_cell_field(state, "prev_commit_topology");
+
+    let Some(world) = state.get_mut("world").and_then(json::Value::as_object_mut) else {
+        return;
+    };
+
+    for key in [
+        "parameters",
+        "peers",
+        "viral_reward_budget",
+        "viral_campaign_budget",
+        "executor",
+        "executor_data_model",
+        "merge_hint_roots",
+        "merge_global_state_root",
+        "governance_last_unlock_sweep_height",
+        "external_event_buf",
+    ] {
+        normalize_serialized_cell_field(world, key);
+    }
+}
+
+fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
+    let Some(value) = map.get_mut(key) else {
+        return;
+    };
+    let replacement = value
+        .as_object()
+        .filter(|cell| cell.contains_key("revert"))
+        .and_then(|cell| cell.get("blocks"))
+        .cloned();
+    if let Some(current_value) = replacement {
+        *value = current_value;
+    }
+}
+
+fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
+    let Some(sumeragi) = value
+        .get_mut("world")
+        .and_then(|world| world.get_mut("parameters"))
+        .and_then(|parameters| parameters.get_mut("sumeragi"))
+        .and_then(json::Value::as_object_mut)
+    else {
+        return;
+    };
+
+    sort_dedup_json_array_field(sumeragi, "key_allowed_algorithms");
+    sort_dedup_json_array_field(sumeragi, "key_allowed_hsm_providers");
+}
+
+fn sort_dedup_json_array_field(map: &mut json::Map, key: &str) {
+    let Some(values) = map.get_mut(key).and_then(json::Value::as_array_mut) else {
+        return;
+    };
+
+    values.sort_by_cached_key(canonical_json_sort_key);
+    values.dedup();
+}
+
+fn canonical_json_sort_key(value: &json::Value) -> String {
+    let mut out = String::new();
+    json::JsonSerialize::json_serialize(value, &mut out);
+    out
+}
+
+fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
+    let Some(state) = value.as_object_mut() else {
+        return;
+    };
+    // Commit topologies are consensus scheduling caches. Replay reconstructs
+    // them from Kura blocks and commit-roster journals rather than transaction
+    // execution, so they must not perturb committed ledger checkpoints.
+    state.remove("commit_topology");
+    state.remove("prev_commit_topology");
+
+    let Some(world) = value.get_mut("world") else {
+        return;
+    };
+    redact_consensus_sidecars_from_world_value(world);
+}
+
+fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
+    let Some(world) = world.as_object_mut() else {
+        return;
+    };
+    // These stores are asynchronously enriched recovery evidence, not WSV
+    // data committed by the block itself. Including them makes historical
+    // checkpoints depend on which peer supplied later, richer certificates.
+    world.remove("commit_qcs");
+    world.remove("consensus_evidence");
+    // VRF epoch snapshots are maintained by consensus message handling outside
+    // block application. Kura replay verifies block-applied WSV data only.
+    world.remove("vrf_epochs");
+}
+
+pub(crate) fn canonical_state_snapshot_component_hashes(
+    state: &State,
+) -> Vec<(String, iroha_crypto::Hash)> {
+    fn component_hash(
+        name: impl Into<String>,
+        value: &json::Value,
+    ) -> (String, iroha_crypto::Hash) {
+        let mut out = String::new();
+        json::JsonSerialize::json_serialize(value, &mut out);
+        (name.into(), iroha_crypto::Hash::new(out.into_bytes()))
+    }
+
+    let value = canonical_state_snapshot_value(state);
+    let mut components = Vec::new();
+    let Some(state_map) = value.as_object() else {
+        return components;
+    };
+    for (key, value) in state_map {
+        components.push(component_hash(key.clone(), value));
+    }
+    if let Some(world) = state_map.get("world").and_then(json::Value::as_object) {
+        for (key, value) in world {
+            components.push(component_hash(format!("world.{key}"), value));
+            if key == "parameters" {
+                push_nested_component_hashes(format!("world.{key}"), value, &mut components);
+            }
+        }
+    }
+    components
+}
+
+fn push_nested_component_hashes(
+    prefix: String,
+    value: &json::Value,
+    components: &mut Vec<(String, iroha_crypto::Hash)>,
+) {
+    let Some(map) = value.as_object() else {
+        return;
+    };
+    for (key, value) in map {
+        let name = format!("{prefix}.{key}");
+        let mut out = String::new();
+        json::JsonSerialize::json_serialize(value, &mut out);
+        components.push((name.clone(), iroha_crypto::Hash::new(out.into_bytes())));
+        push_nested_component_hashes(name, value, components);
+    }
+}
+
+pub(crate) fn canonical_state_commit_qc_summaries(
+    state: &State,
+) -> Vec<(String, u64, u64, String, String, String, String)> {
+    state
+        .world
+        .commit_qcs
+        .view()
+        .iter()
+        .map(|(hash, qc)| {
+            let qc_debug_hash = iroha_crypto::Hash::new(format!("{qc:?}").into_bytes());
+            (
+                hash.to_string(),
+                qc.height,
+                qc.view,
+                format!("{:?}", qc.phase),
+                qc.validator_set_hash.to_string(),
+                hex::encode(&qc.aggregate.signers_bitmap),
+                qc_debug_hash.to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
+/// were included in durable snapshots.
+pub(crate) fn legacy_state_snapshot_hash_without_space_directory_manifests(
+    state: &State,
+) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new(canonical_state_snapshot_bytes_with_options(state, false))
+}
+
+/// Canonical bytes for the committed WSV surface used by replay parity tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[allow(dead_code)]
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }
@@ -1325,6 +1707,11 @@ pub enum TryReadError {
         /// Height of the missing block in [`Kura`].
         height: usize,
     },
+    /// Snapshot at height `{snapshot_height}` is missing the durable Space Directory manifest section
+    MissingSpaceDirectoryManifestSection {
+        /// Height recorded by the legacy snapshot.
+        snapshot_height: usize,
+    },
     /// Failed to reconcile snapshot state with Kura while committing a block revert
     StateCommit(TransactionsBlockError),
 }
@@ -1403,7 +1790,15 @@ mod tests {
     use std::{fs::File, io::Write, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{
+        ChainId,
+        account::{AccountDetails, AccountId, AccountValue},
+        block::BlockHeader,
+        consensus::Qc,
+        metadata::Metadata,
+        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        peer::PeerId,
+    };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -1429,6 +1824,215 @@ mod tests {
 
     fn state_factory() -> State {
         state_factory_with_kura(Kura::blank_kura_for_testing())
+    }
+
+    fn install_active_space_directory_manifest(
+        state: &mut State,
+    ) -> (UniversalAccountId, DataSpaceId, AccountId) {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"snapshot-space-directory"));
+        let dataspace = DataSpaceId::new(7);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        state
+            .world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 1,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        state.world.space_directory_manifests.insert(uaid, set);
+
+        (uaid, dataspace, account_id)
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
+        let mut state = state_factory();
+        let before = canonical_state_snapshot_bytes_for_tests(&state);
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(key_pair.public_key().clone());
+        let roster = vec![peer];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
+        let zero_root = Hash::prehashed([0_u8; Hash::LENGTH]);
+        let qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        };
+
+        state.insert_commit_qc_for_testing(block_hash, qc);
+
+        let after = canonical_state_snapshot_bytes_for_tests(&state);
+        assert_eq!(
+            before, after,
+            "commit-QC recovery evidence must not affect replay WSV checkpoints"
+        );
+        let canonical_json =
+            String::from_utf8(after).expect("canonical state snapshot should be utf8 json");
+        assert!(
+            !canonical_json.contains("\"commit_qcs\""),
+            "canonical WSV checkpoint surface should omit commit-QC sidecars"
+        );
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_uses_current_mv_cell_values() {
+        let state = state_factory();
+        let before = canonical_state_snapshot_bytes_for_tests(&state);
+
+        {
+            let mut parameters = state.world.parameters.block();
+            let current = parameters.get().clone();
+            *parameters.get_mut() = current;
+            parameters.commit();
+        }
+
+        let after = canonical_state_snapshot_bytes_for_tests(&state);
+        assert_eq!(
+            before, after,
+            "MV cell history must not affect replay WSV checkpoints when the current value is unchanged"
+        );
+
+        let value = canonical_state_snapshot_value(&state);
+        let parameters = value
+            .get("world")
+            .and_then(|world| world.get("parameters"))
+            .and_then(json::Value::as_object)
+            .expect("canonical snapshot should contain parameters as a plain object");
+        assert!(
+            !parameters.contains_key("revert") && !parameters.contains_key("blocks"),
+            "canonical WSV checkpoint surface should serialize current cell values"
+        );
+    }
+
+    fn test_vrf_epoch_record(epoch: u64) -> iroha_data_model::consensus::VrfEpochRecord {
+        iroha_data_model::consensus::VrfEpochRecord {
+            epoch,
+            seed: [0_u8; 32],
+            epoch_length: 1,
+            commit_deadline_offset: 0,
+            reveal_deadline_offset: 0,
+            roster_len: 0,
+            finalized: false,
+            updated_at_height: 0,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        }
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
+        let state = state_factory();
+        let before = canonical_state_snapshot_bytes_for_tests(&state);
+
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(0, test_vrf_epoch_record(0));
+            world.commit();
+        }
+        let after = canonical_state_snapshot_bytes_for_tests(&state);
+
+        assert_eq!(
+            before, after,
+            "VRF epoch sidecars must not affect replay WSV checkpoints"
+        );
+
+        let value = canonical_state_snapshot_value(&state);
+        let world = value
+            .get("world")
+            .and_then(json::Value::as_object)
+            .expect("canonical snapshot should contain world as an object");
+        assert!(
+            !world.contains_key("vrf_epochs"),
+            "canonical WSV checkpoint surface should omit VRF epoch sidecars"
+        );
+    }
+
+    #[test]
+    async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
+        let state = state_factory();
+
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.key_allowed_algorithms = vec![
+                Algorithm::Secp256k1,
+                Algorithm::Ed25519,
+                Algorithm::Secp256k1,
+            ];
+            parameters.sumeragi.key_allowed_hsm_providers = vec![
+                "yubihsm".to_owned(),
+                "pkcs11".to_owned(),
+                "softkey".to_owned(),
+                "pkcs11".to_owned(),
+            ];
+            parameters.commit();
+        }
+        let first = canonical_state_snapshot_bytes_for_tests(&state);
+
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.key_allowed_algorithms =
+                vec![Algorithm::Ed25519, Algorithm::Secp256k1];
+            parameters.sumeragi.key_allowed_hsm_providers = vec![
+                "pkcs11".to_owned(),
+                "softkey".to_owned(),
+                "yubihsm".to_owned(),
+            ];
+            parameters.commit();
+        }
+        let second = canonical_state_snapshot_bytes_for_tests(&state);
+
+        assert_eq!(
+            first, second,
+            "set-like Sumeragi key policy fields must not make WSV checkpoints order-sensitive"
+        );
+
+        let value = canonical_state_snapshot_value(&state);
+        let providers = value
+            .get("world")
+            .and_then(|world| world.get("parameters"))
+            .and_then(|parameters| parameters.get("sumeragi"))
+            .and_then(|sumeragi| sumeragi.get("key_allowed_hsm_providers"))
+            .and_then(json::Value::as_array)
+            .expect("canonical snapshot should contain normalized HSM providers");
+        let providers = providers
+            .iter()
+            .map(|value| match value {
+                json::Value::String(provider) => provider.as_str(),
+                _ => panic!("HSM provider should serialize as a string"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(providers, ["pkcs11", "softkey", "yubihsm"]);
     }
 
     #[test]
@@ -1554,6 +2158,58 @@ mod tests {
             canonical_state_snapshot_bytes_for_tests(&snapshot_state),
             canonical_state_snapshot_bytes_for_tests(&state),
             "snapshot roundtrip must preserve canonical WSV bytes"
+        );
+    }
+
+    #[test]
+    async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bindings() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let mut state = state_factory();
+        let (uaid, dataspace, account_id) = install_active_space_directory_manifest(&mut state);
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let snapshot_bytes =
+            std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
+        let snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
+        assert!(
+            snapshot_has_space_directory_manifest_section(&snapshot_value),
+            "new snapshots must carry a Space Directory manifest section"
+        );
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read");
+
+        let manifests = snapshot_state.world.space_directory_manifests.view();
+        let manifest_set = manifests
+            .get(&uaid)
+            .expect("manifest set should survive snapshot restore");
+        assert!(
+            manifest_set.get(&dataspace).is_some(),
+            "dataspace manifest should survive snapshot restore"
+        );
+        drop(manifests);
+
+        let bindings = snapshot_state.world.uaid_dataspaces.view();
+        let uaid_bindings = bindings
+            .get(&uaid)
+            .expect("UAID bindings should be rebuilt after snapshot restore");
+        assert!(
+            uaid_bindings.is_bound_to(dataspace, &account_id),
+            "restored active manifest should bind the account to the dataspace"
         );
     }
 

@@ -2,11 +2,13 @@
 
 use iroha_data_model::{
     account::AccountAddress,
+    asset::AssetBalancePolicy,
     isi::{
         account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
         error::{InstructionExecutionError, InvalidParameterError},
     },
     metadata::Metadata,
+    nexus::DataSpaceId,
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
     sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId},
 };
@@ -133,6 +135,86 @@ fn xor_nanos_to_numeric(nanos: u64) -> Numeric {
     crate::sns::quote_charge_amount_to_numeric(nanos)
 }
 
+fn dataspace_id_for_asset_alias_segment(
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace_alias: &str,
+) -> Option<DataSpaceId> {
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+}
+
+fn global_payment_asset_home_dataspace_id(
+    state_transaction: &StateTransaction<'_, '_>,
+    definition_id: &iroha_data_model::asset::AssetDefinitionId,
+) -> Result<Option<DataSpaceId>, Error> {
+    let definition = state_transaction
+        .world
+        .asset_definition(definition_id)
+        .map_err(Error::from)?;
+    if definition.balance_scope_policy() != AssetBalancePolicy::Global {
+        return Ok(None);
+    }
+
+    let dataspace_alias = definition
+        .alias()
+        .as_ref()
+        .map(|alias| alias.dataspace_segment().to_owned())
+        .or_else(|| {
+            definition
+                .id()
+                .try_domain()
+                .map(|domain| domain.dataspace().as_ref().to_owned())
+        });
+
+    Ok(match dataspace_alias {
+        Some(alias) => {
+            dataspace_id_for_asset_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
+        }
+        None => Some(DataSpaceId::UNIVERSAL),
+    })
+}
+
+fn should_externally_settle_sns_quote(
+    quote: &crate::sns::LeaseQuote,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<bool, Error> {
+    if quote.charge_amount == 0
+        || !state_transaction.nexus.fees.sponsorship_enabled
+        || !state_transaction.nexus.fees.external_settlement_enabled
+    {
+        return Ok(false);
+    }
+
+    let Some(configured_fee_asset_id) = crate::block::parse_asset_definition_literal_with_world(
+        state_transaction.world(),
+        &state_transaction.nexus.fees.fee_asset_id,
+        state_transaction.block_unix_timestamp_ms(),
+    ) else {
+        return Ok(false);
+    };
+    if configured_fee_asset_id != quote.payment_asset_definition_id {
+        return Ok(false);
+    }
+
+    let Some(route_dataspace) = state_transaction
+        .current_dataspace_id
+        .or(state_transaction.world.current_dataspace_id)
+    else {
+        return Ok(false);
+    };
+    let Some(home_dataspace) = global_payment_asset_home_dataspace_id(
+        state_transaction,
+        &quote.payment_asset_definition_id,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    Ok(route_dataspace != home_dataspace)
+}
+
 impl Execute for AcquireAccountAliasLease {
     #[metrics(+"acquire_account_alias_lease")]
     fn execute(
@@ -176,13 +258,7 @@ impl Execute for AcquireAccountAliasLease {
             now_ms,
         )
         .map_err(alias_lease_instruction_error)?;
-        Transfer::asset_numeric(
-            AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
-            xor_nanos_to_numeric(quote.charge_amount),
-            quote.collector_account.clone(),
-        )
-        .execute(authority, state_transaction)?;
-        let payment = crate::sns::payment_proof_for_quote(&quote, payer);
+        let payment = charge_sns_quote(&quote, payer, authority, state_transaction)?;
         let controllers = vec![account_controller_for(&owner)?];
         crate::sns::register_name(
             state_transaction,
@@ -255,13 +331,7 @@ impl Execute for RenewAccountAliasLease {
             state_transaction.block_unix_timestamp_ms(),
         )
         .map_err(alias_lease_instruction_error)?;
-        Transfer::asset_numeric(
-            AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
-            xor_nanos_to_numeric(quote.charge_amount),
-            quote.collector_account.clone(),
-        )
-        .execute(authority, state_transaction)?;
-        let payment = crate::sns::payment_proof_for_quote(&quote, payer);
+        let payment = charge_sns_quote(&quote, payer, authority, state_transaction)?;
         crate::sns::renew_name(
             state_transaction,
             crate::sns::SnsNamespace::AccountAlias,
@@ -282,6 +352,10 @@ fn charge_sns_quote(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<iroha_data_model::sns::PaymentProofV1, Error> {
+    if should_externally_settle_sns_quote(quote, state_transaction)? {
+        return Ok(crate::sns::payment_proof_for_quote(quote, payer));
+    }
+
     Transfer::asset_numeric(
         AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
         xor_nanos_to_numeric(quote.charge_amount),
@@ -923,6 +997,84 @@ mod tests {
         )
         .expect("acquired alias lease");
         assert_eq!(acquired.owner, authority);
+    }
+
+    #[test]
+    fn acquire_account_alias_lease_uses_external_settlement_on_non_authoritative_route() {
+        let authority = owner();
+        let collector = another_owner();
+        let bpng = DataSpaceId::new(10);
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            .parse()
+            .expect("deployment payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&collector);
+        let authority_account = Account::new(authority.clone()).build(&collector);
+        let collector_account = Account::new(collector.clone()).build(&collector);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&collector);
+        let mut world = World::with(
+            vec![genesis_domain],
+            vec![authority_account, collector_account],
+            vec![payment_definition],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut nexus = state.nexus.write();
+            nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.external_settlement_enabled = true;
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: bpng,
+                    alias: "bpng".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+        }
+
+        let alias = AccountAlias::domainless("retail".parse().expect("label"), bpng);
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(bpng);
+            stx.world.current_dataspace_id = Some(bpng);
+            AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
+                .execute(&authority, &mut stx)
+                .expect("external settlement skips local global asset transfer");
+            stx.apply();
+            block.commit().expect("acquire block commits");
+        }
+
+        let view = state.view();
+        let acquired = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "retail@bpng",
+            0,
+        )
+        .expect("acquired alias lease");
+        assert_eq!(acquired.owner, authority);
+        drop(view);
+        assert_eq!(
+            asset_balance(&state, &payment_asset_definition_id, &authority),
+            Numeric::zero()
+        );
+        assert_eq!(
+            asset_balance(&state, &payment_asset_definition_id, &collector),
+            Numeric::zero()
+        );
     }
 
     #[test]

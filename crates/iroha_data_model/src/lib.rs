@@ -365,7 +365,7 @@ pub mod prelude {
             DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
             LaneIdError, LaneLifecyclePlan, LaneRelayEnvelope, LaneRelayEnvelopeRef,
             LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
-            LaneVisibilityParseError, VerifiedLaneRelayRecord,
+            LaneVisibilityParseError, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
         },
         nft::prelude::*,
         parameter::prelude::*,

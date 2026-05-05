@@ -17,11 +17,13 @@ use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{BlockSignature, Header as BlockHeader};
 use crate::{
+    account::AccountId,
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     transaction::TransactionSubmissionReceipt,
 };
+use iroha_primitives::numeric::Numeric;
 
 /// Wire protocol version for consensus messages defined here.
 pub const PROTO_VERSION: u32 = 2;
@@ -586,6 +588,56 @@ pub struct LaneSettlementReceipt {
     pub timestamp_ms: u64,
 }
 
+/// Deterministic Nexus fee schedule inputs captured for asynchronous settlement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NexusFeeScheduleInputs {
+    /// Serialized signed transaction payload length used for fee metering.
+    pub tx_bytes_len: u64,
+    /// Number of native instructions included in the transaction fee calculation.
+    pub instruction_count: u64,
+    /// Gas units used by the transaction.
+    pub gas_used: u64,
+    /// Base fee from `nexus.fees.base_fee`.
+    pub base_fee: Numeric,
+    /// Per-byte fee from `nexus.fees.per_byte_fee`.
+    pub per_byte_fee: Numeric,
+    /// Per-instruction fee from `nexus.fees.per_instruction_fee`.
+    pub per_instruction_fee: Numeric,
+    /// Per-gas-unit fee from `nexus.fees.per_gas_unit_fee`.
+    pub per_gas_unit_fee: Numeric,
+}
+
+/// Versioned Nexus fee receipt committed by a finalized lane block.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct NexusFeeReceipt {
+    /// Receipt format version.
+    pub version: u16,
+    /// Source transaction hash/id.
+    pub source_id: [u8; 32],
+    /// DPN dataspace that finalized the source transaction.
+    pub dataspace_id: DataSpaceId,
+    /// DPN lane that finalized the source transaction.
+    pub lane_id: LaneId,
+    /// DPN block height that finalized the source transaction.
+    pub block_height: u64,
+    /// Sponsor or payer Nexus account charged for the public XOR burn.
+    pub payer_account_id: AccountId,
+    /// Fee asset selector; for DPN settlement this is fixed to `xor#universal`.
+    pub fee_asset_id: String,
+    /// Computed fee amount to burn on Nexus.
+    pub fee_amount: Numeric,
+    /// Fee schedule inputs needed to recompute [`Self::fee_amount`].
+    pub schedule: NexusFeeScheduleInputs,
+}
+
 /// Liquidity profile applied when computing XOR conversions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -668,6 +720,9 @@ pub struct LaneBlockCommitment {
     /// Deterministic receipts contributing to the commitment.
     #[norito(default)]
     pub receipts: Vec<LaneSettlementReceipt>,
+    /// Versioned Nexus fee receipts committed for asynchronous public XOR settlement.
+    #[norito(default)]
+    pub nexus_fee_receipts: Vec<NexusFeeReceipt>,
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
@@ -2520,6 +2575,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
+    use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -2565,6 +2621,95 @@ mod tests {
             epoch: 1,
             highest_qc: sample_qc_ref(),
         }
+    }
+
+    #[derive(Encode)]
+    struct LegacyLaneBlockCommitment {
+        block_height: u64,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        tx_count: u64,
+        total_local_micro: u128,
+        total_xor_due_micro: u128,
+        total_xor_after_haircut_micro: u128,
+        total_xor_variance_micro: u128,
+        swap_metadata: Option<LaneSwapMetadata>,
+        receipts: Vec<LaneSettlementReceipt>,
+    }
+
+    fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
+        NexusFeeReceipt {
+            version: 1,
+            source_id,
+            dataspace_id: DataSpaceId::new(7),
+            lane_id: LaneId::new(1),
+            block_height: 42,
+            payer_account_id: crate::account::AccountId::new(
+                KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            ),
+            fee_asset_id: "xor#universal".to_owned(),
+            fee_amount: Numeric::new(1, 3),
+            schedule: NexusFeeScheduleInputs {
+                tx_bytes_len: 100,
+                instruction_count: 1,
+                gas_used: 0,
+                base_fee: Numeric::zero(),
+                per_byte_fee: Numeric::zero(),
+                per_instruction_fee: Numeric::new(1, 3),
+                per_gas_unit_fee: Numeric::zero(),
+            },
+        }
+    }
+
+    #[test]
+    fn legacy_lane_block_commitment_decodes_with_empty_nexus_fee_receipts() {
+        let legacy = LegacyLaneBlockCommitment {
+            block_height: 42,
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+        };
+
+        let mut bytes = norito::to_bytes(&legacy).expect("legacy commitment encodes");
+        // Older payloads used the same `LaneBlockCommitment` type-name schema
+        // hash. The test-only legacy struct has a different Rust type name, so
+        // patch the header to exercise payload compatibility rather than the
+        // unrelated schema-name guard.
+        bytes[6..22]
+            .copy_from_slice(&<LaneBlockCommitment as norito::NoritoSerialize>::schema_hash());
+        let decoded: LaneBlockCommitment =
+            norito::decode_from_bytes(&bytes).expect("new commitment decodes legacy bytes");
+
+        assert!(decoded.nexus_fee_receipts.is_empty());
+    }
+
+    #[test]
+    fn nexus_fee_receipts_change_lane_block_commitment_hash_inputs() {
+        let base = LaneBlockCommitment {
+            block_height: 42,
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: vec![sample_nexus_fee_receipt([0x11; 32])],
+        };
+        let mut changed = base.clone();
+        changed.nexus_fee_receipts[0].fee_amount = Numeric::new(2, 3);
+
+        assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
     }
 
     fn sample_proposal() -> Proposal {
